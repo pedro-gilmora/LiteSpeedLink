@@ -64,15 +64,17 @@ Interfaces inheriting this must implement the service endpoints.
 ```csharp
 public interface IProductServiceUnit : IServiceUnit
 {
-    async ValueTask<CreatedProduct> CreateProduct(NewProductMessage message);
+    async ValueTask<CreatedProduct> CreateProductAsync(NewProductMessage message);
 }
 ```
 
 ## Host Client side
 
+To generate clients you just must add interfaces defined in contracts or minimal variant generated delegates to service client class (owning ServiceClientAttribute), 
+
 ```csharp
 [ServiceClient]
-public partial class MyClientService : IMyService, IServiceHandler<CreateProduct>;
+public partial class MyClientService : IMyService, IServiceHandler<CreateProductAsync>;
 ```
 
 ## Dependencies
