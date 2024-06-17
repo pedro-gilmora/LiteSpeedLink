@@ -63,11 +63,11 @@ public partial class ").Append(typeName).Append(@"
         {
             READ_REQUEST: 
             
-            global::System.Memory<byte> __header = new byte[36];
+            global::System.Memory<byte> __bytes__ = new byte[36];
 
-			await ___stream.ReadExactlyAsync(__header, token);
+			await ___stream.ReadExactlyAsync(__bytes__, token);
 
-			var (___requestlen, ___opCode) = global::MemoryPack.MemoryPackSerializer.Deserialize<(int, string)>(__header.Span);
+			var (___requestlen, ___opCode) = global::MemoryPack.MemoryPackSerializer.Deserialize<(int, string)>(__bytes__.Span);
 
             switch (___opCode)
             {");
@@ -242,10 +242,7 @@ public partial class ").Append(typeName).Append(@"
                                     {
 
                                         hostCode.Append(@"
-
-                    global::System.Memory<byte> ___requestBytes = new byte[___requestlen];
-
-			        await ___stream.ReadExactlyAsync(___requestBytes, token);
+			        await ___stream.ReadExactlyAsync(__bytes__ = new byte[___requestlen], token);
 
                     var ");
 
@@ -259,7 +256,7 @@ public partial class ").Append(typeName).Append(@"
 
                                             requestTypes!.Invoke();
 
-                                            hostCode.Append(@")>(___requestBytes.Span);
+                                            hostCode.Append(@")>(__bytes__.Span);
 
                     ");
                                         }
@@ -272,7 +269,7 @@ public partial class ").Append(typeName).Append(@"
 
                                             requestTypes!.Invoke();
 
-                                            hostCode.Append(@">(___requestBytes.Span);
+                                            hostCode.Append(@">(__bytes__.Span);
 
                     ");
                                         }
@@ -297,7 +294,7 @@ public partial class ").Append(typeName).Append(@"
 
                                 hostCode.Append(@");
 
-                    global::System.Memory<byte> ___resultBytes = global::MemoryPack.MemoryPackSerializer.Serialize(");
+                    __bytes__ = global::MemoryPack.MemoryPackSerializer.Serialize(");
 
                                 if (!hasEmptyParams || returnsType)
                                 {
@@ -314,7 +311,7 @@ public partial class ").Append(typeName).Append(@"
 
                                 hostCode.Append(@");
 
-                    await ___stream.WriteAsync(___resultBytes, token);
+                    await ___stream.WriteAsync(__bytes__, token);
 
                     goto READ_REQUEST;
                 }
