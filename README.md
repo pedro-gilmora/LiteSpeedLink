@@ -1,8 +1,8 @@
-# MemLink: A lightweight KCP and contract-first communication framework
+# MemLink: A lightweight, compile-time KCP and contract-first communication framework
 
 ## Introduction
 
-This project implements a custom API communication channel using the `KcpTransport` NuGet library. The communication model is contract-first, with two primary implementation variants: Minimal and Class-first.
+This project implements a custom API communication channel using the `KcpTransport` NuGet library. The communication model is contract-first, with two primary implementation variants: Minimal and Class-first, totally source generated
 
 ### Key Concepts
 
