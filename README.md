@@ -1,4 +1,4 @@
-# LiteSpeedLink: A lightweight, compile-time KCP and contract-first realtime communication framework
+# LiteSpeedLink: The .NET lightweight, compile-time, contract-first and LiteSpeedLink communication framework
 
 ## Introduction
 
