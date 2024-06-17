@@ -6,9 +6,8 @@ namespace SourceCrafter.MemLink;
 
 public partial class SumService : ISumService
 {
-    public int Sum(out string name, params int[] ints)
+    public int Sum(IDivideSerice name, params int[] ints)
     {
-        name = "Pedro";
         return ints.Sum();
     }
 }
@@ -16,10 +15,7 @@ public partial class SumService : ISumService
 // Contracts layer
 public interface ISumService : IServiceUnit
 {
-    int Sum(out string name, params int[] ints);
+    int Sum([Service("sum")] IDivideSerice name, params int[] ints);
 }
 
-// Framework abstraction file
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface)]
-public sealed class ServiceOperationAttribute<T> : Attribute where T : Delegate;
+public interface IDivideSerice : IServiceUnit;

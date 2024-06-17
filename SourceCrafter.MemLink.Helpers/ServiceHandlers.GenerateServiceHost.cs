@@ -5,6 +5,7 @@ using SourceCrafter.Helpers;
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -124,6 +125,8 @@ public partial class ").Append(typeName).Append(@"
                         {
                             if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                             {
+                                bool requireSyncImpl = false;
+
                                 string
                                     methodName = method.ToNameOnly(),
                                     globalizedMethodName = method.ToMinimalDisplayString(model, 0);
@@ -170,6 +173,27 @@ public partial class ").Append(typeName).Append(@"
                                     foreach (var param in method.Parameters)
                                     {
                                         var paramType = param.Type.ToGlobalNamespaced();
+
+                                        foreach(var paramAttr in param.GetAttributes())
+                                        {
+                                            if(paramAttr.AttributeClass?.ToGlobalNamespaced() is "global::SourceCrafter.MemLink.ServiceAttribute")
+                                            {
+                                                invokeParams += () =>
+                                                {
+                                                    (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
+                                                        .Append(providerRef).Append(param.Type.ToGlobalNamespaced()).Append(">(");
+
+                                                    if (paramAttr.ConstructorArguments is [{ Value: string name }])
+                                                    {
+                                                        hostCode.Append(@"""").Append(name).Append(@"""");
+                                                    }
+
+                                                    hostCode.Append(")");
+                                                };
+
+                                                continue;
+                                            }
+                                        }
 
                                         if (paramType == cancelTokenFullTypeName)
                                         {

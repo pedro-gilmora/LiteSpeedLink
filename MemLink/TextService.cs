@@ -4,7 +4,5 @@ namespace SourceCrafter.MemLink;
 
 [ServiceHost]
 [ServiceProvider]
-[Transient<SumService>]
-public partial class TextService
-{
-}
+[Transient<SumService>(Name = "sum")]
+public partial class TextService;
