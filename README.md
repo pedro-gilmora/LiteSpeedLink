@@ -1,4 +1,4 @@
-# MemLink: A lightweight, compile-time KCP and contract-first realtime communication framework
+# LiteSpeedLink: A lightweight, compile-time KCP and contract-first realtime communication framework
 
 ## Introduction
 
