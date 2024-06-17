@@ -1,4 +1,4 @@
-# MemLink: A lightweight, compile-time KCP and contract-first communication framework
+# MemLink: A lightweight, compile-time KCP and contract-first realtime communication framework
 
 ## Introduction
 
@@ -89,6 +89,7 @@ This documentation covers the basic structure and usage of the custom API commun
 
 For more detailed examples and advanced usage, please refer to the source code and examples provided in this repository.
 
----
-
-This documentation should provide a clear and concise guide for developers using your API communication channel, explaining the key concepts and usage with examples.
+## TODO
+- Pipeline implementation for middlewares
+- Binary mappers (a fork of SourceCrafter)
+- Streaming processor (suitable for gaming, duplex services and real-time communication)
