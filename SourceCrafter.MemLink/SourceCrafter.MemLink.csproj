@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<Configurations>Debug;Release;DEBUG_SG</Configurations>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jab" Version="0.10.2" />
+    <PackageReference Include="KcpTransport" Version="0.0.2" />
+    <PackageReference Include="MemoryPack" Version="1.21.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MemLink.Abstractions\MemLink.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
