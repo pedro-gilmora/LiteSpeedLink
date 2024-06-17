@@ -39,7 +39,7 @@ public partial class MyHostService;
 
 Used in the minimal variant to declare service methods.
 
-### Example
+#### **Example**
 Every method in `Program.cs` marked with `EndpointHandlerAttribute` will serve as host endpoint (a dedicated delegate will be registered)
 
 >Program.cs
@@ -55,11 +55,11 @@ internal async ValueTask<bool> SaveConfigurationAsync(string key, string value, 
 }
 ```
 
-## IServiceUnit
+### IServiceUnit
 
 Interfaces inheriting this must implement the service endpoints.
 
-### Example
+#### **Example**
 
 ```csharp
 public interface IProductServiceUnit : IServiceUnit
