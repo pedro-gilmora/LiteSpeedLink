@@ -17,6 +17,8 @@
     <PackageReference Include="Jab" Version="0.10.2" />
     <PackageReference Include="KcpTransport" Version="0.0.2" />
     <PackageReference Include="MemoryPack" Version="1.21.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

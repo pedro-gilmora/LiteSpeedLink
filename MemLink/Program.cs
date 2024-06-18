@@ -3,7 +3,7 @@
 const string host = "127.0.0.1";
 const int port = 11000;
 
-ServiceListener.Run(host, port);
+TextService.ListenAsync(host, port);
 
 await Task.Delay(500);
 await Task.WhenAny(RunEchoClient(host, port), RunEchoClient(host, port));
@@ -11,7 +11,9 @@ await Task.Delay(TimeSpan.FromMinutes(5));
 static async Task RunEchoClient(string host, int port)
 {
     // Create KCP Client	
-    await using var connection = await ServiceClient.ConnectAsync(host, port);
+    var (connection, stream) = await ServiceClient.ConnectAsync(host, port);
+    using (connection)
+    using (stream)
     try
     {
         Console.WriteLine($"Connected to {host}:{port}");
@@ -23,14 +25,14 @@ static async Task RunEchoClient(string host, int port)
         foreach (var (a, b) in dataSet)
         {
             var ii = i++;
-            await connection.SendAsync(($"Request #{ii}", a, b, i % 2 == 0));
+            var response = await stream.GetAsync("4a2faad9f6f478ba5eba8996df734554", (int[])[a, b]);
 
-            Console.WriteLine($@"[Client {connection.Connection.ConnectionId}] 
+            Console.WriteLine($@"[Client {connection.ConnectionId}] 
 	Request #{ii}: a = {a}, b = {b}");
 
-            var result = await connection.ReceiveAsync<int>();
+            var result = response.Get<int>();
 
-            Console.WriteLine($@"[Server Response client {connection.Connection.ConnectionId}] 
+            Console.WriteLine($@"[Server Response client {connection.ConnectionId}] 
 	Response to request #{ii}: {result}");
         }
         await Task.Delay(1500);
@@ -41,6 +43,6 @@ static async Task RunEchoClient(string host, int port)
     }
     finally
     {
-        await connection.DisposeAsync();
+        connection.Dispose();
     }
 }

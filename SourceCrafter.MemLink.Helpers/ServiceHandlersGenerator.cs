@@ -3,6 +3,7 @@
 using SourceCrafter.Helpers;
 
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography;
 
 using static SourceCrafter.Helpers.Extensions;
@@ -61,7 +62,7 @@ namespace SourceCrafter.MemLink.Helpers
                 string typeName = serviceInterface.ToGlobalNamespaced();
 
                 var rule = new DiagnosticDescriptor(
-                    id: "MEMLINK022",
+                    id: "LITSPLNK022",
                     title: $"{typeName} not suitable for generation",
                     messageFormat: "The method '{0}' should be async and pass a CancellationToken as a parameter",
                     category: "Usage",
@@ -90,7 +91,7 @@ namespace SourceCrafter.MemLink.Helpers
                     simpleName = namedTypeSymbol.Name.Replace("Attribute", "");
 
                 var rule = new DiagnosticDescriptor(
-                    id: $"{typeName}.SingleUsage",
+                    id: $"LITSPLNK001",
                     title: typeName,
                     messageFormat: "The attribute '{0}' should not be used more than once inside this project.",
                     category: "Usage",

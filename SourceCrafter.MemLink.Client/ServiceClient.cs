@@ -1,99 +1,54 @@
 ﻿using KcpTransport;
 
+using MemoryPack;
+
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 
 namespace SourceCrafter.MemLink;
 
-public class ServiceClient
+public static class ServiceClient
 {
-    readonly static ConcurrentDictionary<string, KcpPooledConnection> connectionsPool = new();
-    readonly static SemaphoreSlim poolSemaphore = new(1);
-
-    public static async ValueTask<KcpPooledConnection> ConnectAsync(string host, int port, KcpClientConnectionOptions? opts = null)
+    public static async ValueTask<(KcpConnection, KcpStream)> ConnectAsync(string host, int port, KcpClientConnectionOptions? opts = null)
     {
-        await poolSemaphore.WaitAsync();
-
-        string key = string.Intern($"{host}:{port}");
-
-        if (connectionsPool.TryGetValue(key, out var current))
-        {
-            if (!current.Disconnected)
-            {
-                //Console.WriteLine($"Reusing client connection: {current.Connection.ConnectionId}");
-                current.LastTimeCheck = DateTime.UtcNow;
-
-                poolSemaphore.Release();
-
-                return current;
-            }
-            else
-            {
-                //Console.WriteLine($"Removing client connection: {current.Connection.ConnectionId}");
-                await TryRemove(key);
-            }
-        }
+        string key = ($"{host}:{port}");
 
         opts ??= new() { RemoteEndPoint = IPEndPoint.Parse(key) };
 
         var connection = await KcpConnection.ConnectAsync(host, port);
 
-        current = new(key, connection, DateTime.UtcNow);
+        var stream = await connection.OpenOutboundStreamAsync();
 
-        await current.InitAsync();
-
-        connectionsPool[key] = current;
-
-        ConnectionIdleCheck(current, opts.ConnectionTimeout);
-
-        connectionsPool[key] = current;
-
-        poolSemaphore.Release();
-
-        return current;
-
-        void ConnectionIdleCheck(KcpPooledConnection entry, TimeSpan connectionTimeout)
-        {
-            CancellationTokenSource cts = new();
-
-            Timer timer = null!;
-
-            timer = new Timer(async state =>
-            {
-                entry.CancellationSource.Token.ThrowIfCancellationRequested();
-
-                if (DateTime.UtcNow - entry.LastTimeCheck > connectionTimeout)
-                {
-                    if (entry.Disconnected)
-                    {
-                        //Console.WriteLine($"Disposed client connection: {current.Connection.ConnectionId}");
-                        await TryRemove(entry.Key);
-                        entry.CancellationSource.Cancel();
-                    }
-                    else
-                    {
-                        entry.LastTimeCheck = DateTime.UtcNow;
-                    }
-                }
-            }, null, connectionTimeout, Timeout.InfiniteTimeSpan);
-        }
+        return (connection, stream);
     }
 
-    static async ValueTask TryRemove(string key)
+    public static async ValueTask<ResponseData> GetAsync<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TRequest>(this KcpStream stream, string opCode, TRequest payload)
     {
-        if (!connectionsPool.TryRemove(key, out var entry)) return;
+        #region Send Message
 
-        var id = entry.Connection.ConnectionId;
+        Memory<byte> bytes = MemoryPackSerializer.Serialize((0, opCode, payload));
 
-        try
-        {
-            entry.Disconnected = true;
-            await entry.DisposeAsync();
-            entry = null;
-        }
-        finally
-        {
-            Console.WriteLine($"Client removed connection {id}");
-        }
+        BitConverter.GetBytes(bytes.Length - 44).CopyTo(bytes);
+
+        await stream.WriteAsync(bytes);
+
+        #endregion
+
+        #region Receive Message	
+
+        await stream.ReadExactlyAsync(bytes = new byte[8]);
+
+        await stream.ReadExactlyAsync(bytes = new byte[BitConverter.ToInt32(bytes[4..8].Span)]);
+
+        #endregion
+
+        return new(bytes);
     }
+}
+public struct ResponseData(Memory<byte> data)
+{
+    public T Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>()
+        => MemoryPackSerializer.Deserialize<T>(data.Span)!;
 }

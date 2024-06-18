@@ -1,4 +1,5 @@
 ﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 using SourceCrafter.Helpers;
 
@@ -15,6 +16,10 @@ namespace SourceCrafter.MemLink.Helpers
     {
         private static void GenerateServiceHost(SourceProductionContext context, Compilation compilation, INamedTypeSymbol serviceHost, System.Security.Cryptography.MD5 mD5)
         {
+            bool 
+                isMsLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILogger") != null,
+                isMsConsoleLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ConsoleLoggerExtensions") != null;
+            
             StringBuilder hostCode = new();
 
             string nsStr = "";
@@ -24,7 +29,6 @@ namespace SourceCrafter.MemLink.Helpers
                 hostCode.Append("namespace ").Append(nsStr = ns.ToDisplayString()).AppendLine(@";");
             }
 
-            //[global::Jab.ServiceProvider]
             string typeName = serviceHost.ToTypeNameFormat();
 
             hostCode.Append(@"
@@ -43,11 +47,13 @@ public partial class ").Append(typeName).Append(@"
 
         using ").Append(typeName).Append(@" ___services = new ").Append(typeName).Append(@"();
 
+        [___MS_LOGGER_VAR_PLACEHOLDER___]
+
         while (!token.IsCancellationRequested)
         {
             try
             {
-                ProcessClientMessageAsync(___services, await listener.AcceptConnectionAsync(token), token);
+                ProcessClientMessageAsync([___MS_LOGGER_PARAM_PLACEHOLDER___]___services, await listener.AcceptConnectionAsync(token), token);
             }
             catch (global::System.Exception ex)
             {
@@ -56,15 +62,17 @@ public partial class ").Append(typeName).Append(@"
         }
     }
 
-    protected static async void ProcessClientMessageAsync(").Append(typeName).Append(@" ___services, global::KcpTransport.KcpConnection connection, global::System.Threading.CancellationToken token = default)
+    protected static async void ProcessClientMessageAsync([___MS_LOGGER_ARG_PLACEHOLDER___]").Append(typeName).Append(@" ___services, global::KcpTransport.KcpConnection connection, global::System.Threading.CancellationToken token = default)
     {
+        global::System.Memory<byte> __bytes__ = new byte[0];
+
         using (connection)
         using (var ___stream = await connection.OpenOutboundStreamAsync())
         try
         {
-            READ_REQUEST: 
-            
-            global::System.Memory<byte> __bytes__ = new byte[36];
+            READ_REQUEST:
+
+			__bytes__ = new byte[44];
 
 			await ___stream.ReadExactlyAsync(__bytes__, token);
 
@@ -125,8 +133,6 @@ public partial class ").Append(typeName).Append(@"
                         {
                             if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                             {
-                                bool requireSyncImpl = false;
-
                                 string
                                     methodName = method.ToNameOnly(),
                                     globalizedMethodName = method.ToMinimalDisplayString(model, 0);
@@ -155,7 +161,7 @@ public partial class ").Append(typeName).Append(@"
 
                                 Action?
                                     invokeParams = null,
-                                    resultExpression = () => hostCode.Append("global::SourceCrafter.MemLink.ResponseStatus.Success"),
+                                    resultExpression = () => hostCode.Append("global::SourceCrafter.MemLink.ResponseStatus.Success, 0"),
                                     requestTypes = null,
                                     requestDeconstruct = null;
 
@@ -174,34 +180,49 @@ public partial class ").Append(typeName).Append(@"
                                     {
                                         var paramType = param.Type.ToGlobalNamespaced();
 
-                                        foreach(var paramAttr in param.GetAttributes())
+                                        foreach (var paramAttr in param.GetAttributes())
                                         {
-                                            if(paramAttr.AttributeClass?.ToGlobalNamespaced() is "global::SourceCrafter.MemLink.ServiceAttribute")
+                                            switch (paramAttr.AttributeClass?.ToGlobalNamespaced())
                                             {
-                                                invokeParams += () =>
-                                                {
-                                                    (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
-                                                        .Append(providerRef).Append(param.Type.ToGlobalNamespaced()).Append(">(");
+                                                case "global::SourceCrafter.MemLink.ServiceAttribute":
 
-                                                    if (paramAttr.ConstructorArguments is [{ Value: string name }])
+                                                    invokeParams += () =>
                                                     {
-                                                        hostCode.Append(@"""").Append(name).Append(@"""");
-                                                    }
+                                                        (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
+                                                            .Append(providerRef).Append(param.Type.ToGlobalNamespaced()).Append(">(");
 
-                                                    hostCode.Append(")");
-                                                };
+                                                        if (paramAttr.ConstructorArguments is [{ Value: string name }])
+                                                        {
+                                                            hostCode.Append(@"""").Append(name).Append(@"""");
+                                                        }
 
-                                                continue;
+                                                        hostCode.Append(")");
+                                                    };
+
+                                                    goto NEXT_PARAM;
                                             }
                                         }
 
-                                        if (paramType == cancelTokenFullTypeName)
+                                        switch (param.Type.ToGlobalNonGenericNamespace())
                                         {
-                                            invokeParams += () =>
-                                               (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
-                                                   .Append("token");
+                                            case "global::Microsoft.Extensions.Logging.ILogger"
+                                                when isMsLoggerInstalled && param.Type is INamedTypeSymbol { IsGenericType: true, TypeArguments: [{ } genericLogger] }:
 
-                                            continue;
+                                                invokeParams += () =>
+                                                {
+                                                    (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
+                                                        .Append("___loggerFactory.CreateLogger<").Append(genericLogger.ToGlobalNamespaced()).Append(">()");
+                                                };
+
+                                                continue;
+
+                                            case cancelTokenFullTypeName:
+
+                                                invokeParams += () =>
+                                                   (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
+                                                       .Append("token");
+
+                                                continue;
                                         }
 
                                         requestParamsCount++;
@@ -240,7 +261,7 @@ public partial class ").Append(typeName).Append(@"
                                                 break;
                                             case RefKind.Out:
 
-                                            requestParamsCount--;
+                                                requestParamsCount--;
 
                                                 invokeParams += () =>
                                                     (UseComma(ref separateParams) ? hostCode.Append(", ") : hostCode)
@@ -257,6 +278,8 @@ public partial class ").Append(typeName).Append(@"
 
                                                 break;
                                         };
+
+                                        NEXT_PARAM:;
                                     }
                                 }
 
@@ -265,8 +288,7 @@ public partial class ").Append(typeName).Append(@"
                                     if (requestTypes != null)
                                     {
 
-                                        hostCode.Append(@"
-			        await ___stream.ReadExactlyAsync(__bytes__ = new byte[___requestlen], token);
+                                        hostCode.Append(@"await ___stream.ReadExactlyAsync(__bytes__ = new byte[___requestlen], token);
 
                     var ");
 
@@ -298,7 +320,7 @@ public partial class ").Append(typeName).Append(@"
                     ");
                                         }
                                     }
-                                }                                
+                                }
 
                                 if (returnsType)
                                 {
@@ -318,22 +340,20 @@ public partial class ").Append(typeName).Append(@"
 
                                 hostCode.Append(@");
 
-                    __bytes__ = global::MemoryPack.MemoryPackSerializer.Serialize(");
+                    __bytes__ = global::MemoryPack.MemoryPackSerializer.Serialize((");
 
-                                if (!hasEmptyParams || returnsType)
+                                resultExpression();
+
+                                hostCode.Append(@"));");
+
+                                if(!hasEmptyParams || returnsType)
                                 {
-                                    hostCode.Append("(");
+                                    hostCode.Append(@"
 
-                                    resultExpression();
-
-                                    hostCode.Append(")");
+                    global::System.BitConverter.GetBytes(__bytes__.Length - 8).CopyTo(__bytes__[4..8]);");
                                 }
-                                else
-                                {
-                                    resultExpression();
-                                }
-
-                                hostCode.Append(@");
+                                
+                                hostCode.Append(@"
 
                     await ___stream.WriteAsync(__bytes__, token);
 
@@ -349,22 +369,53 @@ public partial class ").Append(typeName).Append(@"
 
             hostCode.Append(@"
                 default:
-
-                    await ___stream.WriteAsync(global::MemoryPack.MemoryPackSerializer.Serialize((global::SourceCrafter.MemLink.ResponseStatus.NotFound, string.Empty)), cancellationToken: token);
+                {
+                    await ___stream.WriteAsync(global::MemoryPack.MemoryPackSerializer.Serialize((global::SourceCrafter.MemLink.ResponseStatus.NotFound, 0)), cancellationToken: token);
 
                     goto READ_REQUEST;
+                }
             }
         }
         catch (global::KcpTransport.KcpDisconnectedException)
         {
-            Console.WriteLine($""Disconnected, Id:{connection.ConnectionId}"");
+            // TODO: implement cached logger
         }
         catch (global::System.Exception e)
         {
-            await ___stream.WriteAsync(global::MemoryPack.MemoryPackSerializer.Serialize((global::SourceCrafter.MemLink.ResponseStatus.Failed, e.ToString())), cancellationToken: token);
+            __bytes__ = global::MemoryPack.MemoryPackSerializer.Serialize((global::SourceCrafter.MemLink.ResponseStatus.Failed, 0, e.ToString()));
+
+            global::System.BitConverter.GetBytes(__bytes__.Length - 8).CopyTo(__bytes__[4..8]);
+            
+            await ___stream.WriteAsync(__bytes__, cancellationToken: token);
         }
     }
 }");
+
+            if (isMsLoggerInstalled)
+            {
+                hostCode
+                    .Insert(0, @"using global::Microsoft.Extensions.Logging;
+")
+                    .Replace("[___MS_LOGGER_VAR_PLACEHOLDER___]", @$"var ___loggerFactory = global::Microsoft.Extensions.Logging.LoggerFactory.Create(static builder =>
+        {{
+            builder
+                .AddFilter(""Microsoft"", global::Microsoft.Extensions.Logging.LogLevel.Warning)
+                .AddFilter(""System"", global::Microsoft.Extensions.Logging.LogLevel.Warning)
+                .AddFilter(""{serviceHost.ToGlobalNamespaced().Replace("global::", "")}"", global::Microsoft.Extensions.Logging.LogLevel.Debug);{(isMsConsoleLoggerInstalled ? @"
+#if DEBUG
+            builder.AddConsole();
+#endif" : null)}
+        }});")
+                    .Replace("[___MS_LOGGER_PARAM_PLACEHOLDER___]", @$"___loggerFactory, ")
+                    .Replace("[___MS_LOGGER_ARG_PLACEHOLDER___]", @$"global::Microsoft.Extensions.Logging.ILoggerFactory ___loggerFactory, ");
+            }
+            else
+            {
+                hostCode
+                    .Replace("[___MS_LOGGER_VAR_PLACEHOLDER___]", "")
+                    .Replace("[___MS_LOGGER_PARAM_PLACEHOLDER___]", "")
+                    .Replace("[___MS_LOGGER_ARG_PLACEHOLDER___]", "");
+            }
 
             context.AddSource(hintName + ".host.cs", hostCode.ToString());
 
