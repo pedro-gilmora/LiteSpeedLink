@@ -83,12 +83,6 @@ This project uses the following libraries:
 - `KcpTransport`: For managing the communication protocol.
 - `Jab`: For dependency injection and service management.
 
-## Conclusion
-
-This documentation covers the basic structure and usage of the custom API communication channel using the `KcpTransport` library. It explains how to create host and client services, define service methods, and manage service lifetimes using the `Jab` library.
-
-For more detailed examples and advanced usage, please refer to the source code and examples provided in this repository.
-
 ## TODO
 - Pipeline implementation for middlewares
 - Binary mappers (a fork of SourceCrafter)
