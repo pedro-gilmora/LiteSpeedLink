@@ -1,4 +1,4 @@
-# LiteSpeedLink: The .NET lightweight, compile-time, contract-first and LiteSpeedLink communication framework
+# LiteSpeedLink: The .NET lightweight, compile-time, contract-first and source generated communication framework
 
 ## Introduction
 
