@@ -10,7 +10,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace SourceCrafter.MemLink.Helpers
+namespace SourceCrafter.LiteSpeedLink.Helpers
 {
     public partial class ServiceHandlersGenerator
     {
@@ -34,10 +34,133 @@ namespace SourceCrafter.MemLink.Helpers
             hostCode.Append(@"
 public partial class ").Append(typeName).Append(@"
 {
-    public static async void ListenAsync(string acceptFromHost, int port) => 
-        ListenAsync(global::System.Net.IPEndPoint.Parse($""{acceptFromHost}:{port}""));
+	static volatile global::System.Net.Quic.QuicListener listener = null!;
+	static volatile global::System.Threading.CancellationTokenSource cancelTokeSource = null!;
+	internal static string certPath = global::System.IO.Path.Combine(global::System.AppDomain.CurrentDomain.BaseDirectory, ""localhost.pfx"");
+	internal static global::System.Net.Security.SslApplicationProtocol protocol = new(""lsl"");
 
-    public static async void ListenAsync(global::System.Net.IPEndPoint acceptFromHost)
+	private static global::System.Net.Quic.QuicServerConnectionOptions connectionOptions = CreateConnection();
+
+	[global::System.Diagnostics.DebuggerHidden, global::System.Diagnostics.DebuggerNonUserCode, global::System.Diagnostics.DebuggerStepThrough]
+	static global::System.Net.Quic.QuicServerConnectionOptions CreateConnection()
+	{
+		// Generate a self-signed certificate if in debug mode
+#if DEBUG
+		if (!global::System.IO.File.Exists(certPath))
+		{
+			global::System.Console.WriteLine(""Creating self-signed certificate..."");
+
+			var psi = new global::System.Diagnostics.ProcessStartInfo
+			{
+				FileName = ""powershell"",
+				Arguments = $@""-Command """"New-SelfSignedCertificate -DnsName 'localhost' -CertStoreLocation 'cert:\\LocalMachine\\My' | Export-PfxCertificate -FilePath '{certPath}' -Password (ConvertTo-SecureString -String 'D34lW17h' -AsPlainText -Force)"""""",
+				RedirectStandardOutput = true,
+				UseShellExecute = false,
+				CreateNoWindow = true
+			};
+
+			global::System.Diagnostics.Process.Start(psi)?.WaitForExit();
+
+			global::System.Console.WriteLine(""Certificate created."");
+		}
+#endif
+
+		return new global::System.Net.Quic.QuicServerConnectionOptions
+		{
+			IdleTimeout = global::System.TimeSpan.FromMinutes(5),
+			MaxInboundBidirectionalStreams = 1000,
+			MaxInboundUnidirectionalStreams = 10,
+			DefaultStreamErrorCode = 0x0A,
+			DefaultCloseErrorCode = 0x0B,
+			ServerAuthenticationOptions = new global::System.Net.Security.SslServerAuthenticationOptions
+			{
+				ApplicationProtocols = [ protocol ],
+				ServerCertificate = new global::System.Security.Cryptography.X509Certificates.X509Certificate2(certPath, ""D34lW17h""),
+				ClientCertificateRequired = false
+			}
+		};
+	}
+
+	volatile static global::System.Net.Quic.QuicListenerOptions listenerOptions = new()
+	{
+		ListenEndPoint = new global::System.Net.IPEndPoint(new global::System.Net.IPAddress(new byte[16]), 5000),
+		ApplicationProtocols = new global::System.Collections.Generic.List<global::System.Net.Security.SslApplicationProtocol> { protocol },
+		ConnectionOptionsCallback = [global::System.Diagnostics.DebuggerHidden, global::System.Diagnostics.DebuggerStepThrough] static (connection, sslHello, token) =>
+		{
+			return new global::System.Threading.Tasks.ValueTask<global::System.Net.Quic.QuicServerConnectionOptions>(connectionOptions);
+		}
+	};
+
+	[global::System.Diagnostics.DebuggerHidden, global::System.Diagnostics.DebuggerStepThrough]
+	public static async global::System.Threading.Tasks.ValueTask StartAsync()
+	{
+		listener = await global::System.Net.Quic.QuicListener.ListenAsync(listenerOptions).ConfigureAwait(false);
+
+		cancelTokeSource = new global::System.Threading.CancellationTokenSource();
+
+		global::System.Console.WriteLine(""Server started..."");
+
+        using ").Append(typeName).Append(@" ___services = new ").Append(typeName).Append(@"();
+
+        [___MS_LOGGER_VAR_PLACEHOLDER___]
+
+		ListenConnections(cancelTokeSource.Token);
+	}
+
+	[global::System.Diagnostics.DebuggerHidden, global::System.Diagnostics.DebuggerStepThrough, global::System.Diagnostics.DebuggerNonUserCode]
+	async static void ListenConnections([___MS_LOGGER_ARG_PLACEHOLDER___]").Append(typeName).Append(@" ___services, global::System.Threading.CancellationToken token)
+	{
+		global::System.Console.WriteLine(""Waiting clients..."");
+		try
+		{
+			while (!token.IsCancellationRequested)
+			{
+				HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), [___MS_LOGGER_PARAM_PLACEHOLDER___]___services, token);
+			}
+		}
+		catch (global::System.Net.Quic.QuicException e)
+		{
+			if (e.QuicError is not global::System.Net.Quic.QuicError.OperationAborted)
+				global::System.Console.WriteLine(""Host error: "" + e);
+		}
+	}
+
+	[global::System.Diagnostics.DebuggerHidden, global::System.Diagnostics.DebuggerStepThrough, global::System.Diagnostics.DebuggerNonUserCode]
+	private static async void HandleConnectionAsync(global::System.Net.Quic.QuicConnection connection, [___MS_LOGGER_ARG_PLACEHOLDER___]").Append(typeName).Append(@" ___services, global::System.Threading.CancellationToken token)
+	{
+		global::System.Console.WriteLine(""Connected with client..."");
+
+		try
+		{
+			await using (connection)
+			{
+				while (!token.IsCancellationRequested)
+				{
+					HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), [___MS_LOGGER_PARAM_PLACEHOLDER___]___services, token);
+				}
+			}
+		}
+		catch (global::System.Net.Quic.QuicException e)
+		{
+			if (e.QuicError is not global::System.Net.Quic.QuicError.ConnectionAborted)
+				global::System.Console.WriteLine(""Connection error: "" + e);
+		}
+	}
+
+	[global::System.Diagnostics.DebuggerHidden, global::System.Diagnostics.DebuggerStepThrough, global::System.Diagnostics.DebuggerNonUserCode]
+	static async void HandleStreamAsync(global::System.Net.Quic.QuicStream stream, [___MS_LOGGER_ARG_PLACEHOLDER___]").Append(typeName).Append(@" ___services, global::System.Threading.CancellationToken token)
+	{
+		await using (stream)
+		{
+			global::System.Memory<byte> opId = new byte[4]; //reserve operation id space for reading
+
+			await stream.ReadExactlyAsync(opId, token).ConfigureAwait(false); // fill the operation id
+
+			await requestHandlers[global::System.BitConverter.ToInt32(opId.Span)](stream, [___MS_LOGGER_PARAM_PLACEHOLDER___]___services, token);
+		}
+	}
+
+    public static async void ListenAsync()
     {
         var cancellationTokenSource = new global::System.Threading.CancellationTokenSource();
 

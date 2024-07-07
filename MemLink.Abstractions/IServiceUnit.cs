@@ -1,3 +1,3 @@
-﻿namespace SourceCrafter.MemLink;
+﻿namespace SourceCrafter.LiteSpeedLink;
 
 public interface IServiceUnit;

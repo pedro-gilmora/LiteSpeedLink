@@ -2,9 +2,9 @@
 
 using Microsoft.Extensions.Logging;
 
-namespace SourceCrafter.MemLink;
+namespace SourceCrafter.LiteSpeedLink;
 
 [ServiceHost]
 [ServiceProvider]
-[Transient<SumService>]
+[Singleton<SumService>]
 public partial class TextService;

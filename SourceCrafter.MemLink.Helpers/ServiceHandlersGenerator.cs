@@ -8,7 +8,7 @@ using System.Security.Cryptography;
 
 using static SourceCrafter.Helpers.Extensions;
 
-namespace SourceCrafter.MemLink.Helpers
+namespace SourceCrafter.LiteSpeedLink.Helpers
 {
     [Generator]
     public partial class ServiceHandlersGenerator : IIncrementalGenerator

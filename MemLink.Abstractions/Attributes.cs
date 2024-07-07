@@ -3,7 +3,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.IO;
 
-namespace SourceCrafter.MemLink;
+namespace SourceCrafter.LiteSpeedLink;
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public class ServiceHostAttribute : Attribute;

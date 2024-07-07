@@ -7,7 +7,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 
-namespace SourceCrafter.MemLink.Helpers
+namespace SourceCrafter.LiteSpeedLink.Helpers
 {
     public partial class ServiceHandlersGenerator
     {
@@ -17,6 +17,7 @@ namespace SourceCrafter.MemLink.Helpers
             SymbolDisplayParameterOptions.IncludeType |
             SymbolDisplayParameterOptions.IncludeName |
             SymbolDisplayParameterOptions.IncludeDefaultValue;
+
         private static void GenerateServiceClient(SourceProductionContext context, Compilation compilation, INamedTypeSymbol serviceClient, System.Security.Cryptography.MD5 mD5)
         {
             StringBuilder clientCode = new();
@@ -193,6 +194,10 @@ public partial class ").Append(serviceClient.ToTypeNameFormat()).Append(@"(strin
                         //}");
                         //                        continue;
                         //                    }
+                        if (!isTask)
+                        {
+
+                        }
 
                         clientCode.Append(@"
 

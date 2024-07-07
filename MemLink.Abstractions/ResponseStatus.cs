@@ -1,4 +1,4 @@
-﻿namespace SourceCrafter.MemLink;
+﻿namespace SourceCrafter.LiteSpeedLink;
 
 public enum ResponseStatus
 {
