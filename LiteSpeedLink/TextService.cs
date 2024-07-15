@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace SourceCrafter.LiteSpeedLink;
 
-[ServiceHost]
+[ServiceHost(ServiceConnectionType.Tcp)]
 [ServiceProvider]
-[Singleton<SumService>]
+[Singleton<AuthService>]
 public partial class TextService;

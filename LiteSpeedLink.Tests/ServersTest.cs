@@ -5,6 +5,7 @@ using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
 using SourceCrafter.LiteSpeedLink;
 using SourceCrafter.LiteSpeedLink.Client;
 
+using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -23,7 +24,7 @@ public class ServersTest(ITestOutputHelper output)
         const string serverIp = "localhost";
         const int serverPort = 5000;
 
-        using UdpClient server = Server.StartUdpServer(serverPort,
+        using UdpClient server = Server.StartUdpServer<MockService>(serverPort, null!,
         new()
         {
             {
@@ -71,13 +72,13 @@ public class ServersTest(ITestOutputHelper output)
             if (a > b)
             {
                 string payload = $"Hello from client {++i}";
-                var message = await connection.GetAsync(1, payload, default(string));
+                var message = await connection.GetAsync<string, string>(1, payload);
 
                 message.Should().Be(new string(payload.Reverse().ToArray()));
             }
             else if (a < b)
             {
-                var message = await connection.GetAsync(0, (a, b, i % 2 == 0), default(int));
+                var message = await connection.GetAsync<(int, int, bool), int>(0, (a, b, i % 2 == 0));
 
                 message.Should().Be(a + b);
             }
@@ -106,8 +107,8 @@ public class ServersTest(ITestOutputHelper output)
 
         var cert = Constants.GetDevCert();
 
-        await using var server = await Server.StartQuicServerAsync(serverPort, cert,
-        new(){
+        await using var server = await Server.StartQuicServerAsync<MockService>(serverPort, null!, new()
+        {
             {
                 0,
                 static (context, token) =>
@@ -138,7 +139,8 @@ public class ServersTest(ITestOutputHelper output)
                     return await context.EndStreamingAsync(token);
                 }
             }
-        }, default);
+        },
+        cert, default);
 
         var timeStamp = Stopwatch.GetTimestamp();
 
@@ -153,13 +155,13 @@ public class ServersTest(ITestOutputHelper output)
             if (a > b)
             {
                 string payload = $"Hello from client {++i}";
-                var message = await connection.GetAsync(1, payload, default(string));
+                var message = await connection.GetAsync<string, string>(1, payload);
 
                 message.Should().Be(new string(payload.Reverse().ToArray()));
             }
             else if (a < b)
             {
-                var message = await connection.GetAsync(0, (a, b, i % 2 == 0), default(int));
+                var message = await connection.GetAsync<(int, int, bool), int>(0, (a, b, i % 2 == 0));
 
                 message.Should().Be(a + b);
             }
@@ -184,7 +186,7 @@ public class ServersTest(ITestOutputHelper output)
 
         var cert = Constants.GetDevCert();
 
-        using var server = Server.StartTcpServer(serverPort,
+        using var server = Server.StartTcpServer<MockService>(serverPort, null!,
         new(){
             {
                 0,
@@ -231,13 +233,13 @@ public class ServersTest(ITestOutputHelper output)
             if (a > b)
             {
                 string payload = $"Hello from client {++i}";
-                var message = await connection.GetAsync(1, payload, default(string));
+                var message = await connection.GetAsync<string, string>(1, payload);
 
                 message.Should().Be(new string(payload.Reverse().ToArray()));
             }
             else if (a < b)
             {
-                var message = await connection.GetAsync(0, (a, b, i % 2 == 0), default(int));
+                var message = await connection.GetAsync<(int, int, bool), int>(0, (a, b, i % 2 == 0));
 
                 message.Should().Be(a + b);
             }
@@ -252,5 +254,23 @@ public class ServersTest(ITestOutputHelper output)
         }
 
         output.WriteLine($"Took: {Stopwatch.GetElapsedTime(timeStamp)}");
+    }
+}
+
+internal class MockService : IServiceProvider, IDisposable, IAsyncDisposable
+{
+    public void Dispose()
+    {
+        throw new NotImplementedException();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        throw new NotImplementedException();
+    }
+
+    public object? GetService(Type serviceType)
+    {
+        throw new NotImplementedException();
     }
 }

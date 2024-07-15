@@ -3,24 +3,22 @@
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
-using System.Net.Quic;
-using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using System.Runtime.Versioning;
 
 namespace SourceCrafter.LiteSpeedLink;
 
-public partial class Server
+public static partial class Server
 {
-    public static TcpListener StartTcpServer(
+    public static TcpListener StartTcpServer<TServiceProvider>(
         int port,
-        Dictionary<int, RequestHandler> handlers,
+        TServiceProvider provider,
+        Dictionary<int, RequestHandler<TServiceProvider>> handlers,
         X509Certificate2? cert = default,
-        CancellationToken token = default)
+        CancellationToken token = default) where TServiceProvider : IServiceProvider, IDisposable, IAsyncDisposable
     {
         // Generate a self-signed certificate if in debug mode
 
@@ -30,19 +28,20 @@ public partial class Server
 
         tcpServer.Start();
 
-        ListenClientsAsync(tcpServer, handlers, cert, token);
+        ListenClientsAsync(tcpServer, provider, handlers, cert, token);
 
         return tcpServer;
 
         static async void ListenClientsAsync(
             TcpListener tcpServer,
-            Dictionary<int, RequestHandler> handlers,
+            TServiceProvider provider,
+            Dictionary<int, RequestHandler<TServiceProvider>> handlers,
             X509Certificate2? cert = default,
             CancellationToken token = default)
         {
             try
             {
-            DO: HandleConnectionAsync(await tcpServer.AcceptTcpClientAsync(token), handlers, cert, token); goto DO;
+            DO: HandleConnectionAsync(await tcpServer.AcceptTcpClientAsync(token), provider, handlers, cert, token); goto DO;
             }
             catch (Exception ex)
                 when (ex is SocketException { SocketErrorCode: SocketError.ConnectionAborted or SocketError.OperationAborted })
@@ -52,7 +51,8 @@ public partial class Server
 
         static async void HandleConnectionAsync(
             TcpClient tcpClient,
-            Dictionary<int, RequestHandler> handlers,
+            TServiceProvider provider,
+            Dictionary<int, RequestHandler<TServiceProvider>> handlers,
             X509Certificate2? cert = default,
             CancellationToken token = default)
         {
@@ -74,20 +74,21 @@ public partial class Server
                         ApplicationProtocols = [Constants.protocol, Constants.protocolStream],
                         ClientCertificateRequired = true,
                         CertificateRevocationCheckMode = X509RevocationMode.NoCheck // Adjust as necessary
-                    });
+                    }, token);
             }
 
             var reader = PipeReader.Create(stream);
             var writer = PipeWriter.Create(stream);
 
-            while (await reader.ReadAtLeastAsync(4) is { IsCompleted: false, IsCanceled: false, Buffer: { IsEmpty: false, End: { } end } buffer })
+            while (await reader.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { IsEmpty: false, End: { } end } buffer })
             {
-                HandleRequestAsync(handlers, buffer, reader, writer, token);
+                HandleRequestAsync(provider, handlers, buffer, reader, writer, token);
             }
         }
 
         static async void HandleRequestAsync(
-            Dictionary<int, RequestHandler> handlers,
+            TServiceProvider provider,
+            Dictionary<int, RequestHandler<TServiceProvider>> handlers,
             ReadOnlySequence<byte> requestBuffer,
             PipeReader reader,
             PipeWriter writer,
@@ -96,8 +97,8 @@ public partial class Server
             try
             {
                 await (handlers.TryGetValue(BitConverter.ToInt32(requestBuffer.Slice(0, 4).FirstSpan), out var requestHandler)
-                    ? requestHandler(new(requestBuffer.Slice(4), writer), token)
-                    : NotFound(writer, token));
+                    ? requestHandler(new(provider, requestBuffer.Slice(4), writer), token).ConfigureAwait(false)
+                    : NotFound(writer, token).ConfigureAwait(false));
             }
             catch (Exception ex)
             {
@@ -116,14 +117,16 @@ public partial class Server
     }
 }
 
-public delegate ValueTask<FlushResult> RequestHandler(RequestContext _, CancellationToken cancel);
+public delegate ValueTask<FlushResult> RequestHandler<TServiceProvider>(RequestContext<TServiceProvider> _, CancellationToken cancel) where TServiceProvider : IServiceProvider;
 
-public class RequestContext(ReadOnlySequence<byte> bytes, PipeWriter writer)
+public class RequestContext<TServiceProvider>(TServiceProvider provider, ReadOnlySequence<byte> bytes, PipeWriter writer) where TServiceProvider : IServiceProvider
 {
     internal static readonly ReadOnlyMemory<byte> streammingEnd = new([255, 255, 255, 255]);
 
+    public TServiceProvider Provider { get; } = provider;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public TOut? Read<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>()
+    public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>()
     {
         return MemoryPackSerializer.Deserialize<TOut>(bytes);
     }

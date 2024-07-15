@@ -11,7 +11,8 @@ public static partial class ClientExtensions
     [SupportedOSPlatform("windows")]
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("macos")]
-    public static IConnection AsQuicConnection(this EndPoint ip, X509Certificate2 cert) => new QuicConnection(new()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static IConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default) => new QuicConnection(new()
     {
         RemoteEndPoint = ip,
         DefaultStreamErrorCode = 0x0A,

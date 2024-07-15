@@ -2,13 +2,14 @@
 
 using SourceCrafter.Helpers;
 
+using System;
 using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Security.Cryptography;
+using System.Linq;
 
 using static SourceCrafter.Helpers.Extensions;
 
-namespace SourceCrafter.LiteSpeedLink.Helpers
+namespace SourceCrafter.LiteSpeedLink
 {
     [Generator]
     public partial class ServiceHandlersGenerator : IIncrementalGenerator
@@ -16,43 +17,44 @@ namespace SourceCrafter.LiteSpeedLink.Helpers
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
             //var serviceHandlerTypes = context.SyntaxProvider
-            //    .ForAttributeWithMetadataName("SourceCrafter.MemLink.ServiceHandlerAttribute",
+            //    .ForAttributeWithMetadataName("SourceCrafter.LiteSpeedLink.ServiceHandlerAttribute",
             //        (node, a) => true,
             //        (t, c) => (INamedTypeSymbol)t.TargetSymbol).Collect();
 
             var serviceClientTypes = context.SyntaxProvider
-                .ForAttributeWithMetadataName("SourceCrafter.MemLink.ServiceClientAttribute",
+                .ForAttributeWithMetadataName("SourceCrafter.LiteSpeedLink.ServiceClientAttribute",
                     (node, a) => true,
-                    (t, c) => (INamedTypeSymbol)t.TargetSymbol).Collect();
+                    (t, c) => ((INamedTypeSymbol)t.TargetSymbol, GetServiceConnectionType(t.Attributes))).Collect();
 
             var serviceHostType = context.SyntaxProvider
-                .ForAttributeWithMetadataName("SourceCrafter.MemLink.ServiceHostAttribute",
+                .ForAttributeWithMetadataName("SourceCrafter.LiteSpeedLink.ServiceHostAttribute",
                     (node, a) => true,
-                    (t, c) => (INamedTypeSymbol)t.TargetSymbol).Collect();
+                    (t, c) => ((INamedTypeSymbol)t.TargetSymbol, GetServiceConnectionType(t.Attributes))).Collect();
 
             context.RegisterSourceOutput(context.CompilationProvider.Combine(serviceHostType.Combine(serviceClientTypes)), GenerateSource);
         }
 
-        private void GenerateSource(SourceProductionContext context, (Compilation, (ImmutableArray<INamedTypeSymbol> ,ImmutableArray<INamedTypeSymbol>)) data)
+        private int GetServiceConnectionType(ImmutableArray<AttributeData> attributes)
+        {
+            return (int?)attributes[0].ConstructorArguments.FirstOrDefault().Value ?? 0;
+        }
+
+        private void GenerateSource(SourceProductionContext context, (Compilation, (ImmutableArray<(INamedTypeSymbol, int)>, ImmutableArray<(INamedTypeSymbol, int)>)) data)
         {
 #if DEBUG_SG
             Debugger.Launch();
 #endif
-            var(compilation, (serviceHosts, serviceClients)) = data;
-
-            MD5? md5 = null;
+            var (compilation, (serviceHosts, serviceClients)) = data;
 
             if (CanGenerateService(context, serviceHosts))
             {
-                GenerateServiceHost(context, compilation, serviceHosts[0], md5 = MD5.Create());
+                GenerateServiceHost(context, compilation, serviceHosts[0]);
             }
 
             if (CanGenerateService(context, serviceClients))
             {
-                GenerateServiceClient(context, compilation, serviceClients[0], md5 ??= MD5.Create());
+                GenerateServiceClient(context, compilation, serviceClients[0]);
             }
-
-            md5?.Dispose();
         }
 
         static bool CanClientGenerateServiceMethod(SourceProductionContext context, ITypeSymbol serviceInterface, bool isTask, bool hasCancelToken)
@@ -79,13 +81,13 @@ namespace SourceCrafter.LiteSpeedLink.Helpers
             }
             return true;
         }
-        
 
-        static bool CanGenerateService(SourceProductionContext context, ImmutableArray<INamedTypeSymbol> foundTypes)
+
+        static bool CanGenerateService(SourceProductionContext context, ImmutableArray<(INamedTypeSymbol, int)> foundTypes)
         {
             if (foundTypes.Length > 1)
             {
-                INamedTypeSymbol namedTypeSymbol = foundTypes[1];
+                var (namedTypeSymbol, connectionType) = foundTypes[1];
 
                 string typeName = namedTypeSymbol.ToGlobalNamespaced(),
                     simpleName = namedTypeSymbol.Name.Replace("Attribute", "");

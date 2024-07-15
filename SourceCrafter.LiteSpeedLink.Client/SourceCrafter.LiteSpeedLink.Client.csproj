@@ -9,7 +9,7 @@
   <ItemGroup>
 		<PackageReference Include="KcpTransport" Version="0.0.2" />
 		<PackageReference Include="MemoryPack" Version="1.21.1" />
-		<ProjectReference Include="..\MemLink.Abstractions\MemLink.Abstractions.csproj" />
+		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
 	</ItemGroup>
 
 </Project>

@@ -1,17 +1,12 @@
-﻿using System.Net.Sockets;
-using System.Net;
-using System.Runtime.CompilerServices;
-using System.IO;
+﻿namespace SourceCrafter.LiteSpeedLink;
 
-namespace SourceCrafter.LiteSpeedLink;
-
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public class ServiceHostAttribute : Attribute;
-
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 
 #pragma warning disable CS9113 // Parameter is unread.
-public class ServiceClientAttribute(string hostname, int port) : Attribute;
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+public class ServiceHostAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Udp) : Attribute;
+
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+public class ServiceClientAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Udp) : Attribute;
 
 [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
 public class ServiceAttribute(string? name = null) : Attribute;

@@ -3,19 +3,19 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.10.34902.84
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemLink", "MemLink\MemLink.csproj", "{F1D0B997-9558-476C-8453-2B961A8F3DAA}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteSpeedLink", "LiteSpeedLink\LiteSpeedLink.csproj", "{F1D0B997-9558-476C-8453-2B961A8F3DAA}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SourceCrafter.MemLink", "SourceCrafter.MemLink\SourceCrafter.MemLink.csproj", "{87B781AA-469D-4525-8CA4-160864DD8421}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SourceCrafter.LiteSpeedLink", "SourceCrafter.LiteSpeedLink\SourceCrafter.LiteSpeedLink.csproj", "{87B781AA-469D-4525-8CA4-160864DD8421}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemLink.Abstractions", "MemLink.Abstractions\MemLink.Abstractions.csproj", "{C0681452-CE11-4FE1-9C56-05716EF693F8}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteSpeedLink.Abstractions", "LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj", "{C0681452-CE11-4FE1-9C56-05716EF693F8}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Application.Contracts", "Application.Contracts\Application.Contracts.csproj", "{8F898B1C-17C6-4C6F-B100-4D6BB0678DA0}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MemLink.Tests", "MemLink.Tests\MemLink.Tests.csproj", "{7894D275-83F6-4D38-9E97-AF3AD7257317}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteSpeedLink.Tests", "LiteSpeedLink.Tests\LiteSpeedLink.Tests.csproj", "{7894D275-83F6-4D38-9E97-AF3AD7257317}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SourceCrafter.MemLink.Helpers", "SourceCrafter.MemLink.Helpers\SourceCrafter.MemLink.Helpers.csproj", "{4618992B-1FD2-435D-9845-EB3B9F1594B9}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SourceCrafter.LiteSpeedLink.Helpers", "SourceCrafter.LiteSpeedLink.Helpers\SourceCrafter.LiteSpeedLink.Helpers.csproj", "{4618992B-1FD2-435D-9845-EB3B9F1594B9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SourceCrafter.MemLink.Client", "SourceCrafter.MemLink.Client\SourceCrafter.MemLink.Client.csproj", "{E8E1B7DA-1369-4735-ABD5-93700CD7F119}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SourceCrafter.LiteSpeedLink.Client", "SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj", "{E8E1B7DA-1369-4735-ABD5-93700CD7F119}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

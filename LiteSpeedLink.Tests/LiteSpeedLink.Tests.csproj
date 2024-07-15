@@ -26,9 +26,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MemLink.Abstractions\MemLink.Abstractions.csproj" />
-    <ProjectReference Include="..\SourceCrafter.MemLink.Client\SourceCrafter.MemLink.Client.csproj" />
-    <ProjectReference Include="..\SourceCrafter.MemLink\SourceCrafter.MemLink.csproj" />
+    <ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
+    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
+    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink\SourceCrafter.LiteSpeedLink.csproj" />
   </ItemGroup>
 
   <ItemGroup>

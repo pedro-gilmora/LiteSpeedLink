@@ -1,6 +1,6 @@
 ﻿namespace SourceCrafter.LiteSpeedLink;
 
-public enum ResponseStatus
+public enum ResponseStatus : byte
 {
     Success,
     NotFound,
