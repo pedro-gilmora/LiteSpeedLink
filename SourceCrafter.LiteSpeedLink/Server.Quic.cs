@@ -125,7 +125,7 @@ public static partial class Server
         {
             try
             {
-                return handlers.TryGetValue(BitConverter.ToInt32(buffer.Slice(0, 4).FirstSpan), out var requestHandler)
+                return handlers.TryGetValue(MemoryPackSerializer.Deserialize<int>(buffer.Slice(0, 4)), out var requestHandler)
                     ? requestHandler(new(provider, buffer.Slice(4), writer), token)
                     : NotFound(writer, token);
             }
