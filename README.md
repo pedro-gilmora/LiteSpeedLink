@@ -2,13 +2,13 @@
 
 ## Introduction
 
-This project implements a custom API communication channel using the `KcpTransport` NuGet library. The communication model is contract-first, with two primary implementation variants: Minimal and Class-first, totally source generated
+This project implements a custom API communication channel using the `UDP`, `TCP` or `QUIC`. The communication model is contract-first, with two primary implementation variants: Minimal and Class-first, totally source generated
 
 ### Key Concepts
 
 - **Contract-First**: Both endpoints, host and client must define implementors, either service interfaces or delegates.
-- **Hosts**: `KcpListener` implementations ready to receive any client message.
-- **Clients**: `KcpConnection` ready to chat with any implemented `KcpListener`.
+- **Hosts**: Server implementations ready to receive any client message.
+- **Clients**: `IConnection` implementations ready to chat with any implemented server preiously mentioned.
 - **Communication Contracts**: Defined using source generation with two variants:
   - **Minimal Variant**: Methods are declared in `Program.cs` with attribute markers (`EndpointHandlerAttribute`).
   - **Class Variant**: Methods inside classes implementing interfaces inheriting `IServiceUnit`.
@@ -68,7 +68,7 @@ public interface IProductServiceUnit : IServiceUnit
 }
 ```
 
-## Host Client side
+## Host-Client side
 
 To generate clients you just must add interfaces defined in contracts or minimal variant generated delegates to service client class (owning ServiceClientAttribute), 
 
@@ -80,7 +80,7 @@ public partial class MyClientService : IMyService, IServiceHandler<CreateProduct
 ## Dependencies
 
 This project uses the following libraries:
-- `KcpTransport`: For managing the communication protocol.
+- `System.IO.Pipelines`: For managing bytes sequences to be serialized/sdeserialized.
 - `Jab`: For dependency injection and service management.
 
 ## TODO

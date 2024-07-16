@@ -9,14 +9,14 @@ await using TextServiceClient client = new("localhost", port);
 
 Credentials creds = new("pedro", "test!123");
 
-if (((IAuthService)client).Authenticate(creds, out var token))
+if (await client.AuthenticateAsync(creds) is (true, { } token))
 {
     Console.WriteLine(token);
 }
 
-if (await client.AuthenticateAsync(creds) is (true, { } token2))
+if (((IAuthService)client).Authenticate(creds, out token))
 {
-    Console.WriteLine(token2);
+    Console.WriteLine(token);
 }
 
 // Implementation layer
