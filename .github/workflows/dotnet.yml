@@ -1,4 +1,4 @@
-name: 'SourceCrafter.LiteSpeedLink: Build, Test & Deploy For .NET 8'
+name: 'SourceCrafter.LiteSpeedLink: Build, Test & Deploy for .NET 8'
 
 on:
   push:
