@@ -6,6 +6,25 @@
 		<LangVersion>latest</LangVersion>
 		<Nullable>enable</Nullable>
 		<IncludeBuildOutput>false</IncludeBuildOutput>
+		<PackageVersion>
+			$([System.Convert]::ToUInt16(
+				$([MSBuild]::Add(
+					$([System.DateTime]::Now.Year),
+					-2023
+				))
+			)).
+			$([System.DateTime]::Now.ToString('yy')).
+			$([System.DateTime]::Now.DayOfYear).
+			$([System.Convert]::ToUInt16(
+				$([MSBuild]::Divide(
+					$([System.DateTime]::Now.TimeOfDay.TotalMinutes),
+					15
+				))
+			))
+		</PackageVersion>
+		<Company>AsereHighDev</Company>
+		<Description>Generator for server and client generator using QUIC, TCP and UDP</Description>
+		<PackageReadmeFile>ReadMe.md</PackageReadmeFile>
 		<Configurations>Debug;Release;DEBUG_SG</Configurations>
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 	</PropertyGroup>

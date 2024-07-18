@@ -23,7 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
     <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Helpers\SourceCrafter.LiteSpeedLink.Helpers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink\SourceCrafter.LiteSpeedLink.csproj" />
+    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
   </ItemGroup>
 
 </Project>

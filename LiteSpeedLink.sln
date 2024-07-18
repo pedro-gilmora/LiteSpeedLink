@@ -5,7 +5,7 @@ VisualStudioVersion = 17.10.34902.84
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteSpeedLink", "LiteSpeedLink\LiteSpeedLink.csproj", "{F1D0B997-9558-476C-8453-2B961A8F3DAA}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SourceCrafter.LiteSpeedLink", "SourceCrafter.LiteSpeedLink\SourceCrafter.LiteSpeedLink.csproj", "{87B781AA-469D-4525-8CA4-160864DD8421}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SourceCrafter.LiteSpeedLink.Server", "SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj", "{87B781AA-469D-4525-8CA4-160864DD8421}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LiteSpeedLink.Abstractions", "LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj", "{C0681452-CE11-4FE1-9C56-05716EF693F8}"
 EndProject

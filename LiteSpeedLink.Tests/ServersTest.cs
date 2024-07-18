@@ -113,7 +113,7 @@ public class ServersTest(ITestOutputHelper output)
                 0,
                 static (context, token) =>
                 {
-                    var (a, b, isOdd) = context.Read<(int, int, bool)>();
+                    var (a, b, isOdd) = context.Get<(int, int, bool)>();
 
                     return context.ReturnAsync(a + b, token);
                 }
@@ -122,7 +122,7 @@ public class ServersTest(ITestOutputHelper output)
                 1,
                 static (context, token) =>
                 {
-                    string body = context.Read<string>()!;
+                    string body = context.Get<string>()!;
 
                     return context.ReturnAsync(body.Reverse().ToArray(), token);
                 }
@@ -184,15 +184,13 @@ public class ServersTest(ITestOutputHelper output)
         const string serverIp = "localhost";
         const int serverPort = 5001;
 
-        var cert = Constants.GetDevCert();
-
         using var server = Server.StartTcpServer<MockService>(serverPort, null!,
         new(){
             {
                 0,
                 static (context, token) =>
                 {
-                    var (a, b, isOdd) = context.Read<(int, int, bool)>();
+                    var (a, b, isOdd) = context.Get<(int, int, bool)>();
 
                     return context.ReturnAsync(a + b, token);
                 }
@@ -201,7 +199,7 @@ public class ServersTest(ITestOutputHelper output)
                 1,
                 static (context, token) =>
                 {
-                    string body = context.Read<string>()!;
+                    string body = context.Get<string>()!;
 
                     return context.ReturnAsync(body.Reverse().ToArray(), token);
                 }
@@ -218,7 +216,7 @@ public class ServersTest(ITestOutputHelper output)
                     return await context.EndStreamingAsync(token);
                 }
             }
-        }, cert, default);
+        }, null, default);
 
         var timeStamp = Stopwatch.GetTimestamp();
 
@@ -226,7 +224,7 @@ public class ServersTest(ITestOutputHelper output)
 
         int i = 1;
 
-        using var connection = new DnsEndPoint(serverIp, serverPort).AsTcpConnection(cert);
+        using var connection = new DnsEndPoint(serverIp, serverPort).AsTcpConnection();
 
         foreach (var (a, b) in dataSet)
         {

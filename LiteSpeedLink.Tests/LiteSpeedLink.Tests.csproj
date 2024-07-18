@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
@@ -28,7 +28,7 @@
   <ItemGroup>
     <ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
     <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
-    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink\SourceCrafter.LiteSpeedLink.csproj" />
+    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
   </ItemGroup>
 
   <ItemGroup>
