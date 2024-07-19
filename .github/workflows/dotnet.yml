@@ -29,15 +29,9 @@ jobs:
       run: |
         without_comma=$(echo "${{ github.event.head_commit.message }}" | sed 's/,/\\u002C/g')
         dotnet pack SourceCrafter.LiteSpeedLink.Helpers/SourceCrafter.LiteSpeedLink.Helpers.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
-        dotnet pack SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
-        dotnet pack SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
-    
+
     - name: Publish to Nuget
       if: github.ref_name == 'dev'
       run: |
         package="$(find . -wholename '**/Pack/SourceCrafter.LiteSpeedLink.Helpers*.nupkg' -exec echo "{}" \;)"
-        dotnet nuget push $package --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
-        package="$(find . -wholename '**/Pack/SourceCrafter.LiteSpeedLink.Client*.nupkg' -exec echo "{}" \;)"
-        dotnet nuget push $package --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
-        package="$(find . -wholename '**/Pack/SourceCrafter.LiteSpeedLink.Server*.nupkg' -exec echo "{}" \;)"
         dotnet nuget push $package --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
