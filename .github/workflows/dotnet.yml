@@ -24,7 +24,7 @@ jobs:
     - name: Test
       run: dotnet test LiteSpeedLink.Tests/LiteSpeedLink.Tests.csproj --verbosity normal -c Release
 
-    - name: Pack
+    - name: Pack generator and endpoints
       if: github.ref_name == 'dev'
       run: |
         without_comma=$(echo "${{ github.event.head_commit.message }}" | sed 's/,/\\u002C/g')
@@ -32,7 +32,7 @@ jobs:
         dotnet pack SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
         dotnet pack SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
     
-    - name: Publish to Nuget
+    - name: Publish generator and endpoints to Nuget
       if: github.ref_name == 'dev'
       run: |
         package="$(find . -wholename '**/Pack/SourceCrafter.LiteSpeedLink.Helpers*.nupkg' -exec echo "{}" \;)"
