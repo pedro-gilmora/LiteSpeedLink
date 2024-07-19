@@ -1,4 +1,5 @@
-﻿using System.Net.Security;
+﻿using System.Diagnostics;
+using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink;
@@ -12,6 +13,8 @@ public readonly struct Constants
     public static X509Certificate2 GetDevCert()
     {
         string path = Path.Combine(Directory.GetCurrentDirectory(), "localhost.pfx");
+
+        Trace.WriteLine("Cert path: " + path);
 
         X509Certificate2 certificate = null!;
 
