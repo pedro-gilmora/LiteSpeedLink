@@ -9,7 +9,6 @@ public readonly struct Constants
         protocol = new("lsl"),
         protocolStream = new("lsl-stream");
 
-#if DEBUG
     public static X509Certificate2 GetDevCert()
     {
         string path = Path.Combine(Directory.GetCurrentDirectory(), "localhost.pfx");
@@ -42,5 +41,4 @@ public readonly struct Constants
 
         return certificate ?? new(path, "D34lW17h");
     }
-#endif
 }
