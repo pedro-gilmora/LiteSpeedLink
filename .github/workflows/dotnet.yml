@@ -18,6 +18,17 @@ jobs:
       with:
         dotnet-version: 8.0.x
 
+    - name: Install PowerShell
+      run: |
+        wget -q https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt-get update
+        sudo apt-get install -y powershell
+        sudo ln -s /usr/bin/pwsh /usr/bin/powershell
+
+    - name: Verify PowerShell installation
+      run: powershell -c "echo 'PowerShell is installed and available!'"
+
     - name: Restore dependencies
       run: dotnet restore
 
