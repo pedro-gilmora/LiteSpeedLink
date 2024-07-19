@@ -14,7 +14,7 @@ public readonly struct Constants
     {
         string path = Path.Combine(Directory.GetCurrentDirectory(), "localhost.pfx");
 
-        Trace.WriteLine("Cert path: " + path);
+        Console.WriteLine("Cert path: " + path);
 
         X509Certificate2 certificate = null!;
 
