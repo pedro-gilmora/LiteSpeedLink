@@ -29,7 +29,7 @@ jobs:
       run: |
         without_comma=$(echo "${{ github.event.head_commit.message }}" | sed 's/,/\\u002C/g')
         dotnet pack SourceCrafter.LiteSpeedLink.Helpers/SourceCrafter.LiteSpeedLink.Helpers.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
-        dotnet pack SourceCrafter.LiteSpeedLink/SourceCrafter.LiteSpeedLink.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
+        dotnet pack SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
         dotnet pack SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj --verbosity normal -c Pack /p:PackageReleaseNotes="$without_comma"
     
     - name: Publish to Nuget
