@@ -12,7 +12,7 @@ public static partial class ClientExtensions
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("macos")]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default) => new QuicConnection(new()
+    public static QuicConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default) => new(new()
     {
         RemoteEndPoint = ip,
         DefaultStreamErrorCode = 0x0A,
@@ -25,8 +25,8 @@ public static partial class ClientExtensions
     });
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IConnection AsUdpConnection(this EndPoint ip) => new UdpConnection(ip);
+    public static UdpConnection AsUdpConnection(this EndPoint ip) => new(ip);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IConnection AsTcpConnection(this EndPoint ip, System.Security.Cryptography.X509Certificates.X509Certificate2? cert = null) => new TcpConnection(ip, cert);
+    public static TcpConnection AsTcpConnection(this EndPoint ip, X509Certificate2? cert = null) => new(ip, cert);
 }

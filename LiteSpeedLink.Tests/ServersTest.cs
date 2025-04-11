@@ -7,6 +7,7 @@ using SourceCrafter.LiteSpeedLink.Client;
 
 using System.ComponentModel.Design;
 using System.Diagnostics;
+using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
@@ -24,40 +25,7 @@ public class ServersTest(ITestOutputHelper output)
         const string serverIp = "localhost";
         const int serverPort = 5000;
 
-        using UdpClient server = Server.StartUdpServer<MockService>(serverPort, null!,
-        new()
-        {
-            {
-                0,
-                static (context, token) =>
-                {
-                    var (a, b, isOdd) = context.Get<(int, int, bool)>();
-
-                    return context.ReturnAsync(a + b, token);
-                }
-            },
-            {
-                1,
-                static (context, token) =>
-                {
-                    string body = context.Get<string>()!;
-
-                    return context.ReturnAsync(body.Reverse().ToArray(), token);
-                }
-            },
-            {
-                2,
-                async static (context, token) =>
-                {
-                    for (int i = 1; i <= 10; i++)
-                    {
-                        await context.ReturnAsync(i, token).ConfigureAwait(false);
-                    }
-
-                    return await context.EndStreamingAsync(token);
-                }
-            } 
-        }, default);
+        using UdpClient server = Server.StartUdpServer(serverPort, HandleUdpRequestAsync, () => { } , default);
 
         var timeStamp = Stopwatch.GetTimestamp();
 
@@ -107,40 +75,7 @@ public class ServersTest(ITestOutputHelper output)
 
         var cert = Constants.GetDevCert();
 
-        await using var server = await Server.StartQuicServerAsync<MockService>(serverPort, null!, new()
-        {
-            {
-                0,
-                static (context, token) =>
-                {
-                    var (a, b, isOdd) = context.Get<(int, int, bool)>();
-
-                    return context.ReturnAsync(a + b, token);
-                }
-            },
-            {
-                1,
-                static (context, token) =>
-                {
-                    string body = context.Get<string>()!;
-
-                    return context.ReturnAsync(body.Reverse().ToArray(), token);
-                }
-            },
-            {
-                2,
-                async static (context, token) =>
-                {
-                    for (int i = 1; i <= 10; i++)
-                    {
-                        await context.YieldAsync(i, token).ConfigureAwait(false);
-                    }
-
-                    return await context.EndStreamingAsync(token);
-                }
-            }
-        },
-        cert, default);
+        await using var server = await Server.StartQuicServerAsync(serverPort, HandleRequestAsync, () => { }, cert, default);
 
         var timeStamp = Stopwatch.GetTimestamp();
 
@@ -148,7 +83,7 @@ public class ServersTest(ITestOutputHelper output)
 
         int i = 1;
 
-        using var connection = new DnsEndPoint(serverIp, serverPort).AsQuicConnection(cert);
+        await using var connection = new DnsEndPoint(serverIp, serverPort).AsQuicConnection(cert);
 
         foreach (var (a, b) in dataSet)
         {
@@ -178,45 +113,70 @@ public class ServersTest(ITestOutputHelper output)
         output.WriteLine($"Took: {Stopwatch.GetElapsedTime(timeStamp)}");
     }
 
+    private ValueTask<FlushResult> HandleRequestAsync(long id, RequestContext ctx, CancellationToken token)
+    {
+        switch (id)
+        {
+            case 0:
+                var (a, b, isOdd) = ctx.Get<(int, int, bool)>();
+
+                return ctx.ReturnAsync(a + b, token);
+            case 1:
+                string body = ctx.Get<string>()!;
+
+                return ctx.ReturnAsync(body.Reverse().ToArray(), token);
+            case 2:
+
+                return ctx.EnumerateAsync(SendItems, token);
+
+                static IEnumerable<int> SendItems()
+                {
+                    for (int i = 1; i <= 10; i++)
+                    {
+                        yield return i;
+                    }
+                }
+        }
+
+        return default;
+    }
+
+    private async ValueTask<int> HandleUdpRequestAsync(long id, UdpRequestContext ctx, CancellationToken token)
+    {
+        switch (id)
+        {
+            case 0:
+            
+                var (a, b, isOdd) = ctx.Get<(int, int, bool)>();
+
+                return await ctx.ReturnAsync(a + b, token);
+            
+            case 1:
+
+                string body = ctx.Get<string>()!;
+
+                return await ctx.ReturnAsync(body.Reverse().ToArray(), token);
+           
+            case 2:
+
+                for (int i = 1; i <= 10; i++)
+                {
+                    await ctx.ReturnAsync(i, token);
+                }
+
+                return await ctx.EndStreamingAsync(token);
+        }
+
+        return default;
+    }
+
     [Fact]
     public async Task TestTcp()
     {
         const string serverIp = "localhost";
         const int serverPort = 5001;
 
-        using var server = Server.StartTcpServer<MockService>(serverPort, null!,
-        new(){
-            {
-                0,
-                static (context, token) =>
-                {
-                    var (a, b, isOdd) = context.Get<(int, int, bool)>();
-
-                    return context.ReturnAsync(a + b, token);
-                }
-            },
-            {
-                1,
-                static (context, token) =>
-                {
-                    string body = context.Get<string>()!;
-
-                    return context.ReturnAsync(body.Reverse().ToArray(), token);
-                }
-            },
-            {
-                2,
-                async static (context, token) =>
-                {
-                    for (int i = 1; i <= 10; i++)
-                    {
-                        await context.YieldAsync(i, token).ConfigureAwait(false);
-                    }
-
-                    return await context.EndStreamingAsync(token);
-                }
-            }
-        }, null, default);
+        using var server = Server.StartTcpServer(serverPort, HandleRequestAsync, () => { }, null, default);
 
         var timeStamp = Stopwatch.GetTimestamp();
 
@@ -224,7 +184,7 @@ public class ServersTest(ITestOutputHelper output)
 
         int i = 1;
 
-        using var connection = new DnsEndPoint(serverIp, serverPort).AsTcpConnection();
+        await using var connection = new DnsEndPoint(serverIp, serverPort).AsTcpConnection();
 
         foreach (var (a, b) in dataSet)
         {

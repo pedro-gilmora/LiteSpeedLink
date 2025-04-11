@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>
@@ -14,16 +14,22 @@
   </PropertyGroup>
 	
   <ItemGroup>
-    <PackageReference Include="Jab" Version="0.10.2" />
-    <PackageReference Include="MemoryPack" Version="1.21.1" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    <PackageReference Include="SourceCrafter.DependencyInjection" Version="1.25.101.51" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="1.25.101.51" />
+    <PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration" Version="1.25.101.51" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration.Metadata" Version="1.25.101.51" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Application.Contracts\Application.Contracts.csproj" />
     <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
-    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Helpers\SourceCrafter.LiteSpeedLink.Helpers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
+    <ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Helpers\SourceCrafter.LiteSpeedLink.Helpers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<Compile Include="..\LiteSpeedLink.Abstractions\Internals\*.cs">
+			<Link>SourceCrafter.LiteSpeedLink.Internals\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Compile>
   </ItemGroup>
 
 </Project>

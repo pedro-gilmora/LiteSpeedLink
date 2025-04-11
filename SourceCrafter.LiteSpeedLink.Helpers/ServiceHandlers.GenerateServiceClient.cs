@@ -2,6 +2,9 @@
 
 using SourceCrafter.Helpers;
 
+
+//using SourceCrafter.Helpers;
+
 using System;
 using System.Collections.Immutable;
 using System.Linq;
@@ -12,20 +15,10 @@ using System.Text;
 namespace SourceCrafter.LiteSpeedLink
 {
     public partial class ServiceHandlersGenerator
-    {
+    { 
         const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
 
-        const SymbolDisplayParameterOptions paramsOptions =
-            SymbolDisplayParameterOptions.IncludeType |
-            SymbolDisplayParameterOptions.IncludeName |
-            SymbolDisplayParameterOptions.IncludeDefaultValue;
-
-        public static string GetString(IParameterSymbol symbol)
-        {
-            return symbol.ToDisplayString(Extensions._globalizedNamespace.WithParameterOptions(paramsOptions));
-        }
-
-        private static void GenerateServiceClient(SourceProductionContext context, Compilation compilation, (INamedTypeSymbol, int) serviceClientDesc)
+        private static void GenerateServiceClient(SourceProductionContext context, Compilation compilation, in (INamedTypeSymbol, int) serviceClientDesc)
         {
             var (serviceClient, connectionType) = serviceClientDesc;
 
@@ -72,11 +65,6 @@ public partial class ").Append(typeShortName).Append(@"
     public ").Append(typeShortName).Append(@"(string hostname, int port)
     {
         __connection = new global::System.Net.DnsEndPoint(hostname, port).As").Append(connTypeName).Append(@"Connection();
-        
-        lock (_lock)
-        {
-            (_disposables ??= new global::System.Collections.Generic.List<object>()).Add(__connection);
-        }
     }");
 
             string
@@ -91,8 +79,6 @@ public partial class ").Append(typeShortName).Append(@"
                      i.Interfaces.Any(ii => ii.ToGlobalNamespaced() == "global::SourceCrafter.LiteSpeedLink.IServiceUnit")).ToImmutableArray().AsSpan())
             {
                 var fullTypeName = iFace.ToGlobalNamespaced();
-
-                var model = compilation.GetSemanticModel(iFace.DeclaringSyntaxReferences[0].SyntaxTree);
 
                 foreach (var member in iFace.GetMembers())
                 {
@@ -113,7 +99,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                         string
                             methodName = method.ToNameOnly(),
-                            globalizedMethodName = method.ToMinimalDisplayString(model, 0),
+                            globalizedMethodName = method.ToGlobalNamespaced(),
                             returnFullTypeName = returnType.ToGlobalNonGenericNamespace(),
                             cancelTokenParam = null!,
                             opMethod = hasReturnType
@@ -152,7 +138,7 @@ public partial class ").Append(typeShortName).Append(@"
                                         {
                                             if (Exchange(ref paramsComma)) clientCode.Append(", ");
 
-                                            clientCode.Append(GetString(param));
+                                            clientCode.Append(param.GetString());
                                         };
 
                                         inCount++;
@@ -202,7 +188,7 @@ public partial class ").Append(typeShortName).Append(@"
                                         {
                                             if (Exchange(ref paramsComma)) clientCode.Append(", ");
 
-                                            clientCode.Append(GetString(param));
+                                            clientCode.Append(param.GetString());
                                         };
 
                                         if (cancelTokenParam == null && paramType == cancelTokenFullTypeName)
@@ -232,7 +218,7 @@ public partial class ").Append(typeShortName).Append(@"
                             }
                         }
 
-                        int serviceId = GetServiceId(globalizedMethodName);
+                        var serviceId = GetServiceId(globalizedMethodName);
 
                         clientCode.Append(@"
 

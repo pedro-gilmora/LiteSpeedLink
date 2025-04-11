@@ -2,12 +2,18 @@
 
 using SourceCrafter.Helpers;
 
+
+//using SourceCrafter.Helpers;
+
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
+using System.Xml.Schema;
 
-using static SourceCrafter.Helpers.Extensions;
+//using static SourceCrafter.Helpers.Extensions;
 
 namespace SourceCrafter.LiteSpeedLink
 {
@@ -16,22 +22,47 @@ namespace SourceCrafter.LiteSpeedLink
     {
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
+#if DEBUG_SG
+            Debugger.Launch();
+#endif
             //var serviceHandlerTypes = context.SyntaxProvider
             //    .ForAttributeWithMetadataName("SourceCrafter.LiteSpeedLink.ServiceHandlerAttribute",
             //        (node, a) => true,
             //        (t, c) => (INamedTypeSymbol)t.TargetSymbol).Collect();
 
             var serviceClientTypes = context.SyntaxProvider
-                .ForAttributeWithMetadataName("SourceCrafter.LiteSpeedLink.ServiceClientAttribute",
+                .ForAttributeWithMetadataName("LiteSpeedLink.Abstractions.Internals.ServiceClientAttribute",
                     (node, a) => true,
                     (t, c) => ((INamedTypeSymbol)t.TargetSymbol, GetServiceConnectionType(t.Attributes))).Collect();
 
             var serviceHostType = context.SyntaxProvider
-                .ForAttributeWithMetadataName("SourceCrafter.LiteSpeedLink.ServiceHostAttribute",
+                .ForAttributeWithMetadataName("LiteSpeedLink.Abstractions.Internals.ServiceHostAttribute",
                     (node, a) => true,
-                    (t, c) => ((INamedTypeSymbol)t.TargetSymbol, GetServiceConnectionType(t.Attributes))).Collect();
+                    (t, c) => ((INamedTypeSymbol)t.TargetSymbol, GetServiceConnectionType(t.Attributes)))
+                .Collect();
 
-            context.RegisterSourceOutput(context.CompilationProvider.Combine(serviceHostType.Combine(serviceClientTypes)), GenerateSource);
+            context.RegisterSourceOutput(context.CompilationProvider.Combine(serviceHostType.Combine(serviceClientTypes)),
+                (context, info) =>
+                {
+                    var (compilation, (serviceHosts, serviceClients)) = info;
+                    try
+                    {
+
+                        if (CanGenerateService(context, serviceHosts))
+                        {
+                            GenerateServiceHost(context, compilation, serviceHosts[0]);
+                        }
+
+                        if (CanGenerateService(context, serviceClients))
+                        {
+                            GenerateServiceClient(context, compilation, serviceClients[0]);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        context.AddSource("errors.cs", $"/*{e}*/");
+                    }
+                });
         }
 
         private int GetServiceConnectionType(ImmutableArray<AttributeData> attributes)
@@ -39,90 +70,47 @@ namespace SourceCrafter.LiteSpeedLink
             return (int?)attributes[0].ConstructorArguments.FirstOrDefault().Value ?? 0;
         }
 
-        private void GenerateSource(SourceProductionContext context, (Compilation, (ImmutableArray<(INamedTypeSymbol, int)>, ImmutableArray<(INamedTypeSymbol, int)>)) data)
+
+        static bool CanGenerateService(SourceProductionContext context, in ImmutableArray<(INamedTypeSymbol, int)> classes)
         {
-#if DEBUG_SG
-            Debugger.Launch();
-#endif
-            var (compilation, (serviceHosts, serviceClients)) = data;
+            if (classes.Length is 0) return false;
 
-            if (CanGenerateService(context, serviceHosts))
-            {
-                GenerateServiceHost(context, compilation, serviceHosts[0]);
-            }
+            if (classes is not ([_, (var cls, _), ..])) return true;
 
-            if (CanGenerateService(context, serviceClients))
-            {
-                GenerateServiceClient(context, compilation, serviceClients[0]);
-            }
-        }
+            string typeName = cls.ToGlobalNamespaced(),
+                    simpleName = cls.Name.Replace("Attribute", "");
 
-        static bool CanClientGenerateServiceMethod(SourceProductionContext context, ITypeSymbol serviceInterface, bool isTask, bool hasCancelToken)
-        {
-            if (!isTask || !hasCancelToken)
-            {
-                string typeName = serviceInterface.ToGlobalNamespaced();
+            var rule = new DiagnosticDescriptor(
+                id: "LITSPLNK001",
+                title: typeName,
+                messageFormat: "The attribute '{0}' should not be used more than once inside this project.",
+                category: "Usage",
+                defaultSeverity: DiagnosticSeverity.Error,
+                isEnabledByDefault: true,
+                description: $"There should be just one implementation of {simpleName}."
+            );
 
-                var rule = new DiagnosticDescriptor(
-                    id: "LITSPLNK022",
-                    title: $"{typeName} not suitable for generation",
-                    messageFormat: "The method '{0}' should be async and pass a CancellationToken as a parameter",
-                    category: "Usage",
-                    defaultSeverity: DiagnosticSeverity.Error,
-                    isEnabledByDefault: true,
-                    description: $"In order to generate a proper implementation of a network call, the operation method {typeName} should be async passing a cancellation token."
-                );
+            Diagnostic diagnostic = Diagnostic.Create(rule, cls.Locations[0], typeName);
 
-                Diagnostic diagnostic = Diagnostic.Create(rule, serviceInterface.Locations[0], typeName);
+            context.ReportDiagnostic(diagnostic);
 
-                context.ReportDiagnostic(diagnostic);
-
-                return false;
-            }
-            return true;
-        }
-
-
-        static bool CanGenerateService(SourceProductionContext context, ImmutableArray<(INamedTypeSymbol, int)> foundTypes)
-        {
-            if (foundTypes.Length > 1)
-            {
-                var (namedTypeSymbol, connectionType) = foundTypes[1];
-
-                string typeName = namedTypeSymbol.ToGlobalNamespaced(),
-                    simpleName = namedTypeSymbol.Name.Replace("Attribute", "");
-
-                var rule = new DiagnosticDescriptor(
-                    id: $"LITSPLNK001",
-                    title: typeName,
-                    messageFormat: "The attribute '{0}' should not be used more than once inside this project.",
-                    category: "Usage",
-                    defaultSeverity: DiagnosticSeverity.Error,
-                    isEnabledByDefault: true,
-                    description: $"There should be just one implementation of {simpleName}."
-                );
-
-                Diagnostic diagnostic = Diagnostic.Create(rule, namedTypeSymbol.Locations[0], typeName);
-
-                context.ReportDiagnostic(diagnostic);
-
-                return false;
-            }
-            return foundTypes.Length == 1;
-        }
-
-        static void GetMetaInfo(ISymbol symbol, out string nsMetaName, out string fullTypeMetaName, out string symbolMetaName, out string fullSymbolMetaName)
-        {
-            nsMetaName = symbol.ContainingNamespace.ToMetadataLongName();
-
-            fullTypeMetaName = symbol.ContainingType.ToMetadataLongName();
-
-            fullSymbolMetaName = symbol.ToMetadataLongName();
-
-            symbolMetaName = nsMetaName.Length > 0
-                ? fullSymbolMetaName.Replace(nsMetaName, "")
-                : fullSymbolMetaName;
+            return false;
         }
     }
 }
 
+namespace SourceCrafter
+{
+    public static class Extensions
+    {
+        const SymbolDisplayParameterOptions paramsOptions =
+            SymbolDisplayParameterOptions.IncludeType |
+            SymbolDisplayParameterOptions.IncludeName |
+            SymbolDisplayParameterOptions.IncludeDefaultValue;
+
+        public static string GetString(this IParameterSymbol symbol)
+        {
+            return symbol.ToDisplayString(Helpers.Extensions._globalizedNamespace.WithParameterOptions(paramsOptions));
+        }
+    }
+}

@@ -1,10 +1,13 @@
-﻿using Jab;
+﻿using Application.Contracts;
 
-using Microsoft.Extensions.Logging;
+using LiteSpeedLink;
+using LiteSpeedLink.Abstractions.Internals;
+
+using SourceCrafter.DependencyInjection.Attributes;
 
 namespace SourceCrafter.LiteSpeedLink;
 
-[ServiceHost(ServiceConnectionType.Tcp)]
-[ServiceProvider]
-[Singleton<AuthService>]
+[ServiceHost(ServiceConnectionType.Udp)]
+[ServiceContainer]
+[Scoped<IAuthService, AuthService>]
 public partial class TextService;

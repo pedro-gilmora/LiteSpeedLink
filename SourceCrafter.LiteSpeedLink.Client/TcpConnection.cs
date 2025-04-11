@@ -11,535 +11,531 @@ using System.Buffers;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
-public partial class ClientExtensions
+public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default) : IConnection, IAsyncDisposable
 {
-    private sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default) : IConnection
-    {
-        internal TcpClient? connection;
-        internal Stream? stream;
-        internal PipeReader? reader;
-        internal PipeWriter? writer;
+    internal TcpClient? connection;
+    internal Stream? stream;
+    internal PipeReader? reader;
+    internal PipeWriter? writer;
 
-        public async ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
+    {
+        reader?.Complete();
+        writer?.Complete();
+        if (stream is not null)
+            await stream.DisposeAsync();
+        
+        connection?.Dispose();
+    }
+
+    internal async ValueTask<TcpConnection> TryInitializeAsync(CancellationToken token)
+    {
+        if (stream is not null) return this;
+
+        connection ??= new TcpClient();
+
+        switch (endpoint)
         {
-            reader?.Complete();
-            writer?.Complete();
-            if (stream is not null)
-                await stream.DisposeAsync();
-            if (connection is not null)
-                connection.Dispose();
+            case DnsEndPoint { Host: string host, Port: int port }:
+
+                await connection.ConnectAsync(host, port, token);
+
+                stream = connection.GetStream();
+
+                if (cert is not null)
+                {
+                    await ((SslStream)(stream = new SslStream(stream, false)))
+                        .AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                        {
+                            TargetHost = host,
+                            ClientCertificates = [cert],
+                            EnabledSslProtocols = SslProtocols.Tls12,
+                            CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                        }, token);
+                }
+
+                break;
+
+            case IPEndPoint ip:
+
+                await connection.ConnectAsync(ip, token);
+
+                stream = connection.GetStream();
+
+                if (cert is not null)
+                {
+                    await ((SslStream)(stream = new SslStream(stream, false)))
+                        .AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                        {
+                            TargetHost = ip.Address.ToString(),
+                            ClientCertificates = [cert],
+                            EnabledSslProtocols = SslProtocols.Tls12,
+                            CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                        }, token);
+                }
+
+                break;
+
+            default:
+
+                throw new Exception($"Unsupported endpoint: [{endpoint.ToString()}]");
         }
 
-        internal async ValueTask<TcpConnection> TryInitializeAsync(CancellationToken token)
+        reader = PipeReader.Create(stream);
+        writer = PipeWriter.Create(stream);
+
+        return this;
+    }
+
+    public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op,
+         TIn payload,
+         CancellationToken token = default,
+         [CallerMemberName] string name = "")
+    {
+        await TryInitializeAsync(token);
+
+        ReadOnlySequence<byte> buffer = default;
+
+        try
         {
-            if (stream is not null) return this;
+            await writer!.WriteAsync(
+                BuildRequest(
+                    Serialize(op),
+                    Serialize(payload)),
+                token);
 
-            connection ??= new TcpClient();
+            buffer = (await reader!.ReadAsync(token)).Buffer;
 
-            switch (endpoint)
+            var result = Deserialize<TOut>(buffer);
+
+            reader.AdvanceTo(buffer.End);
+
+            return result;
+        }
+        catch (MemoryPackSerializationException)
+        {
+            switch (Deserialize<ResponseStatus>(buffer.Slice(0, 1)))
             {
-                case DnsEndPoint { Host: string host, Port: int port }:
+                case ResponseStatus.NotFound: throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
 
-                    await connection.ConnectAsync(host, port, token);
+                case ResponseStatus.Failed: throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+REASON:
 
-                    stream = connection.GetStream();
-
-                    if (cert is not null)
-                    {
-                        await ((SslStream)(stream = new SslStream(stream, false)))
-                            .AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                            {
-                                TargetHost = host,
-                                ClientCertificates = [cert],
-                                EnabledSslProtocols = SslProtocols.Tls12,
-                                CertificateRevocationCheckMode = X509RevocationMode.NoCheck
-                            }, token);
-                    }
-
-                    break;
-
-                case IPEndPoint ip:
-
-                    await connection.ConnectAsync(ip, token);
-
-                    stream = connection.GetStream();
-
-                    if (cert is not null)
-                    {
-                        await ((SslStream)(stream = new SslStream(stream, false)))
-                            .AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                            {
-                                TargetHost = ip.Address.ToString(),
-                                ClientCertificates = [cert],
-                                EnabledSslProtocols = SslProtocols.Tls12,
-                                CertificateRevocationCheckMode = X509RevocationMode.NoCheck
-                            }, token);
-                    }
-
-                    break;
+{Deserialize<string>(buffer.Slice(1))}
+");
 
                 default:
 
-                    throw new Exception($"Unsupported endpoint: [{endpoint.ToString()}]");
+                    throw;
             }
+        }
+        catch
+        {
+            throw;
+        }
+    }
 
-            reader = PipeReader.Create(stream);
-            writer = PipeWriter.Create(stream);
+    public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op,
+         CancellationToken token = default,
+         [CallerMemberName] string name = "")
+    {
+        await TryInitializeAsync(token);
 
-            return this;
+        ReadOnlySequence<byte> buffer = default;
+
+        try
+        {
+            Serialize(writer!, op);
+
+            await writer!.FlushAsync(token);
+
+            buffer = (await reader!.ReadAsync(token)).Buffer;
+
+            var result = Deserialize<TOut>(buffer);
+
+            reader.AdvanceTo(buffer.End);
+
+            return result;
+        }
+        catch (MemoryPackSerializationException)
+        {
+            switch (Deserialize<ResponseStatus>(buffer.Slice(0, 1)))
+            {
+                case ResponseStatus.NotFound: throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
+
+                case ResponseStatus.Failed: throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+REASON:
+
+{Deserialize<string>(buffer.Slice(1))}
+");
+
+                default:
+
+                    throw;
+            }
+        }
+        catch
+        {
+            throw;
+        }
+    }
+
+    public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
+        (long op,
+         TIn payload,
+         CancellationToken token = default)
+    {
+        await TryInitializeAsync(token);
+
+        ReadOnlySequence<byte> buffer = default;
+
+        try
+        {
+            await writer!.WriteAsync(
+                BuildRequest(
+                    Serialize(op),
+                    Serialize(payload)),
+                token);
+
+            switch (Deserialize<ResponseStatus>(buffer = (await reader!.ReadAsync(token)).Buffer))
+            {
+                case ResponseStatus.NotFound: throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
+
+                case ResponseStatus.Failed: throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+REASON:
+
+{Deserialize<string>(buffer.Slice(1))}
+");
+            }
+        }
+        catch (MemoryPackSerializationException ex)
+        {
+            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
+            {
+                throw new ArgumentException("Invalid parameters", ex);
+            }
+            
+            throw;
+        }
+        catch
+        {
+            throw;
+        }
+        finally
+        {
+            reader!.AdvanceTo(buffer.End);
+        }
+    }
+
+    public async ValueTask SendAsync(
+        long op,
+        CancellationToken token = default,
+        [CallerMemberName] string name = "")
+    {
+        await TryInitializeAsync(token);
+
+        ReadOnlySequence<byte> buffer = default;
+
+        try
+        {
+            Serialize(writer!, op);
+
+            await writer!.FlushAsync(token);
+
+            switch (Deserialize<ResponseStatus>((buffer = (await reader!.ReadAsync(token)).Buffer).Slice(0, 1)))
+            {
+                case ResponseStatus.NotFound:
+
+                    throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
+
+                case ResponseStatus.Failed:
+
+                    throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+REASON:
+
+{Deserialize<string>(buffer.Slice(1))}
+");
+            }
+        }
+        catch (MemoryPackSerializationException ex)
+        {
+            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
+            {
+                throw new ArgumentException("Invalid parameters", ex);
+            }
+            else
+            {
+                throw;
+            }
+        }
+        catch
+        {
+            throw;
+        }
+        finally
+        {
+            if (buffer.IsEmpty) reader!.AdvanceTo(buffer.End);
+        }
+    }
+
+    public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(
+        long op,
+        TIn payload,
+        CancellationToken token = default,
+        [CallerMemberName] string name = "")
+
+    {
+        await TryInitializeAsync(token);
+
+        ReadOnlySequence<byte> buffer = default;
+
+        try
+        {
+            await writer!.WriteAsync(
+                BuildRequest(
+                    Serialize(op),
+                    Serialize(payload)),
+                token);
+
+            switch ((ResponseStatus)(buffer = (await reader!.ReadAsync(token)).Buffer).FirstSpan[0])
+            {
+                case ResponseStatus.NotFound:
+
+                    throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
+
+                case ResponseStatus.Failed:
+
+                    throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+REASON:
+
+{Deserialize<string>(buffer.Slice(1))}
+");
+            }
+        }
+        catch (MemoryPackSerializationException ex)
+        {
+            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
+            {
+                throw new ArgumentException("Invalid parameters", ex);
+            }
+            else
+            {
+                throw;
+            }
+        }
+        catch
+        {
+            throw;
+        }
+        finally
+        {
+            if (buffer.IsEmpty) reader!.AdvanceTo(buffer.End);
+        }
+    }
+
+    public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op,
+         TIn payload,
+         [EnumeratorCancellation] CancellationToken token = default,
+         [CallerMemberName] string name = "")
+    {
+        await TryInitializeAsync(token);
+
+        try
+        {
+            await writer!.WriteAsync(
+                BuildRequest(
+                    Serialize(op),
+                    Serialize(payload)),
+                token);
+        }
+        catch (MemoryPackSerializationException ex)
+        {
+            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
+            {
+                throw new ArgumentException("Invalid parameters", ex);
+            }
+            else
+            {
+                throw;
+            }
         }
 
-        public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-            (int op,
-             TIn payload,
-             CancellationToken token = default,
-             [CallerMemberName] string name = "")
+        int chunkLength;
+        bool hasNext = false;
+
+        TOut? item;
+
+        while (await reader!.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { First: { } segment, IsEmpty: false, Start: { } position, End: { } end } buffer })
         {
-            await TryInitializeAsync(token);
-
-            ReadOnlySequence<byte> buffer = default;
-
-            try
+            while (buffer.TryGet(ref position, out segment))
             {
-                await writer!.WriteAsync(
-                       BuildRequest(
-                           MemoryPackSerializer.Serialize(op),
-                           MemoryPackSerializer.Serialize(payload)),
-                       token);
+                int start = 0;
 
-                buffer = (await reader!.ReadAsync(token)).Buffer;
-
-                var result = MemoryPackSerializer.Deserialize<TOut>(buffer);
-
-                reader.AdvanceTo(buffer.End);
-
-                return result;
-            }
-            catch (MemoryPackSerializationException ex)
-            {
-                if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
-                {
-                    throw new ArgumentException("Invalid parameters", ex);
-                }
-                else if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Deserialize[") is true && !buffer.IsEmpty)
+                while (start < segment.Length && (hasNext = (chunkLength = BitConverter.ToInt32(segment.Span.Slice(Interlocked.Exchange(ref start, start + 4), 4))) > -1))
                 {
                     try
                     {
-                        switch (MemoryPackSerializer.Deserialize<ResponseStatus>(buffer.Slice(0, 1)))
+                        item = Deserialize<TOut>(segment.Span.Slice(Interlocked.Exchange(ref start, start + chunkLength), chunkLength));
+                    }
+                    catch (MemoryPackSerializationException ex)
+                    {
+                        if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Deserialize[") is true && !buffer.IsEmpty)
                         {
-                            case ResponseStatus.NotFound:
+                            try
+                            {
+                                switch (Deserialize<ResponseStatus>(buffer.Slice(0, 1)))
+                                {
+                                    case ResponseStatus.NotFound:
 
-                                throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
+                                        throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
 
-                            case ResponseStatus.Failed:
+                                    case ResponseStatus.Failed:
 
-                                throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+                                        throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
 REASON:
 
-{MemoryPackSerializer.Deserialize<string>(buffer.Slice(1))}
+{Deserialize<string>(buffer.Slice(1))}
 ");
 
-                            default:
+                                    default:
 
+                                        throw;
+                                }
+                            }
+                            catch
+                            {
                                 throw;
+                            }
+                        }
+                        else
+                        {
+                            throw;
                         }
                     }
-                    catch
-                    {
-                        throw;
-                    }
+                    yield return item;
+                }
+
+                if (hasNext)
+                {
+                    reader.AdvanceTo(position);
                 }
                 else
                 {
-                    throw;
+                    reader.AdvanceTo(end);
+                    yield break;
                 }
             }
-            catch
+
+            reader.AdvanceTo(end);
+        }
+    }
+
+    public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op,
+         [EnumeratorCancellation] CancellationToken token = default,
+         [CallerMemberName] string name = "")
+    {
+        await TryInitializeAsync(token);
+
+        try
+        {
+            Serialize(writer!, op);
+
+            await writer!.FlushAsync(token);
+        }
+        catch (MemoryPackSerializationException ex)
+        {
+            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
+            {
+                throw new ArgumentException("Invalid parameters", ex);
+            }
+            else
             {
                 throw;
             }
         }
 
-        public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-            (int op,
-             CancellationToken token = default,
-             [CallerMemberName] string name = "")
+        int chunkLength;
+        bool hasNext = false;
+
+        TOut? item;
+
+        while (await reader!.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { First: { } segment, IsEmpty: false, Start: { } position, End: { } end } buffer })
         {
-            await TryInitializeAsync(token);
-
-            ReadOnlySequence<byte> buffer = default;
-
-            try
+            while (buffer.TryGet(ref position, out segment))
             {
-                MemoryPackSerializer.Serialize(writer!, op);
+                int start = 0;
 
-                await writer!.FlushAsync(token);
-
-                buffer = (await reader!.ReadAsync(token)).Buffer;
-
-                var result = MemoryPackSerializer.Deserialize<TOut>(buffer);
-
-                reader.AdvanceTo(buffer.End);
-
-                return result;
-            }
-            catch (MemoryPackSerializationException ex)
-            {
-                if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
-                {
-                    throw new ArgumentException("Invalid parameters", ex);
-                }
-                else if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Deserialize[") is true && !buffer.IsEmpty)
+                while (start < segment.Length && (hasNext = (chunkLength = BitConverter.ToInt32(segment.Span.Slice(Interlocked.Exchange(ref start, start + 4), 4))) > -1))
                 {
                     try
                     {
-                        switch (MemoryPackSerializer.Deserialize<ResponseStatus>(buffer.Slice(0,1)))
-                        {
-                            case ResponseStatus.NotFound:
-
-                                throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
-
-                            case ResponseStatus.Failed:
-
-                                throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
-REASON:
-
-{MemoryPackSerializer.Deserialize<string>(buffer.Slice(1))}
-");
-
-                            default:
-
-                                throw;
-                        }
+                        item = Deserialize<TOut>(segment.Span.Slice(Interlocked.Exchange(ref start, start + chunkLength), chunkLength));
                     }
-                    catch
+                    catch (MemoryPackSerializationException ex)
                     {
-                        throw;
-                    }
-                }
-                else
-                {
-                    throw;
-                }
-            }
-            catch
-            {
-                throw;
-            }
-        }
-
-        public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
-            (int op,
-             TIn payload,
-             CancellationToken token = default,
-             [CallerMemberName] string name = "")
-        {
-            await TryInitializeAsync(token);
-
-            ReadOnlySequence<byte> buffer = default;
-
-            try
-            {
-                await writer!.WriteAsync(
-                    BuildRequest(
-                        MemoryPackSerializer.Serialize(op),
-                        MemoryPackSerializer.Serialize(payload)),
-                    token);
-
-                switch (MemoryPackSerializer.Deserialize<ResponseStatus>(buffer = (await reader!.ReadAsync(token)).Buffer))
-                {
-                    case ResponseStatus.NotFound:
-
-                        throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
-
-                    case ResponseStatus.Failed:
-
-                        throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
-REASON:
-
-{MemoryPackSerializer.Deserialize<string>(buffer.Slice(1))}
-");
-                }
-            }
-            catch (MemoryPackSerializationException ex)
-            {
-                if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
-                {
-                    throw new ArgumentException("Invalid parameters", ex);
-                }
-                else
-                {
-                    throw;
-                }
-            }
-            catch
-            {
-                throw;
-            }
-            finally
-            {
-                if (buffer.IsEmpty) reader!.AdvanceTo(buffer.End);
-            }
-        }
-
-        public async ValueTask SendAsync(
-            int op,
-            CancellationToken token = default,
-            [CallerMemberName] string name = "")
-        {
-            await TryInitializeAsync(token);
-
-            ReadOnlySequence<byte> buffer = default;
-
-            try
-            {
-                MemoryPackSerializer.Serialize(writer!, op);
-
-                await writer!.FlushAsync(token);
-
-                switch (MemoryPackSerializer.Deserialize<ResponseStatus>((buffer = (await reader!.ReadAsync(token)).Buffer).Slice(0, 1)))
-                {
-                    case ResponseStatus.NotFound:
-
-                        throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
-
-                    case ResponseStatus.Failed:
-
-                        throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
-REASON:
-
-{MemoryPackSerializer.Deserialize<string>(buffer.Slice(1))}
-");
-                }
-            }
-            catch (MemoryPackSerializationException ex)
-            {
-                if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
-                {
-                    throw new ArgumentException("Invalid parameters", ex);
-                }
-                else
-                {
-                    throw;
-                }
-            }
-            catch
-            {
-                throw;
-            }
-            finally
-            {
-                if (buffer.IsEmpty) reader!.AdvanceTo(buffer.End);
-            }
-        }
-
-        public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-            (int op,
-             TIn payload,
-             [EnumeratorCancellation] CancellationToken token = default,
-             [CallerMemberName] string name = "")
-        {
-            await TryInitializeAsync(token);
-
-            try
-            {
-                await writer!.WriteAsync(
-                    BuildRequest(
-                        MemoryPackSerializer.Serialize(op),
-                        MemoryPackSerializer.Serialize(payload)),
-                    token);
-            }
-            catch (MemoryPackSerializationException ex)
-            {
-                if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
-                {
-                    throw new ArgumentException("Invalid parameters", ex);
-                }
-                else
-                {
-                    throw;
-                }
-            }
-
-            int chunkLength;
-            bool hasNext = false;
-
-            TOut? item;
-
-            while (await reader!.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { First: { } segment, IsEmpty: false, Start: { } position, End: { } end } buffer })
-            {
-                while (buffer.TryGet(ref position, out segment))
-                {
-                    int start = 0;
-
-                    while (start < segment.Length && (hasNext = (chunkLength = BitConverter.ToInt32(segment.Span.Slice(Interlocked.Exchange(ref start, start + 4), 4))) > -1))
-                    {
-                        try
+                        if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Deserialize[") is true && !buffer.IsEmpty)
                         {
-                            item = MemoryPackSerializer.Deserialize<TOut>(segment.Span.Slice(Interlocked.Exchange(ref start, start + chunkLength), chunkLength));
-                        }
-                        catch (MemoryPackSerializationException ex)
-                        {
-                            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Deserialize[") is true && !buffer.IsEmpty)
+                            try
                             {
-                                try
+                                switch (Deserialize<ResponseStatus>(buffer.Slice(0, 1)))
                                 {
-                                    switch (MemoryPackSerializer.Deserialize<ResponseStatus>(buffer.Slice(0, 1)))
-                                    {
-                                        case ResponseStatus.NotFound:
+                                    case ResponseStatus.NotFound:
 
-                                            throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
+                                        throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
 
-                                        case ResponseStatus.Failed:
+                                    case ResponseStatus.Failed:
 
-                                            throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
+                                        throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
 REASON:
 
-{MemoryPackSerializer.Deserialize<string>(buffer.Slice(1))}
+{Deserialize<string>(buffer.Slice(1))}
 ");
 
-                                        default:
+                                    default:
 
-                                            throw;
-                                    }
-                                }
-                                catch
-                                {
-                                    throw;
+                                        throw;
                                 }
                             }
-                            else
+                            catch
                             {
                                 throw;
                             }
                         }
-                        yield return item;
+                        else
+                        {
+                            throw;
+                        }
                     }
-
-                    if (hasNext)
-                    {
-                        reader.AdvanceTo(position);
-                    }
-                    else
-                    {
-                        reader.AdvanceTo(end);
-                        yield break;
-                    }
+                    yield return item;
                 }
 
-                reader.AdvanceTo(end);
-            }
-        }
-
-        public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-            (int op,
-             [EnumeratorCancellation] CancellationToken token = default,
-             [CallerMemberName] string name = "")
-        {
-            await TryInitializeAsync(token);
-
-            try
-            {
-                MemoryPackSerializer.Serialize(writer!, op);
-
-                await writer!.FlushAsync(token);
-            }
-            catch (MemoryPackSerializationException ex)
-            {
-                if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Serialize[") is true)
+                if (hasNext)
                 {
-                    throw new ArgumentException("Invalid parameters", ex);
+                    reader.AdvanceTo(position);
                 }
                 else
                 {
-                    throw;
+                    reader.AdvanceTo(end);
+                    yield break;
                 }
             }
 
-            int chunkLength;
-            bool hasNext = false;
-
-            TOut? item;
-
-            while (await reader!.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { First: { } segment, IsEmpty: false, Start: { } position, End: { } end } buffer })
-            {
-                while (buffer.TryGet(ref position, out segment))
-                {
-                    int start = 0;
-
-                    while (start < segment.Length && (hasNext = (chunkLength = BitConverter.ToInt32(segment.Span.Slice(Interlocked.Exchange(ref start, start + 4), 4))) > -1))
-                    {
-                        try
-                        {
-                            item = MemoryPackSerializer.Deserialize<TOut>(segment.Span.Slice(Interlocked.Exchange(ref start, start + chunkLength), chunkLength));
-                        }
-                        catch (MemoryPackSerializationException ex)
-                        {
-                            if (ex.StackTrace?.Contains("MemoryPack.MemoryPackSerializer.Deserialize[") is true && !buffer.IsEmpty)
-                            {
-                                try
-                                {
-                                    switch (MemoryPackSerializer.Deserialize<ResponseStatus>(buffer.Slice(0,1)))
-                                    {
-                                        case ResponseStatus.NotFound:
-
-                                            throw new NotImplementedException(@$"Implementation is missing from {connection!.Client.RemoteEndPoint}");
-
-                                        case ResponseStatus.Failed:
-
-                                            throw new InvalidOperationException(@$"Execution failed on {connection!.Client.RemoteEndPoint}:
-REASON:
-
-{MemoryPackSerializer.Deserialize<string>(buffer.Slice(1))}
-");
-
-                                        default:
-
-                                            throw;
-                                    }
-                                }
-                                catch
-                                {
-                                    throw;
-                                }
-                            }
-                            else
-                            {
-                                throw;
-                            }
-                        }
-                        yield return item;
-                    }
-
-                    if (hasNext)
-                    {
-                        reader.AdvanceTo(position);
-                    }
-                    else
-                    {
-                        reader.AdvanceTo(end);
-                        yield break;
-                    }
-                }
-
-                reader.AdvanceTo(end);
-            }
+            reader.AdvanceTo(end);
         }
+    }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static ReadOnlyMemory<byte> BuildRequest(Span<byte> op, Span<byte> payload)
-        {
-            Span<byte> result = stackalloc byte[op.Length + payload.Length];
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ReadOnlyMemory<byte> BuildRequest(Span<byte> op, Span<byte> payload)
+    {
+        Span<byte> result = stackalloc byte[8 + payload.Length];
 
-            op.CopyTo(result);
-            payload.CopyTo(result[4..]);
+        op.CopyTo(result);
+        payload.CopyTo(result[op.Length..]);
 
-            return new(result.ToArray());
-        }
-
-        public void Dispose()
-        {
-            DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
+        return new(result.ToArray());
     }
 }

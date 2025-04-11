@@ -6,6 +6,14 @@
 		<Nullable>enable</Nullable>
 		<Configurations>Debug;Release;DEBUG_SG</Configurations>
 		<LangVersion>latest</LangVersion>
+		<OutputType>Library</OutputType>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.Common" Version="4.10.0" />
+    <PackageReference Include="SourceCrafter.DependencyInjection.Interop" Version="1.25.101.51" />
+    <PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="1.25.101.51" />
+	  <None Include="Internals\*.cs" Pack="true" PackagePath="contentFiles/cs/netstandard2.0/SourceCrafter.DependencyInjection" buildAction="Compile" />
+  </ItemGroup>
 
 </Project>

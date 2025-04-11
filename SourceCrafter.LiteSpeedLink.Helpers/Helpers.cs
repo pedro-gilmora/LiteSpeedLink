@@ -1,7 +1,10 @@
 ﻿using System;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -23,9 +26,9 @@ namespace SourceCrafter.Helpers
                     SymbolDisplayMemberOptions.IncludeContainingType |
                     SymbolDisplayMemberOptions.IncludeConstantValue |
                     SymbolDisplayMemberOptions.IncludeRef,
-                globalNamespaceStyle: 
+                globalNamespaceStyle:
                     SymbolDisplayGlobalNamespaceStyle.Included,
-                typeQualificationStyle: 
+                typeQualificationStyle:
                     SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
                 genericsOptions:
                     SymbolDisplayGenericsOptions.IncludeTypeParameters |
@@ -33,7 +36,7 @@ namespace SourceCrafter.Helpers
                 miscellaneousOptions:
                     SymbolDisplayMiscellaneousOptions.UseSpecialTypes |
                     SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier,
-                parameterOptions: 
+                parameterOptions:
                     SymbolDisplayParameterOptions.IncludeType |
                     SymbolDisplayParameterOptions.IncludeModifiers |
                     SymbolDisplayParameterOptions.IncludeName |
@@ -49,11 +52,11 @@ namespace SourceCrafter.Helpers
                 miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes | SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
 
         internal static string ToGlobalNamespaced(this ISymbol t) => t.ToDisplayString(_globalizedNamespace);
-        
+
         internal static string ToGlobalNonGenericNamespace(this ISymbol t) => t.ToDisplayString(_globalizedNonGenericNamespace);
-       
+
         internal static string ToTypeNameFormat(this ITypeSymbol t) => t.ToDisplayString(_typeNameFormat);
-        
+
         internal static string ToNameOnly(this ISymbol t) => t.ToDisplayString(_symbolNameOnly);
 
         public static string ToMetadataLongName(this ISymbol t) => t
@@ -80,9 +83,9 @@ namespace SourceCrafter.Helpers
                 or SpecialType.System_UInt64
                 or SpecialType.System_String
             || target.Name is "DateTimeOffset" or "Guid"
-            || (target.SpecialType is SpecialType.System_Nullable_T 
-                && IsPrimitive(((INamedTypeSymbol)target).TypeArguments[0])); 
-        
+            || (target.SpecialType is SpecialType.System_Nullable_T
+                && IsPrimitive(((INamedTypeSymbol)target).TypeArguments[0]));
+
         internal static ITypeSymbol AsNonNullable(this ITypeSymbol type) =>
             type.Name == "Nullable"
                 ? ((INamedTypeSymbol)type).TypeArguments[0]
@@ -97,10 +100,10 @@ namespace SourceCrafter.Helpers
                                 : (type, false);
 
         internal static bool IsNullable(this ITypeSymbol typeSymbol)
-            => typeSymbol.SpecialType is SpecialType.System_Nullable_T 
-                || typeSymbol.NullableAnnotation == NullableAnnotation.Annotated 
+            => typeSymbol.SpecialType is SpecialType.System_Nullable_T
+                || typeSymbol.NullableAnnotation == NullableAnnotation.Annotated
                 || typeSymbol is INamedTypeSymbol { Name: "Nullable" };
-        
+
         internal static bool AllowsNull(this ITypeSymbol typeSymbol)
 #if DEBUG
             => typeSymbol.BaseType?.ToGlobalNonGenericNamespace() is not ("global::System.ValueType" or "global::System.ValueTuple");
@@ -159,30 +162,3 @@ namespace SourceCrafter.Helpers
 
 }
 
-
-namespace SourceCrafter.Bindings
-{
-    public static class CollectionExtensions<T>
-    {
-        public static Collection<T> EmptyCollection => [];
-        public static ReadOnlyCollection<T> EmptyReadOnlyCollection => new([]);
-    }
-}
-
-#if NETSTANDARD2_0 || NETSTANDARD2_1 || NETCOREAPP2_0 || NETCOREAPP2_1 || NETCOREAPP2_2 || NETCOREAPP3_0 || NETCOREAPP3_1 || NET45 || NET451 || NET452 || NET6 || NET461 || NET462 || NET47 || NET471 || NET472 || NET48
-
-
-// ReSharper disable once CheckNamespace
-namespace System.Runtime.CompilerServices
-{
-    /// <summary>
-    /// Reserved to be used by the compiler for tracking metadata.
-    /// This class should not be used by developers in source code.
-    /// </summary>
-    [EditorBrowsable(EditorBrowsableState.Never)]
-    internal static class IsExternalInit
-    {
-    }
-}
-
-#endif

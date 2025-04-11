@@ -10,18 +10,20 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink;
 
+public delegate ValueTask<FlushResult> RequestHandler(long id, RequestContext ctx, CancellationToken token);
+
 public static partial class Server
 {
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("macos")]
-    public static async ValueTask<QuicListener> StartQuicServerAsync<TServiceProvider>(
+    public static async ValueTask<QuicListener> StartQuicServerAsync(
         int port,
-        TServiceProvider provider,
-        Dictionary<int, RequestHandler<TServiceProvider>> handlers,
+        RequestHandler handlers, 
+        Action onFinalize,
         X509Certificate2 cert,
-        CancellationToken token = default) where TServiceProvider : IServiceProvider, IDisposable, IAsyncDisposable
+        CancellationToken token = default)
     {
         QuicServerConnectionOptions connectionOptions = new()
         {
@@ -52,32 +54,36 @@ public static partial class Server
 
         //Console.WriteLine("Server started...");
 
-        ListenConnections(provider, handlers, token);
+        ListenConnections(listener, handlers, onFinalize, token);
 
         return listener;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        async void ListenConnections(
-            TServiceProvider provider,
-            Dictionary<int, RequestHandler<TServiceProvider>> handlers,
+        static async void ListenConnections(
+            QuicListener listener,
+            RequestHandler handlers,
+            Action onFinalize,
             CancellationToken token)
         {
             //Console.WriteLine("Waiting clients...");
             try
             {
-            DO: HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), provider, handlers, token); goto DO;
+            DO: HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), handlers, token); goto DO;
             }
             catch
             {
                 return;
             }
+            finally 
+            {
+                onFinalize();
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        async void HandleConnectionAsync(
+        static async void HandleConnectionAsync(
             QuicConnection connection,
-            TServiceProvider provider,
-            Dictionary<int, RequestHandler<TServiceProvider>> handlers,
+            RequestHandler handlers,
             CancellationToken token)
         {
             //Console.WriteLine("Connected with client...");
@@ -85,7 +91,7 @@ public static partial class Server
             {
                 try
                 {
-                DO: await HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), provider, handlers, token); goto DO;
+                DO: await HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, token); goto DO;
                 }
                 catch
                 {
@@ -97,53 +103,44 @@ public static partial class Server
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static async ValueTask HandleStreamAsync(
             QuicStream stream,
-            TServiceProvider provider,
-            Dictionary<int, RequestHandler<TServiceProvider>> handlers,
+            RequestHandler handlers,
             CancellationToken token)
         {
             await using (stream)
             {
                 var reader = PipeReader.Create(stream);
-                var writer = PipeWriter.Create(stream);
+                PipeWriter? writer = null;
                 try
                 {
                     while (await reader.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { IsEmpty: false } buffer })
                     {
-                        await HandleRequestAsync(provider, handlers, buffer, writer, reader, token);
+                        await HandleRequestAsync(handlers, buffer, writer ??= PipeWriter.Create(stream), reader, token);
                     }
                 }
                 catch
                 {
                     reader.Complete();
-                    writer.Complete();
+                    writer?.Complete();
                 }
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static ValueTask<FlushResult> HandleRequestAsync(TServiceProvider provider, Dictionary<int, RequestHandler<TServiceProvider>> handlers, ReadOnlySequence<byte> buffer, PipeWriter writer, PipeReader reader, CancellationToken token)
+        static ValueTask<FlushResult> HandleRequestAsync(RequestHandler handlers, ReadOnlySequence<byte> buffer, PipeWriter writer, PipeReader reader, CancellationToken token)
         {
             try
             {
-                return handlers.TryGetValue(MemoryPackSerializer.Deserialize<int>(buffer.Slice(0, 4)), out var requestHandler)
-                    ? requestHandler(new(provider, buffer.Slice(4), writer), token)
-                    : NotFound(writer, token);
+                RequestContext requestContext = new(buffer.Slice(8), writer);
+                return handlers(Deserialize<long>(buffer.Slice(0, 8)), requestContext, token);
             }
             catch (Exception ex)
             {
-                return writer.WriteAsync(
-                    MemoryPackSerializer.Serialize(ex.ToString()), token);
+                return writer.WriteAsync(Serialize(ex.ToString()), token);
             }
             finally
             {
                 reader.AdvanceTo(buffer.End);
             }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static ValueTask<FlushResult> NotFound(PipeWriter writer, CancellationToken token)
-        {
-            return writer.WriteAsync(MemoryPackSerializer.Serialize(false), token);
         }
     }
 }

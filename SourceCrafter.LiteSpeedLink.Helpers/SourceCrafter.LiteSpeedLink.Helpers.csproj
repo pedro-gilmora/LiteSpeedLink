@@ -36,6 +36,8 @@
     </PackageReference>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.9.2" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Utils" Version="1.25.101.51" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Interop" Version="1.25.101.51" />
     <PackageReference Include="System.Memory" Version="4.5.5" />
   </ItemGroup>
 

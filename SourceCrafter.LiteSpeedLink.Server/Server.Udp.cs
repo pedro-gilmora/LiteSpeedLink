@@ -3,82 +3,72 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.IO.Pipelines;
+using System.Collections.Frozen;
 
 namespace SourceCrafter.LiteSpeedLink;
 
+public delegate ValueTask<int> UdpRequestHandler(long id, UdpRequestContext ctx, CancellationToken token);
 public static partial class Server
 {
-    public static UdpClient StartUdpServer<TServiceProvider>(
+    public static UdpClient StartUdpServer(
         int port,
-        TServiceProvider provider,
-        Dictionary<int, UdpRequestHandler<TServiceProvider>> requestHandlers,
-        CancellationToken token = default) where TServiceProvider : IServiceProvider, IDisposable, IAsyncDisposable
+        UdpRequestHandler requestHandlers,
+        Action onFinalize,
+        CancellationToken token = default)
     {
-
         var udpServer = new UdpClient(port);
 
-        //Console.WriteLine($"UDP Server listening on port {port}");
-
-        ListenAsync(udpServer, provider, requestHandlers, token);
+        ListenAsync(udpServer, requestHandlers, onFinalize, token);
 
         return udpServer;
 
-        static async void ListenAsync(UdpClient udpServer, TServiceProvider provider, Dictionary< int, UdpRequestHandler<TServiceProvider>> requestHandlers, CancellationToken token)
+        static async void ListenAsync(UdpClient udpServer, UdpRequestHandler requestHandlers, Action onFinalize, CancellationToken token)
         {
             try
             {
                 while (await udpServer.ReceiveAsync(token) is { RemoteEndPoint: { } answerTo, Buffer: { } buffer })
                 {
-                    HandleRequestAsync(udpServer, provider, requestHandlers, buffer, answerTo, token);
+                    await requestHandlers(BitConverter.ToInt64(buffer.AsSpan()[0..8]), new(udpServer, answerTo, buffer.AsMemory()[8..]), token);
                 }
             }
-            catch (Exception ex)
-                when (ex is SocketException { SocketErrorCode: SocketError.ConnectionAborted or SocketError.OperationAborted })
+            catch (Exception ex) when (ex is SocketException { SocketErrorCode: SocketError.ConnectionAborted or SocketError.OperationAborted })
             {
             }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static async void HandleRequestAsync(
-            UdpClient udpServer, 
-            TServiceProvider provider, 
-            Dictionary<int, UdpRequestHandler<TServiceProvider>> requestHandlers, 
-            byte[] buffer, IPEndPoint answerTo, CancellationToken token)
-        {
-            await (requestHandlers.TryGetValue(BitConverter.ToInt32(buffer.AsSpan()[0..4]), out var requestHandler)
-                ? requestHandler(new(udpServer, provider, answerTo, buffer.AsMemory()[4..]), token)
-                : udpServer.SendAsync(MemoryPackSerializer.Serialize(false), answerTo, token));
-
+            finally 
+            {
+                onFinalize();
+            }
         }
     }
 }
 
-public delegate ValueTask<int> UdpRequestHandler<TServiceProvider>(UdpRequestContext<TServiceProvider> _, CancellationToken _3) where TServiceProvider : IServiceProvider;
-
-public class UdpRequestContext<TServiceProvider>(
-    UdpClient client, 
-    TServiceProvider provider, 
-    IPEndPoint endpoint, 
-    ReadOnlyMemory<byte> bytes) where TServiceProvider : IServiceProvider
+public sealed class UdpRequestContext(UdpClient client, IPEndPoint endpoint, ReadOnlyMemory<byte> bytes)
 {
-    public TServiceProvider Provider { get; } = provider;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>()
+    public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(bytes.Span);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<int> ReturnAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(TOut? payload, CancellationToken token = default) => client.SendAsync(Serialize(payload), endpoint, token);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<int> EndStreamingAsync(CancellationToken token = default) => client.SendAsync(ReadOnlyMemory<byte>.Empty, endpoint, token);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public async ValueTask<int> EnumerateAsync<TData>(Func<IAsyncEnumerable<TData>> value, CancellationToken token = default)
     {
-        return MemoryPackSerializer.Deserialize<TOut>(bytes.Span);
+        await foreach (var item in value()) await ReturnAsync(item, token).ConfigureAwait(true);
+
+        return await EndStreamingAsync(token);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ValueTask<int> ReturnAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(TOut? payload, CancellationToken token = default)
+    public async ValueTask<int> EnumerateAsync<TData>(Func<IEnumerable<TData>> value, CancellationToken token = default)
     {
-        return client.SendAsync(MemoryPackSerializer.Serialize(payload), endpoint, token);
-    }
+        foreach (var item in value()) await ReturnAsync(item, token).ConfigureAwait(true);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ValueTask<int> EndStreamingAsync(CancellationToken token = default)
-    {
-        return client.SendAsync(ReadOnlyMemory<byte>.Empty, endpoint, token);
+        return await EndStreamingAsync(token);
     }
 }
 
