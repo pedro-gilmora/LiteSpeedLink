@@ -1,20 +1,17 @@
-﻿using MemoryPack;
-
-using System;
-using System.Buffers;
+﻿using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Security.Authentication;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink;
 
 public static partial class Server
 {
+
     public static TcpListener StartTcpServer(
         int port,
         RequestHandler handlers,
@@ -111,7 +108,6 @@ public static partial class Server
             try
             {
                 long id = BitConverter.ToInt64(requestBuffer.Slice(0, 8).FirstSpan);
-
 
                 await handlers(id, new RequestContext(requestBuffer.Slice(8), writer), token);
             }

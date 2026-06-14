@@ -1,16 +1,20 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
-  </PropertyGroup>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+		<Configurations>Debug;Release;Pack</Configurations>
+	</PropertyGroup>
 
-  <ItemGroup>
-		<PackageReference Include="MemoryPack" Version="1.21.3" />
-		<PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
+	<ItemGroup>
+		<PackageReference Include="MemoryPack" Version="1.21.4" />
 		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
+		<Compile Include="D:\Code\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\*.cs">
+			<Link>SharedMemory\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Compile>
 	</ItemGroup>
 
 </Project>

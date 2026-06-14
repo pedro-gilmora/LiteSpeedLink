@@ -1,6 +1,4 @@
-﻿using MemoryPack;
-
-using System.Buffers;
+﻿using System.Buffers;
 using System.IO.Pipelines;
 using System.Net.Quic;
 using System.Runtime.CompilerServices;
@@ -20,7 +18,7 @@ public static partial class Server
     [SupportedOSPlatform("macos")]
     public static async ValueTask<QuicListener> StartQuicServerAsync(
         int port,
-        RequestHandler handlers, 
+        RequestHandler handlers,
         Action onFinalize,
         X509Certificate2 cert,
         CancellationToken token = default)
@@ -74,7 +72,7 @@ public static partial class Server
             {
                 return;
             }
-            finally 
+            finally
             {
                 onFinalize();
             }
