@@ -2,6 +2,7 @@
 {
     public enum ServiceConnectionType
     {
+        Memory,
         Udp,
         Tcp,
         Quic

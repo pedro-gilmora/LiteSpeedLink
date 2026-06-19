@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Configurations>Debug;Release;DEBUG_SG</Configurations>
@@ -9,7 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MemoryPack" Version="1.21.3" />
+    <PackageReference Include="MemoryPack.Core" Version="1.21.4" />
+    <PackageReference Include="MemoryPack.Generator" Version="1.21.4" />
   </ItemGroup>
 
   <ItemGroup>

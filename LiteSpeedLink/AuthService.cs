@@ -10,6 +10,7 @@ public partial class AuthService() : IAuthService
 {
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
+        Console.WriteLine("Are credentials correct {0}", credentials is ("pedro", "test!123"));
         //authServiceLogger.Log(LogLevel.Information, "testing logging");
         if (credentials is ("pedro", "test!123"))
         {

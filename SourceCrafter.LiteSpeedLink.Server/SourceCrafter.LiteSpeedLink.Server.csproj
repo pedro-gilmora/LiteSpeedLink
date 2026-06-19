@@ -8,6 +8,8 @@
 		<LangVersion>latest</LangVersion>
 		<Configurations>Debug;Release;Pack;DEBUG_SG</Configurations>
 		<DefineConstants>SG_CONTEXT</DefineConstants>
+		<IsTrimmable>true</IsTrimmable>
+		<TrimMode>full</TrimMode>
 	</PropertyGroup>
 
 	<ItemGroup>

@@ -15,7 +15,7 @@ using System.Threading.Tasks.Dataflow;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace SourceCrafter.Communication.LiteSpeedLink.Tests;
+namespace LiteSpeedLink.Tests;
 
 public class ServersTest(ITestOutputHelper output)
 {
@@ -111,28 +111,28 @@ public class ServersTest(ITestOutputHelper output)
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
-    static async Task<byte[]?> HandleAsyncMemoryRequest(MemoryRequestContext ctx, CancellationToken token)
+    static async Task<byte[]?> HandleAsyncMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
     {
-        switch (ctx.ReadInt64())
+        switch (op)
         {
             case 0:
 
-                var (a, b, isOdd) = ctx.Read<(int, int, bool)>();
+                var (a, b, _) = ctx.Get<(int, int, bool)>();
 
                 return MemoryPackSerializer.Serialize(a + b);
 
             case 1:
 
-                string body = ctx.Read<string>()!;
+                string body = ctx.Get<string>()!;
 
                 return MemoryPackSerializer.Serialize(new string([.. body.Reverse()]));
 
             case 2:
 
-                await ctx.Yield(StreamInts(), token);
+                await ctx.Yield(StreamInts(token), token);
                 return null;
 
-                static IAsyncEnumerable<int> StreamInts()
+                static IAsyncEnumerable<int> StreamInts(CancellationToken token)
                 {
                     BufferBlock<int> buffer = new();
 
@@ -141,7 +141,7 @@ public class ServersTest(ITestOutputHelper output)
                         buffer.Post(i);
                     }
                     buffer.Complete();
-                    return buffer.ReceiveAllAsync();
+                    return buffer.ReceiveAllAsync(token);
                 }
 
             default: return null;
@@ -173,7 +173,7 @@ public class ServersTest(ITestOutputHelper output)
                 string payload = $"Hello from client {++i}";
                 var message = await connection.GetAsync<string, string>(1, payload);
 
-                message.Should().Be(new string(payload.Reverse().ToArray()));
+                message.Should().Be(new string([.. payload.Reverse()]));
             }
             else if (a < b)
             {
@@ -221,7 +221,7 @@ public class ServersTest(ITestOutputHelper output)
                 string payload = $"Hello from client {++i}";
                 var message = await connection.GetAsync<string, string>(1, payload);
 
-                message.Should().Be(new string(payload.Reverse().ToArray()));
+                message.Should().Be(new string([.. payload.Reverse()]));
             }
             else if (a < b)
             {
@@ -275,8 +275,7 @@ public class ServersTest(ITestOutputHelper output)
         switch (id)
         {
             case 0:
-
-                var (a, b, isOdd) = ctx.Get<(int, int, bool)>();
+                var (a, b, _) = ctx.Get<(int, int, bool)>();
 
                 return await ctx.ReturnAsync(a + b, token);
 
@@ -300,6 +299,7 @@ public class ServersTest(ITestOutputHelper output)
     }
 
     [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void RPC_SlaveStreaming()
     {
         var ipcName = Guid.CreateVersion7().ToString();
@@ -348,19 +348,19 @@ public class ServersTest(ITestOutputHelper output)
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
-    private static byte[] HandleMemoryRequest(MemoryRequestContext ctx, CancellationToken token)
+    private static byte[] HandleMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
     {
-        switch (ctx.ReadInt64())
+        switch (op)
         {
             case 0:
 
-                var (a, b, isOdd) = ctx.Read<(int, int, bool)>();
+                var (a, b, _) = ctx.Get<(int, int, bool)>();
 
                 return MemoryPackSerializer.Serialize(a + b);
 
             case 1:
 
-                string body = ctx.Read<string>()!;
+                string body = ctx.Get<string>()!;
 
                 return MemoryPackSerializer.Serialize(new string([.. body.Reverse()]));
 
@@ -407,7 +407,7 @@ public class ServersTest(ITestOutputHelper output)
                 string payload = $"Hello from client {++i}";
                 var message = await connection.GetAsync<string, string>(1, payload);
 
-                message.Should().Be(new string(payload.Reverse().ToArray()));
+                message.Should().Be(new string([.. payload.Reverse()]));
             }
             else if (a < b)
             {

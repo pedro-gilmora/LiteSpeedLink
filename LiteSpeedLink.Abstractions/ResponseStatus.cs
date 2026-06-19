@@ -2,7 +2,7 @@
 
 public enum ResponseStatus : byte
 {
-    NotFound,
     Success,
+    NotFound,
     Failed
 }

@@ -2,16 +2,37 @@
 using Application.Contracts;
 
 using SourceCrafter.LiteSpeedLink;
+using System.Diagnostics;
+using System.Runtime.Versioning;
 
-const int port = 5000;
+Console.WriteLine("Wait for debbuger...");
+Console.ReadLine();
 
-using var server = TextService.Start(port);
+var rpcName = $"Test{Guid.CreateVersion7()}";
 
-TextServiceClient client = new("localhost", port);
+using var server = TextService.Start(rpcName);
 
-Credentials creds = new("pedro", "test!123");
+TextServiceClient client = new (rpcName);
 
-if (await client.TryAuthenticateAsync(creds) is (true, { } token))
+Console.WriteLine("Hola!");
+var timestamp = Stopwatch.GetTimestamp();
+try
 {
-    Console.WriteLine(token);
+    //Debugger.Launch();
+    if (await client.TryAuthenticateAsync(new("pedro", "test!123")) is (true, var token))
+    {
+        Console.WriteLine(token);
+    }
+
 }
+catch (System.Exception ex)
+{
+    Console.WriteLine(ex.ToString());
+}
+finally
+{
+    Console.WriteLine($"Took: ${Stopwatch.GetElapsedTime(timestamp)}");
+}
+
+[SupportedOSPlatform("windows")]
+partial class Program;

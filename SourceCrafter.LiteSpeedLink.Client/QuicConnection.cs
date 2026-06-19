@@ -17,7 +17,7 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 [SupportedOSPlatform("linux")]
 [SupportedOSPlatform("macos")]
 
-public sealed class QuicConnection(QuicClientConnectionOptions options) : IConnection, IAsyncDisposable
+public sealed class QuicConnection(QuicClientConnectionOptions options) : IConnectionAsync, IAsyncDisposable
 {
     internal System.Net.Quic.QuicConnection? connection;
     internal QuicStream? stream;
@@ -36,12 +36,15 @@ public sealed class QuicConnection(QuicClientConnectionOptions options) : IConne
             await connection.DisposeAsync();
     }
 
+    [MemberNotNull(nameof(stream), nameof(reader), nameof(writer), nameof(connection))]
     internal async ValueTask TryInitializeAsync(CancellationToken token)
     {
-        if (stream is not null) return;
+#pragma warning disable CS8774 // El miembro debe tener un valor que no sea nulo al salir.
+        if (connection != null) return;
 
         stream = await (connection ??= await System.Net.Quic.QuicConnection.ConnectAsync(options, token))
             .OpenOutboundStreamAsync(QuicStreamType.Bidirectional, token);
+#pragma warning restore CS8774 // El miembro debe tener un valor que no sea nulo al salir.
 
         reader = PipeReader.Create(stream);
         writer = PipeWriter.Create(stream);
@@ -59,7 +62,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options) : IConne
 
         try
         {
-            await writer!.WriteAsync(
+            await writer.WriteAsync(
                    BuildRequest(
                        Serialize(op),
                        Serialize(payload)),
@@ -131,9 +134,9 @@ REASON:
 
         try
         {
-            Serialize(writer!, op);
+            Serialize(writer, op);
 
-            await writer!.FlushAsync(token);
+            await writer.FlushAsync(token);
 
             buffer = (await reader!.ReadAsync(token)).Buffer;
 
@@ -202,7 +205,7 @@ REASON:
 
         try
         {
-            await writer!.WriteAsync(
+            await writer.WriteAsync(
                 BuildRequest(
                     Serialize(op),
                     Serialize(payload)),
@@ -255,7 +258,7 @@ REASON:
 
         try
         {
-            Serialize(writer!, op);
+            Serialize(writer, op);
 
             await writer!.FlushAsync(token);
 
@@ -305,7 +308,7 @@ REASON:
 
         try
         {
-            await writer!.WriteAsync(
+            await writer.WriteAsync(
                 BuildRequest(
                     Serialize(op),
                     Serialize(payload)),
@@ -402,7 +405,7 @@ REASON:
 
         try
         {
-            Serialize(writer!, op);
+            Serialize(writer, op);
 
             await writer!.FlushAsync(token);
         }
@@ -445,7 +448,7 @@ REASON:
                                 {
                                     case ResponseStatus.NotFound:
 
-                                        throw new NotImplementedException(@$"Implementation is missing from {connection!.RemoteEndPoint}");
+                                        throw new NotImplementedException($"Implementation is missing from {connection!.RemoteEndPoint}");
 
                                     case ResponseStatus.Failed:
 
@@ -498,14 +501,5 @@ REASON:
         payload.CopyTo(result[8..]);
 
         return new(result.ToArray());
-    }
-
-    public void Dispose()
-    {
-        DisposeAsync()
-            .AsTask()
-            .ConfigureAwait(false)
-            .GetAwaiter()
-            .GetResult();
     }
 }

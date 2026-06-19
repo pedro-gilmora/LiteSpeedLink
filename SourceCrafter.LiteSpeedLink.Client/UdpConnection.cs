@@ -3,10 +3,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
-public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnection
+public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnectionAsync
 {
     internal UdpClient connection = null!;
 
@@ -74,12 +75,12 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnection
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static ReadOnlyMemory<byte> BuildRequest(Span<byte> op, Span<byte> payload)
     {
-        Span<byte> result = stackalloc byte[8 + payload.Length];
+        ArraySegment<byte> result = new(new byte[8 + payload.Length]);
 
         op.CopyTo(result);
         payload.CopyTo(result[op.Length..]);
 
-        return new(result.ToArray());
+        return result.AsMemory();
     }
 
 

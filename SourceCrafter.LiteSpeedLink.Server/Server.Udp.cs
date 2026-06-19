@@ -53,7 +53,7 @@ public sealed class UdpRequestContext(UdpClient client, IPEndPoint endpoint, Rea
     public ValueTask<int> EndStreamingAsync(CancellationToken token = default) => client.SendAsync(ReadOnlyMemory<byte>.Empty, endpoint, token);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async ValueTask<int> EnumerateAsync<TData>(Func<IAsyncEnumerable<TData>> value, CancellationToken token = default)
+    public async ValueTask<int> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value, CancellationToken token = default)
     {
         await foreach (var item in value()) await ReturnAsync(item, token).ConfigureAwait(true);
 
@@ -61,7 +61,7 @@ public sealed class UdpRequestContext(UdpClient client, IPEndPoint endpoint, Rea
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async ValueTask<int> EnumerateAsync<TData>(Func<IEnumerable<TData>> value, CancellationToken token = default)
+    public async ValueTask<int> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IEnumerable<TData>> value, CancellationToken token = default)
     {
         foreach (var item in value()) await ReturnAsync(item, token).ConfigureAwait(true);
 

@@ -1,0 +1,20 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="DEBUG_SG" />
+    <BuildType Name="Release" />
+  </Configurations>
+  <Folder Name="/DepedencyInjection/">
+    <Project Path="D:\Code\SourceCrafter.DependencyInjection\SourceCrafter.DependencyInjection.Metadata\SourceCrafter.DependencyInjection.Metadata.csproj" />
+    <Project Path="D:\Code\SourceCrafter.DependencyInjection\SourceCrafter.DependencyInjection.MsConfiguration.Metadata\SourceCrafter.DependencyInjection.MsConfiguration.Metadata.csproj" />
+    <Project Path="D:\Code\SourceCrafter.DependencyInjection\SourceCrafter.DependencyInjection.MsConfiguration\SourceCrafter.DependencyInjection.MsConfiguration.csproj" />
+    <Project Path="D:\Code\SourceCrafter.DependencyInjection\SourceCrafter.DependencyInjection\SourceCrafter.DependencyInjection.csproj" />
+  </Folder>
+  <Project Path="Application.Contracts/Application.Contracts.csproj" />
+  <Project Path="LiteSpeedLink.Abstractions/LiteSpeedLink.Abstractions.csproj" />
+  <Project Path="LiteSpeedLink.Tests/LiteSpeedLink.Tests.csproj" />
+  <Project Path="LiteSpeedLink/LiteSpeedLink.csproj" />
+  <Project Path="SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj" />
+  <Project Path="SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj" />
+  <Project Path="SourceCrafter.LiteSpeedLink.Helpers/SourceCrafter.LiteSpeedLink.Helpers.csproj" />
+</Solution>

@@ -1,6 +1,6 @@
 ﻿using Microsoft.CodeAnalysis;
+using SourceCrafter.LiteSpeedLink.Helpers;
 
-using SourceCrafter.Helpers;
 
 
 //using SourceCrafter.Helpers;
@@ -8,226 +8,323 @@ using SourceCrafter.Helpers;
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Text;
 
-namespace SourceCrafter.LiteSpeedLink
+
+public partial class ServiceHandlersGenerator
 {
-    public partial class ServiceHandlersGenerator
-    { 
-        const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
+    const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
 
-        private static void GenerateServiceClient(SourceProductionContext context, Compilation compilation, in (INamedTypeSymbol, int) serviceClientDesc)
-        {
-            var (serviceClient, connectionType) = serviceClientDesc;
+    private static void GenerateServiceClient(SourceProductionContext context, Compilation compilation, int compilationId, in (INamedTypeSymbol, int) serviceClientDesc, System.Threading.CancellationToken cancellationToken)
+    {
+        var (serviceClient, connectionType) = serviceClientDesc;
 
-            StringBuilder clientCode = new();
+        StringBuilder clientCode = new();
 
-            string nsStr = "";
+        string nsStr = "";
 
-            var (iDisposable, dispMethod) = connectionType is not 0
-                ? ("IAsyncDisposable", @"public global::System.Threading.Tasks.ValueTask DisposeAsync()
+        var (iDisposable, dispMethod) = connectionType is not 0
+            ? ("IAsyncDisposable", @"public global::System.Threading.Tasks.ValueTask DisposeAsync()
     {
         return __connection.DisposeAsync();
     }")
-    : ("IDisposable", @"public void Dispose()
+: ("IDisposable", @"public void Dispose()
     {
         __connection.Dispose();
     }");
-            var connTypeName = connectionType switch
-            {
-                0 => "Udp",
-                1 => "Tcp",
-                _ => "Quic"
-            };
+        var connTypeName = connectionType switch
+        {
+            0 => "Memory",
+            1 => "Udp",
+            2 => "Tcp",
+            _ => "Quic"
+        };
 
-            //[global::Jab.ServiceProvider]
-            clientCode.Append(@"using SourceCrafter.LiteSpeedLink.Client;
+        //[global::Jab.ServiceProvider]
+        clientCode.Append(@"using SourceCrafter.LiteSpeedLink.Client;
 ");
 
-            if(serviceClient.ContainingNamespace is { IsGlobalNamespace: false } nss)
-            {
-                clientCode.Append(@"
+        if (serviceClient.ContainingNamespace is { IsGlobalNamespace: false } nss)
+        {
+            clientCode.Append(@"
 namespace ").Append(nsStr = nss.ToDisplayString()).Append(@";
 ");
-            }
+        }
 
-            string typeShortName = serviceClient.ToTypeNameFormat();
+        string typeShortName = serviceClient.TypeNameFormat;
 
-            clientCode.Append(@"
+        clientCode.Append(@"
 public partial class ").Append(typeShortName).Append(@"
 {
-    private readonly global::SourceCrafter.LiteSpeedLink.Client.IConnection __connection;
+    private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
     private readonly static object _lock = new object();
 
-    public ").Append(typeShortName).Append(@"(string hostname, int port)
+    public ").Append(typeShortName).Append(connectionType > 0
+            // QUIC, TCP, UDP
+            ? @"(string hostname, int port)
     {
-        __connection = new global::System.Net.DnsEndPoint(hostname, port).As").Append(connTypeName).Append(@"Connection();
+        __connection = new global::System.Net.DnsEndPoint(hostname, port)"
+            // Memory
+            : @"(string rpcName)
+    {
+        __connection = rpcName").Append(".As");
+
+
+        clientCode.Append(connTypeName).Append(@"Connection();
     }");
 
-            string
-                typeName = serviceClient.ToGlobalNamespaced(),
-                nsMeta = serviceClient.ContainingNamespace.ToMetadataLongName(),
-                typeMeta = serviceClient.ToMetadataLongName(),
-                justTypeMeta = nsMeta.Length > 0 ? typeMeta.Replace(nsMeta, "") : typeMeta,
-                hintName = nsStr.Length > 0 ? nsStr + "." + justTypeMeta : justTypeMeta;
+        string
+            typeName = serviceClient.GlobalNamespaced,
+            nsMeta = serviceClient.ContainingNamespace.MetadataLongName,
+            typeMeta = serviceClient.MetadataLongName,
+            justTypeMeta = nsMeta.Length > 0 ? typeMeta.Replace(nsMeta, "") : typeMeta,
+            hintName = nsStr.Length > 0 ? nsStr + "." + justTypeMeta : justTypeMeta;
 
-            foreach (var iFace in
-                serviceClient.AllInterfaces.Where(i =>
-                     i.Interfaces.Any(ii => ii.ToGlobalNamespaced() == "global::SourceCrafter.LiteSpeedLink.IServiceUnit")).ToImmutableArray().AsSpan())
+        foreach (var iFace in
+            serviceClient.AllInterfaces.Where(i =>
+                 i.Interfaces.Any(ii => ii.GlobalNamespaced == "global::SourceCrafter.LiteSpeedLink.IServiceUnit")).ToImmutableArray().AsSpan())
+        {
+            var fullTypeName = iFace.GlobalNamespaced;
+
+            foreach (var member in iFace.GetMembers())
             {
-                var fullTypeName = iFace.ToGlobalNamespaced();
-
-                foreach (var member in iFace.GetMembers())
+                if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                 {
-                    if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
-                    {
-                        bool
-                            hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
-                            isTask = method.ReturnType.ToGlobalNonGenericNamespace().AsSpan() is ['g', 'l', 'o', 'b', 'a', 'l', ':', ':', 'S', 'y', 's', 't', 'e', 'm', '.', 'T', 'h', 'r', 'e', 'a', 'd', 'i', 'n', 'g', '.', 'T', 'a', 's', 'k', 's', '.', .., 'T', 'a', 's', 'k'],
-                            hasReturnType = !method.ReturnsVoid || (isTask && method.ReturnType is INamedTypeSymbol { TypeArguments.IsDefaultOrEmpty: true }),
-                            hasResultOrParams = hasReturnType || !hasEmptyParams,
-                            nameEndsWithTask = method.ReturnType.Name is [.., 'T', 'a', 's', 'k'],
-                            needsCancelToken = true,
-                            useReqTypesComma = false;
+                    bool
+                        hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
+                        isTask = method.ReturnType.TryGetAsyncType(out var returnType, out var hasReturnType, out var isValueTask),
+                        needsCancelToken = true,
+                        useReqTypesComma = false;
 
-                        var returnType = nameEndsWithTask && method.ReturnType is INamedTypeSymbol { TypeArguments: [{ } type] }
-                            ? type
-                            : method.ReturnType;
+                    hasReturnType = !method.ReturnsVoid || (isTask && hasReturnType);
 
-                        string
-                            methodName = method.ToNameOnly(),
-                            globalizedMethodName = method.ToGlobalNamespaced(),
-                            returnFullTypeName = returnType.ToGlobalNonGenericNamespace(),
-                            cancelTokenParam = null!,
-                            opMethod = hasReturnType
-                                ? returnType.ToGlobalNonGenericNamespace() switch
-                                {
-                                    "global::System.Collections.Generic.IAsyncEnumerable" => "Enumerate",
-                                    _ => "Get"
-                                }
-                                : "Send";
-
-                        Action?
-                            responseTypes = hasReturnType ? () => clientCode.Append(returnFullTypeName) : null,
-                            responseDeconstruct = hasReturnType ? () => clientCode.Append("@__response") : null,
-                            requestTypes = null,
-                            requestParams = null;
-
-                        Action? methodParams = null;
-
-                        int outCount = responseTypes != null ? 1 : 0, inCount = 0;
-
-                        //string methodSignature = method.ToMinimalDisplayString(model, 0).Replace(iFace.ToMinimalDisplayString(model, 0) + ".", "");
-
-                        bool paramsComma = false, asyncParamsComma = false;
-
-                        if (!hasEmptyParams)
-                        {
-                            foreach (var param in method.Parameters)
+                    string
+                        methodName = method.NameOnly,
+                        globalizedMethodName = method.GlobalNamespaced,
+                        returnFullTypeName = returnType.GlobalNonGenericNamespace,
+                        cancelTokenParam = null!,
+                        opMethod = hasReturnType
+                            ? returnType.GlobalNonGenericNamespace switch
                             {
-                                var paramType = param.Type.ToGlobalNamespaced();
-
-                                switch (param.RefKind)
-                                {
-                                    case RefKind.Ref or RefKind.RefReadOnly or RefKind.RefReadOnlyParameter:
-
-                                        methodParams += () =>
-                                        {
-                                            if (Exchange(ref paramsComma)) clientCode.Append(", ");
-
-                                            clientCode.Append(param.GetString());
-                                        };
-
-                                        inCount++;
-
-                                        outCount++;
-
-                                        responseDeconstruct += () =>
-                                            clientCode.Append(", ").Append(param.Name);
-
-                                        responseTypes += () =>
-                                            clientCode
-                                                .Append(", ")
-                                                .Append(paramType);
-
-                                        requestTypes += () => 
-                                            (Exchange(ref useReqTypesComma)
-                                               ? clientCode.Append(", ")
-                                               : clientCode)
-                                            .Append(param.Type.ToGlobalNamespaced());
-
-                                        requestParams += () => 
-                                            (Exchange(ref asyncParamsComma)
-                                               ? clientCode.Append(", ")
-                                               : clientCode).Append(param.Name);
-
-                                        continue;
-
-                                    case RefKind.Out:
-
-                                        outCount++;
-
-                                        responseDeconstruct += () =>
-                                            clientCode
-                                                .Append(", ")
-                                                .Append(param.Name);
-
-                                        responseTypes += () =>
-                                            clientCode
-                                                .Append(", ")
-                                                .Append(paramType);
-
-                                        continue;
-
-                                    default:
-
-                                        methodParams += () =>
-                                        {
-                                            if (Exchange(ref paramsComma)) clientCode.Append(", ");
-
-                                            clientCode.Append(param.GetString());
-                                        };
-
-                                        if (cancelTokenParam == null && paramType == cancelTokenFullTypeName)
-                                        {
-                                            cancelTokenParam = param.ToNameOnly();
-
-                                            needsCancelToken = false;
-
-                                            continue;
-                                        }
-
-                                        inCount++;
-
-                                        requestTypes += () =>
-                                            (Exchange(ref useReqTypesComma)
-                                               ? clientCode.Append(", ")
-                                               : clientCode)
-                                            .Append(param.Type.ToGlobalNamespaced());
-
-                                        requestParams += () =>
-                                            (Exchange(ref asyncParamsComma)
-                                               ? clientCode.Append(", ")
-                                               : clientCode).Append(param.Name);
-
-                                        break;
-                                };
+                                "global::System.Collections.Generic.IAsyncEnumerable" => "Enumerate",
+                                _ => "Get"
                             }
+                            : "Send";
+
+                    Action?
+                        responseTypes = hasReturnType ? () => clientCode.Append(returnFullTypeName) : null,
+                        responseDeconstruct = hasReturnType ? () => clientCode.Append("@__response") : null,
+                        requestTypes = null,
+                        requestParams = null;
+
+                    Action? methodParams = null;
+
+                    int outCount = responseTypes != null ? 1 : 0, inCount = 0;
+
+                    //string methodSignature = method.ToMinimalDisplayString(model, 0).Replace(iFace.ToMinimalDisplayString(model, 0) + ".", "");
+
+                    bool paramsComma = false, asyncParamsComma = false;
+
+                    if (!hasEmptyParams)
+                    {
+                        foreach (var param in method.Parameters)
+                        {
+                            var paramType = param.Type.GlobalNamespaced;
+
+                            switch (param.RefKind)
+                            {
+                                case RefKind.Ref or RefKind.RefReadOnly or RefKind.RefReadOnlyParameter:
+
+                                    methodParams += () =>
+                                    {
+                                        if (Exchange(ref paramsComma)) clientCode.Append(", ");
+
+                                        clientCode.Append(param.GetString());
+                                    };
+
+                                    inCount++;
+
+                                    outCount++;
+
+                                    responseDeconstruct += () =>
+                                        clientCode.Append(", ").Append(param.Name);
+
+                                    responseTypes += () =>
+                                        clientCode
+                                            .Append(", ")
+                                            .Append(paramType);
+
+                                    requestTypes += () =>
+                                        (Exchange(ref useReqTypesComma)
+                                           ? clientCode.Append(", ")
+                                           : clientCode)
+                                        .Append(param.Type.GlobalNamespaced);
+
+                                    requestParams += () =>
+                                        (Exchange(ref asyncParamsComma)
+                                           ? clientCode.Append(", ")
+                                           : clientCode).Append(param.Name);
+
+                                    continue;
+
+                                case RefKind.Out:
+
+                                    outCount++;
+
+                                    responseDeconstruct += () =>
+                                        clientCode
+                                            .Append(", ")
+                                            .Append(param.Name);
+
+                                    responseTypes += () =>
+                                        clientCode
+                                            .Append(", ")
+                                            .Append(paramType);
+
+                                    continue;
+
+                                default:
+
+                                    methodParams += () =>
+                                    {
+                                        if (Exchange(ref paramsComma)) clientCode.Append(", ");
+
+                                        clientCode.Append(param.GetString());
+                                    };
+
+                                    if (cancelTokenParam == null && paramType == cancelTokenFullTypeName)
+                                    {
+                                        cancelTokenParam = param.NameOnly;
+
+                                        needsCancelToken = false;
+
+                                        continue;
+                                    }
+
+                                    inCount++;
+
+                                    requestTypes += () =>
+                                        (Exchange(ref useReqTypesComma)
+                                           ? clientCode.Append(", ")
+                                           : clientCode)
+                                        .Append(param.Type.GlobalNamespaced);
+
+                                    requestParams += () =>
+                                        (Exchange(ref asyncParamsComma)
+                                           ? clientCode.Append(", ")
+                                           : clientCode).Append(param.Name);
+
+                                    break;
+                            }
+                            ;
+                        }
+                    }
+
+                    var serviceId = GetServiceId(globalizedMethodName);
+                    bool generatingSync = false;
+
+                    clientCode.Append(@"
+
+    public global::System.Threading.Tasks.").Append(!isTask || isValueTask ? "Value" : null).Append("Task");
+
+                    if (outCount > 0)
+                    {
+                        clientCode.Append("<");
+
+                        if (outCount > 1)
+                        {
+                            clientCode.Append("(");
+
+                            responseTypes!.Invoke();
+
+                            clientCode.Append(")");
+                        }
+                        else
+                        {
+                            responseTypes!.Invoke();
                         }
 
-                        var serviceId = GetServiceId(globalizedMethodName);
+                        clientCode.Append(">");
+                    }
 
-                        clientCode.Append(@"
+                    clientCode.AddSpace().Append(methodName);
 
-    public global::System.Threading.Tasks.ValueTask");
+                    if (!methodName.EndsWith("Async"))
+                    {
+                        clientCode.Append("Async");
+                    }
+
+                    clientCode.Append("(");
+
+                    methodParams?.Invoke();
+
+                    if (needsCancelToken)
+                    {
+                        cancelTokenParam = "@__token";
+                        needsCancelToken = false;
+
+                        if (Exchange(ref paramsComma)) clientCode.Append(", ");
+
+                        clientCode
+                            .Append(cancelTokenFullTypeName)
+                            .Append(" @__token = default");
+                    }
+
+            //        System.Console.WriteLine(@""Client sent call to: ").Append(globalizedMethodName).Append(@"
+            //ServiceId: ").Append(serviceId).Append(@""");
+
+                    clientCode.Append(@")
+    {        
+        ");
+
+                    clientCode
+                        .Append("return __connection.")
+                        .Append(opMethod);
+                    
+                    if(!generatingSync)
+                        clientCode.Append("Async");
+
+                    bool useComma = false, closeTag = false;
+
+                generateCall:
+                    if (inCount > 0)
+                    {
+                        useComma = true;
+                        closeTag = true;
+                        if (inCount > 1)
+                        {
+                            clientCode
+                                .Append("<(");
+
+                            requestTypes!.Invoke();
+
+                            clientCode
+                                .Append(")");
+                        }
+                        else
+                        {
+                            clientCode
+                                .Append("<");
+
+                            requestTypes!.Invoke();
+                        }
+                    }
+
+                    if (responseTypes != null)
+                    {
+                        closeTag |= true;
+
+                        if (useComma)
+                        {
+                            clientCode.Append(", ");
+                        }
 
                         if (outCount > 0)
                         {
-                            clientCode.Append("<");
-
                             if (outCount > 1)
                             {
                                 clientCode.Append("(");
@@ -240,221 +337,121 @@ public partial class ").Append(typeShortName).Append(@"
                             {
                                 responseTypes!.Invoke();
                             }
-
-                            clientCode.Append(">");
                         }
+                    }
 
-                        clientCode.AddSpace().Append(methodName);
-                        
-                        if(!methodName.EndsWith("Async"))
-                        {
-                            clientCode.Append("Async");
-                        }
-
-                        clientCode.Append("(");
-
-                        methodParams?.Invoke();
-
-                        if (needsCancelToken)
-                        {
-                            cancelTokenParam = "@__token";
-                            needsCancelToken = false;
-
-                            if (Exchange(ref paramsComma)) clientCode.Append(", ");
-
-                            clientCode
-                                .Append(cancelTokenFullTypeName)
-                                .Append(" @__token = default");
-                        }
-
-                        clientCode.Append(@")
-    {
-        ");
-
+                    if (closeTag)
+                    {
                         clientCode
-                            .Append("return __connection.")
-                            .Append(opMethod)
-                        .Append("Async");
+                            .Append(">");
+                    }
 
-                        bool useComma = false, closeTag = false;
+                    clientCode
+                        .Append("(")
+                        .Append(serviceId)
+                        .Append(", ");
 
-                        if (inCount > 0)
+                    if (inCount > 0)
+                    {
+                        if (inCount == 1)
                         {
-                            useComma = true;
-                            closeTag = true;
-                            if (inCount > 1)
-                            {
-                                clientCode
-                                    .Append("<(");
-
-                                requestTypes!.Invoke();
-
-                                clientCode
-                                    .Append(")");
-                            }
-                            else
-                            {
-                                clientCode
-                                    .Append("<");
-
-                                requestTypes!.Invoke();
-                            }
+                            requestParams?.Invoke();
                         }
-
-                        if(responseTypes != null)
+                        else
                         {
-                            closeTag |= true;
+                            clientCode.Append("(");
 
-                            if (useComma)
-                            {
-                                clientCode.Append(", ");
-                            }
+                            requestParams?.Invoke();
 
-                            if (outCount > 0)
-                            {
-                                if (outCount > 1)
-                                {
-                                    clientCode.Append("(");
-
-                                    responseTypes!.Invoke();
-
-                                    clientCode.Append(")");
-                                }
-                                else
-                                {
-                                    responseTypes!.Invoke();
-                                }
-                            }
+                            clientCode.Append(")");
                         }
+                    }
 
-                        if (closeTag)
-                        {
-                            clientCode
-                                .Append(">");
-                        }
+                   if(!generatingSync) clientCode.Append(", ").Append(cancelTokenParam);
+                    
+                    clientCode.Append(@");");
 
-                        clientCode
-                            .Append("(")
-                            .Append(serviceId)
-                            .Append(", ");
-
-                        if (inCount > 0)
-                        {
-                            if (inCount == 1)
-                            {
-                                requestParams?.Invoke();
-
-                                clientCode.Append(", ");
-                            }
-                            else
-                            {
-                                clientCode.Append("(");
-
-                                requestParams?.Invoke();
-
-                                clientCode.Append("), ");
-                            }
-                        }
-
-                        clientCode
-                            .Append(cancelTokenParam)
-                            .Append(@");
-    }");
-
-                        if (!isTask)
-                        {
-                            paramsComma = asyncParamsComma = useReqTypesComma = false;
-                            
-                            clientCode.Append(@"
-
-    ");
-
-                            clientCode
-                                .Append(method.ToGlobalNamespaced())
-                                .Append(@"
-    {
-        ");
-
-                            if (outCount > 1) 
-                            {
-                                if (hasReturnType)
-                                {
-                                    clientCode.Append(returnFullTypeName).Append(@" @__response;
-
-        (");
-
-                                    responseDeconstruct!.Invoke();
-
-                                    clientCode.Append(@") = ");
-                                }
-                                else
-                                {
-                                    clientCode.Append(@"(");
-
-                                    responseDeconstruct!.Invoke();
-
-                                    clientCode.Append(@") = ");
-                                }
-                            }
-                            else if(outCount == 1)
-                            {
-                                if (hasReturnType)
-                                {
-                                    clientCode.Append("return ");
-                                }
-                                else
-                                {
-                                    responseDeconstruct!.Invoke();
-
-                                    clientCode.Append(" = ");
-                                }
-                            }
-
-                            clientCode.Append(methodName);
-
-                            if (!methodName.EndsWith("Async"))
-                            {
-                                clientCode.Append("Async");
-                            }
-
-                            clientCode
-                                .Append("(");
-
-                            if (inCount > 0)
-                            {
-                                requestParams?.Invoke();
-                            }
-
-                            clientCode
-                                .Append(@").GetAwaiter().GetResult();");
-
-                            if(hasReturnType && outCount > 1)
-                            {
-                                clientCode.Append(@"
+                    if (generatingSync && hasReturnType && outCount > 1)
+                    {
+                        clientCode.Append(@"
 
         return @__response;
     }");
+                    }
+                    else
+                    {
+                        clientCode.Append(@"
+    }");
+                    }
+
+                    if (!isTask && !generatingSync)
+                    {
+                        paramsComma = asyncParamsComma = useReqTypesComma = false;
+
+                        clientCode.Append(@"
+
+    ");
+
+                        clientCode
+                            .Append(method.GlobalNamespaced)
+                            .Append(@"
+    {
+        ");
+
+                        if (outCount > 1)
+                        {
+                            if (hasReturnType)
+                            {
+                                clientCode.Append(returnFullTypeName).Append(@" @__response;
+
+        (");
+
+                                responseDeconstruct!.Invoke();
+
+                                clientCode.Append(@") = ");
                             }
                             else
                             {
-                                clientCode.Append(@"
-    }");
+                                clientCode.Append(@"(");
+
+                                responseDeconstruct!.Invoke();
+
+                                clientCode.Append(@") = ");
                             }
                         }
+                        else if (outCount == 1)
+                        {
+                            if (hasReturnType)
+                            {
+                                clientCode.Append("return ");
+                            }
+                            else
+                            {
+                                responseDeconstruct!.Invoke();
+
+                                clientCode.Append(" = ");
+                            }
+                        }
+
+                        clientCode.Append("__connection.").Append(opMethod);
+
+                        generatingSync = true;
+                        useComma = closeTag = paramsComma = useReqTypesComma = asyncParamsComma = false;
+                        goto generateCall;
                     }
                 }
-
             }
 
-            clientCode.Append(@"
+        }
+
+        clientCode.Append(@"
 }");
 
-            context.AddSource(hintName + ".client.cs", clientCode.ToString());
-        }
-        static bool Exchange(ref bool value)
-        {
-            return ((value, _) = (true, value)).Item2;
-        }
+        context.AddSource(hintName + ".client.cs", clientCode.ToString());
+    }
+    static bool Exchange(ref bool value)
+    {
+        return ((value, _) = (true, value)).Item2;
     }
 }
 

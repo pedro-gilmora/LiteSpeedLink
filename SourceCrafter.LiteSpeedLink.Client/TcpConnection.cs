@@ -11,7 +11,7 @@ using System.Buffers;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
-public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default) : IConnection, IAsyncDisposable
+public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default) : IConnectionAsync, IAsyncDisposable
 {
     internal TcpClient? connection;
     internal Stream? stream;

@@ -153,7 +153,7 @@ public sealed class RequestContext(ReadOnlySequence<byte> bytes, PipeWriter writ
     public ValueTask<FlushResult> EndStreamingAsync(CancellationToken token) => writer.WriteAsync(streammingEnd, token);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async ValueTask<FlushResult> EnumerateAsync<TData>(Func<IAsyncEnumerable<TData>> value, CancellationToken token = default)
+    public async ValueTask<FlushResult> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value, CancellationToken token = default)
     {
         await foreach (var item in value()) await YieldAsync(item, token).ConfigureAwait(true);
 
@@ -161,7 +161,7 @@ public sealed class RequestContext(ReadOnlySequence<byte> bytes, PipeWriter writ
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async ValueTask<FlushResult> EnumerateAsync<TData>(Func<IEnumerable<TData>> value, CancellationToken token = default)
+    public async ValueTask<FlushResult> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IEnumerable<TData>> value, CancellationToken token = default)
     {
         foreach (var item in value()) await YieldAsync(item, token).ConfigureAwait(true);
 
