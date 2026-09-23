@@ -38,8 +38,12 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        Console.WriteLine($"Sent: {payload}");
-        if (MemoryRpc.RemoteRequest(SerializePayload(op, payload), _timeout, token) is { Success: true, Data: { Length: > 0 } responseData })
+        Console.WriteLine($"Sent {op}: {payload}");
+        var response = MemoryRpc.RemoteRequest(SerializePayload(op, payload), _timeout, token);
+
+        Console.WriteLine($"Received {response.Success}: {response.Data?.Length} bytes");
+
+        if (response is { Success: true, Data: { Length: > 0 } responseData })
         {
             TOut? @out = Deserialize<TOut>(responseData);
             Console.WriteLine($"Response: {@out}");

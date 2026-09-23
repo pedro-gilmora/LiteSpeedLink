@@ -1,33 +1,31 @@
 ﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using SourceCrafter.DependencyInjection;
-using SourceCrafter.DependencyInjection.Constants;
+using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
-//using SourceCrafter.Helpers;
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Globalization;
 using System.Linq;
-using System.Reflection;
-using System.Reflection.Metadata;
-using System.Runtime.InteropServices.ComTypes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using System.Xml.Linq;
 
 public partial class ServiceHandlersGenerator
 {
     private const string IServiceUnit = "global::SourceCrafter.LiteSpeedLink.IServiceUnit";
 
-    private static void GenerateServiceHost(SourceProductionContext sourceGenCtx, Compilation compilation, int compilationId, in (INamedTypeSymbol, int) serviceHostDesc, CancellationToken cancelToken)
+    private static void GenerateServiceHost(
+        ServiceProviderInfo container,
+        PartialContribution contribution,
+        int connectionType,
+        CancellationToken cancelToken)
     {
-        var identity = compilation.Assembly.Identity;
-        var (serviceHost, connectionType) = serviceHostDesc;
+        var compilation = container.Compilation;
+        var serviceHost = container.ContainerType;
+        var model = container.SemanticModel;
 
-        var model = compilation.GetSemanticModel(serviceHost.DeclaringSyntaxReferences[0].SyntaxTree);
         bool
             isMsLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILogger") != null,
             isMsConsoleLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ConsoleLoggerExtensions") != null;
@@ -147,7 +145,7 @@ public partial class ").Append(typeName).Append(@"
         bool isMemoryAsync = false;
 
         if (connectionType > 0)
-            hostCode.Append("async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append(">");
+            hostCode.Append("async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
         else
         {
             handlerResultType = hostCode.Length;
@@ -172,11 +170,13 @@ public partial class ").Append(typeName).Append(@"
 
         //string? serviceCommaSep = default;
 
-        Disposability? containerDisposability = default;
+        // La disposability efectiva del contenedor la calcula el generador de DI: aqui ya no
+        // se deduce servicio a servicio.
+        var containerDisposability = container.ContainerDisposability;
 
-        var services = compilation.GetServices(serviceHost, out var containerAsyncType);
+        var services = IndexServices(container);
 
-        foreach (var dependency in services.Values)
+        foreach (var dependency in container.Services)
         {
             //     var attrCls = attr.AttributeClass!;
 
@@ -203,12 +203,15 @@ public partial class ").Append(typeName).Append(@"
             // "); 
             //         continue; }
 
-            if (!isMemoryAsync && (dependency.IsAsync || dependency.Disposability is Disposability.AsyncDisposable)) isMemoryAsync = true;
+            var dependencyIsAsync = dependency.AsyncKind is not PartialAsyncKind.None;
 
-            containerDisposability ??= dependency.ContainerDisposability;
+            if (!isMemoryAsync && (dependencyIsAsync || dependency.Disposability is PartialDisposability.AsyncDisposable)) isMemoryAsync = true;
 
+            // El tipo expuesto ya viene resuelto en la propia fila: no hace falta el mapa
+            // lateral que antes evitaba retener ISymbol.
+            if (dependency.ExportType is not { } exportType) continue;
 
-            foreach (var member in dependency.ExportType.GetMembers())
+            foreach (var member in exportType.GetMembers())
             {
                 if (!(member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method))
                 {
@@ -220,8 +223,8 @@ public partial class ").Append(typeName).Append(@"
                     globalizedMethodName = method.GlobalNamespaced;
 
                 bool isMethodAsync = (method.ReturnType.Name.EndsWith("Task")
-                        && method.ReturnType.ToString().StartsWith("System.Threading.Tasks"))
-                        || dependency.Lifetime is Lifetime.Scoped;
+                        && method.ReturnType.ToDisplayString().StartsWith("System.Threading.Tasks"))
+                        || dependency.Lifetime is PartialLifetime.Scoped;
 
                 var (_async, _await) = isMethodAsync
                         ? ("async ", "await ")
@@ -239,17 +242,18 @@ public partial class ").Append(typeName).Append(@"
 
                 hostCode.Append(@"
         case ").Append(serviceId).Append(@": //Id for: [").Append(globalizedMethodName).Append(@"]
+        {
             ");
 
                 var provider = "";
 
-                if (dependency.Lifetime is Lifetime.Scoped)
+                if (dependency.Lifetime is PartialLifetime.Scoped)
                 {
-                    if (dependency.ContainerDisposability is Disposability.AsyncDisposable)
+                    if (containerDisposability is PartialDisposability.AsyncDisposable)
                     {
                         hostCode.Append("await using ");
                     }
-                    else if (dependency.ContainerDisposability is Disposability.Disposable)
+                    else if (containerDisposability is PartialDisposability.Disposable)
                     {
                         hostCode.Append("using ");
                     }
@@ -301,40 +305,19 @@ public partial class ").Append(typeName).Append(@"
 
                         foreach (var paramAttr in param.GetAttributes())
                         {
-                            var pAttrCls = paramAttr.AttributeClass!;
-
-                            if (!IsValidServiceAttribute(
-                                model,
-                                paramAttr,
-                                param,
-                                out var pExportTypeKey,
-                                out var pLifetime,
-                                out var nameKey,
-                                out var pIsValid) || !pIsValid)
-
+                            // El lifetime y la clave se leen del atributo; el resto -nombre del
+                            // miembro, forma, asincronia- lo pone la tabla que ya resolvio el
+                            // generador de DI, que es la unica autoridad sobre esos nombres.
+                            if (!TryResolveAnnotatedParameter(services, paramAttr, param, out var paramDependency))
                                 continue; //check next attribute
 
-                            var pDKey = ((byte)pLifetime, pExportTypeKey, nameKey);
-
-                            if (!services.TryGetValue(pDKey, out var paramDependency))
-                                goto NEXT_PARAM;
-
-                            if (!isMemoryAsync && paramDependency.IsAsync) isMemoryAsync = true;
+                            if (!isMemoryAsync && paramDependency.AsyncKind is not PartialAsyncKind.None) isMemoryAsync = true;
 
                             invokeParams += () =>
                                 {
                                     if (Exchange(ref separateParams)) hostCode.Append(", ");
 
-                                    hostCode.Append(dependency.ResolverMember);
-
-                                    hostCode.Append("(");
-
-                                    if (paramAttr.ConstructorArguments is [{ Value: string name }])
-                                    {
-                                        hostCode.Append(@"""").Append(name).Append(@"""");
-                                    }
-
-                                    hostCode.Append(")");
+                                    AppendResolution(hostCode, paramDependency);
                                 };
 
                             goto NEXT_PARAM;
@@ -448,7 +431,7 @@ public partial class ").Append(typeName).Append(@"
 
                         if (requestParamsCount > 1)
                         {
-                            hostCode.Append("(");
+                            hostCode.Append('(');
 
                             requestDeconstruct!.Invoke();
 
@@ -481,19 +464,17 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append(@"var ___result = ");
                 }
 
-                bool shouldParenthizeExpression = dependency.IsAsync || (dependency.Lifetime is Lifetime.Transient && !dependency.IsCached);
+                bool shouldParenthizeExpression = dependencyIsAsync;
 
-                if (dependency.IsAsync) hostCode.Append(_await);
+                if (dependencyIsAsync) hostCode.Append(_await);
 
                 if (shouldParenthizeExpression) hostCode.Append('(');
 
-                if (dependency.IsAsync) hostCode.Append(_await);
-
-                hostCode.Append(provider).Append(dependency.ResolverMember);
+                AppendResolution(hostCode, dependency, provider);
 
                 if (shouldParenthizeExpression) hostCode.Append(')');
 
-                hostCode.Append(".").Append(methodName).Append('(');
+                hostCode.Append('.').Append(methodName).Append('(');
 
                 invokeParams?.Invoke();
 
@@ -520,6 +501,7 @@ public partial class ").Append(typeName).Append(@"
                 if (connectionType > 0) hostCode.Append(", __token");
 
                 hostCode.Append(@");
+        }
 ");
             }
         }
@@ -539,12 +521,65 @@ public partial class ").Append(typeName).Append(@"
 
         hostCode.Insert(onFinalizePoint, containerDisposability switch
         {
-            Disposability.AsyncDisposable => "() => provider.DisposeAsync().GetAwaiter().GetResult()",
-            Disposability.Disposable => "() => provider.Dispose()",
+            PartialDisposability.AsyncDisposable => "() => provider.DisposeAsync().GetAwaiter().GetResult()",
+            PartialDisposability.Disposable => "() => provider.Dispose()",
             _ => "() => {}"
         });
 
-        sourceGenCtx.AddSource(hintName + ".host.cs", hostCode.ToString());
+        contribution.AddSource(hintName + ".host", hostCode.ToString());
+    }
+
+    /// <summary>
+    /// Emite la lectura de un servicio a traves del miembro que el generador de DI le asigno.
+    ///
+    /// <para>
+    /// El contenedor decide por su cuenta si el resolver sale como propiedad o como metodo, asi
+    /// que los parentesis se ponen segun <c>MemberIsMethodShaped</c> y no por el lifetime: un
+    /// transient sincrono es una propiedad, y escribirle <c>()</c> no compilaba.
+    /// </para>
+    /// </summary>
+    private static void AppendResolution(StringBuilder code, ServiceInfo service, string provider = "")
+    {
+        code.Append(provider).Append(service.MemberName);
+
+        if (service.MemberIsMethodShaped) code.Append("()");
+    }
+
+    /// <summary>
+    /// Empareja un parametro anotado con su registro, leyendo del atributo solo el lifetime y la
+    /// clave. Todo lo demas lo aporta la tabla ya resuelta por el generador de DI.
+    /// </summary>
+    private static bool TryResolveAnnotatedParameter(
+        Dictionary<(PartialLifetime, string, string), ServiceInfo> services,
+        AttributeData paramAttr,
+        IParameterSymbol param,
+        out ServiceInfo service)
+    {
+        service = null!;
+
+        if (paramAttr.AttributeClass?.ToDisplayString() is not { } attrName) return false;
+
+        var lifetime = attrName switch
+        {
+            "SourceCrafter.DependencyInjection.Attributes.SingletonAttribute" => PartialLifetime.Singleton,
+            "SourceCrafter.DependencyInjection.Attributes.ScopedAttribute" => PartialLifetime.Scoped,
+            "SourceCrafter.DependencyInjection.Attributes.TransientAttribute" => PartialLifetime.Transient,
+            _ => (PartialLifetime?)null
+        };
+
+        if (lifetime is not { } resolvedLifetime) return false;
+
+        var key = paramAttr.ConstructorArguments is [{ Value: string declaredKey }, ..]
+            ? declaredKey
+            : "";
+
+        var exportTypeFullName = param.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+        // Un parametro sin clave explicita puede estar desambiguado por su propio nombre, que es
+        // la misma regla que aplica el generador de DI (SCDI17).
+        return services.TryGetValue((resolvedLifetime, exportTypeFullName, key), out service!)
+            || (key.Length is 0
+                && services.TryGetValue((resolvedLifetime, exportTypeFullName, param.Name), out service!));
     }
 
     public static long GetServiceId(string input)
@@ -572,370 +607,4 @@ public partial class ").Append(typeName).Append(@"
             DependencyAttr = $"{GlobalBaseAttributeNS}.DependencyAttribute",
             ServiceContainerAttr = $"global::{ServiceContainerFullTypeName}";
 
-    private static readonly int EmptyStringHashCode = "".GetHashCode();
-
-    static bool IsValidServiceAttribute(
-        SemanticModel model,
-        AttributeData? attr,
-        IParameterSymbol? sourceSymbol,
-        out int exportTypeKey,
-        out Lifetime lifetime,
-        //out AttributeSyntax attrSyntax,
-        out int nameKey,
-        //out int keyHashCode
-        //out string nameOrFormat,
-        //out ISymbol factory,
-        //out SymbolKind factoryKind,
-        //out bool isFactory,
-        //out bool isStaticFactory,
-        //out object asyncType,
-        //out object initialAsyncType,
-        //out Disposability disposability,
-        //out ITypeSymbol exportType,
-        //out bool hasScopedDependencies,
-        //out bool isCached,
-        //out ImmutableArray<IParameterSymbol> prms,
-        //out (Lifetime lifeTime, int typeHashCode, int keyHashCode) key,
-        out bool isValid//,
-                        //out object typeHashCode,
-                        //out ImmutableArray<IParameterSymbol> defaultParamValues,
-                        //out INamedTypeSymbol attrClass,
-                        //out bool isExternal
-        )
-    {
-        exportTypeKey = 0;
-        ITypeSymbol type = null!, interfaceType = null!, exportType = null!;
-        isValid = false;
-        var name = "";
-        nameKey = EmptyStringHashCode;
-        lifetime = default;
-        //isCached = false;
-        //key = default;
-        //typeHashCode = null!;
-        interfaceType = type = null!;
-        //isExternal = false;
-        //name = null!;
-        //nameOrFormat = null!;
-        //factoryKind = default;
-        //isFactory = false;
-        //isStaticFactory = false;
-        //asyncType = null!;
-        //initialAsyncType = null!;
-        //disposability = default;
-        //prms = default;
-        //defaultParamValues = default;
-
-        bool isExternal = false;
-        if (attr is not { AttributeClass: { } _attrClass, ApplicationSyntaxReference: { } attrSyntaxRef }
-            || _attrClass.GlobalNamespaced is ServiceContainerAttr
-            || attrSyntaxRef.GetSyntax() is not AttributeSyntax { } _attrSyntax
-            || !TryGetAttributeParamsDefinition(model.GetSymbolInfo(_attrSyntax), out ImmutableArray<IParameterSymbol> attrParams)
-            || !TryGetLifetime(_attrSyntax, ref _attrClass, ref isExternal, out lifetime))
-        {
-            type = null!;
-            interfaceType = null!;
-            //lifetime = default;
-            //attrSyntax = null!;
-            //name = null!;
-            //keyHashCode = 0;
-            //nameOrFormat = null!;
-            //sourceSymbol = null!;
-            //factory = null!;
-            //factoryKind = default;
-            //isFactory = false;
-            //isStaticFactory = false;
-            //asyncType = null!;
-            //initialAsyncType = null!;
-            //disposability = default;
-            //exportType = null!;
-            //isValid = false;
-            //hasScopedDependencies = false;
-            //isCached = false;
-            //prms = default;
-            //typeHashCode = null!;
-            //defaultParamValues = default;
-            return false;
-        }
-
-        //attrSyntax = _attrSyntax;
-        //attrClass = _attrClass;
-        //exportType = default!;
-        //hasScopedDependencies = default;
-        //keyHashCode = default;
-        //factory = default!;
-
-        if (attr.AttributeClass!.TypeArguments.Length > 0 is { } isGeneric)
-        {
-            switch (_attrClass!.TypeArguments)
-            {
-                case [{ } t1, { } t2, ..]:
-
-                    interfaceType = t1;
-                    type = t2;
-
-                    break;
-
-                case [{ } t1]:
-
-                    type = t1;
-
-                    break;
-            }
-        }
-        nameKey = EmptyStringHashCode;
-        string nameOrFormat;
-
-        foreach (var (param, arg) in GetAttrParamsMap(attrParams, _attrSyntax.ArgumentList?.Arguments ?? []))
-        {
-            switch (param.Name)
-            {
-                case ImplParamName when !isGeneric && arg is { Expression: TypeOfExpressionSyntax { Type: { } _type } }:
-
-                    type = (ITypeSymbol)model!.GetSymbolInfo(_type).Symbol!;
-
-                    continue;
-
-                case IfaceParamName when sourceSymbol is IParameterSymbol { Type.TypeKind: not TypeKind.Interface } && !isGeneric && arg is { Expression: TypeOfExpressionSyntax { Type: { } _type } }:
-
-                    interfaceType = (ITypeSymbol)model!.GetSymbolInfo(_type).Symbol!;
-
-                    continue;
-
-                case KeyParamName when GetStringExpressionOrValue(model, param!, arg, out var keyValue):
-
-                    nameKey = (name = keyValue).GetHashCode();
-
-                    continue;
-
-                case NameFormatParamName when GetStringExpressionOrValue(model, param, arg, out var keyValue):
-
-                    nameOrFormat = keyValue;
-
-                    continue;
-
-                case SourceParamName
-
-                    when arg?.Expression is InvocationExpressionSyntax
-                    {
-                        Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
-                        ArgumentList.Arguments: [{ } methodRef]
-                    }:
-
-                    switch (model.GetSymbolInfo(methodRef.Expression))
-                    {
-                        case { Symbol: (IFieldSymbol or IPropertySymbol) and { Kind: var kind, IsStatic: var isStatic } fieldOrProp }:
-
-                            //factory = fieldOrProp;
-                            //factoryKind = kind;
-                            //isFactory = true;
-                            //isStaticFactory = isStatic;
-                            //initialAsyncType = 
-                            //asyncType =
-                            ((fieldOrProp as IFieldSymbol)?.Type ?? ((IPropertySymbol)fieldOrProp).Type).TryGetAsyncType(out var returnType, out _, out _);
-
-                            if (returnType.TypeKind is TypeKind.Interface || returnType.IsAbstract)
-                                interfaceType ??= returnType;
-                            else
-                                type ??= returnType;
-
-
-                            continue;
-
-                        case { CandidateReason: CandidateReason.MemberGroup, CandidateSymbols: [IMethodSymbol { ReturnsVoid: false, IsStatic: var isStatic } method] }:
-
-                            //factory = method;
-                            //isStaticFactory = isStatic;
-                            //factoryKind = SymbolKind.Method;
-                            //defaultParamValues = method.Parameters;
-                            //initialAsyncType = asyncType =
-                            method.ReturnType.TryGetAsyncType(out returnType, out _, out _);
-                            //isFactory = true;
-
-                            if (returnType.TypeKind is TypeKind.Interface || returnType.IsAbstract)
-                                interfaceType ??= returnType;
-                            else
-                                type ??= returnType;
-
-                            continue;
-                    }
-
-                    continue;
-
-                    //case "disposability" when param.HasExplicitDefaultValue:
-
-                    //    disposability = (Disposability)(byte)param.ExplicitDefaultValue!;
-
-                    //continue;
-            }
-        }
-
-        exportType = interfaceType ?? type!;
-
-        if (!(isValid = exportType is not null && type is not null && _attrClass is not null && _attrSyntax is not null))
-        {
-            //key = default;
-            name = null!;
-            return false;
-        }
-
-        //if (!hasScopedDependencies && lifetime is Lifetime.Scoped)
-        //{
-        //    hasScopedDependencies = true;
-        //}
-
-        if (nameKey == EmptyStringHashCode && sourceSymbol?.Name is { } paramName)
-        {
-            nameKey = (name = paramName).GetHashCode();
-        }
-
-        var typeHashCode = (interfaceType ?? type!).GlobalNamespaced.GetHashCode();
-
-        //key = (lifeTime, typeHashCode, keyHashCode);
-        var isCached = isValid && lifetime is not Lifetime.Transient;
-
-        //if (factory switch
-        //{
-        //    IMethodSymbol factoryMethod => factoryMethod.Parameters,
-        //    IPropertySymbol { IsIndexer: true } factoryProperty => factoryProperty.Parameters,
-        //    IFieldSymbol => [],
-        //    _ => GetParameters(type)
-        //}
-        //    is { IsDefaultOrEmpty: false, Length: > 0 } parameters)
-        //{
-        //    prms = parameters;
-        //}
-
-        return true;
-
-        //static ImmutableArray<IParameterSymbol> GetParameters(ITypeSymbol? implType)
-        //{
-        //    if (implType is not INamedTypeSymbol { Constructors: var ctor, InstanceConstructors: var insCtor } || ctor.IsDefaultOrEmpty || insCtor.IsDefaultOrEmpty) return [];
-
-        //    ImmutableArray<IParameterSymbol> parameters = [];
-        //    int min = int.MaxValue;
-
-        //    foreach (var item in ctor.Concat(insCtor).Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>())
-        //    {
-        //        if (item.Parameters.IsDefaultOrEmpty || item.Parameters.Length >= min) continue;
-        //        min = (parameters = item.Parameters).Length;
-        //    }
-
-        //    return parameters;
-        //}
-
-        static bool TryGetAttributeParamsDefinition(SymbolInfo info, out ImmutableArray<IParameterSymbol> prms)
-        {
-            if (info.Symbol is IMethodSymbol { Parameters: { } _prms })
-            {
-                prms = _prms;
-                return true;
-            }
-            foreach (var item in info.CandidateSymbols)
-            {
-                if (item is IMethodSymbol { Parameters: { } _prms2 })
-                {
-                    prms = _prms2;
-                    return true;
-                }
-            }
-            prms = [];
-            return false;
-        }
-
-        static Span<(IParameterSymbol, AttributeArgumentSyntax?)> GetAttrParamsMap(
-           ImmutableArray<IParameterSymbol> paramSymbols,
-           SeparatedSyntaxList<AttributeArgumentSyntax> argsSyntax)
-        {
-            int i = -1;
-            Span<(IParameterSymbol, AttributeArgumentSyntax?)> result = new (IParameterSymbol, AttributeArgumentSyntax?)[paramSymbols.Length];
-
-            foreach (var param in paramSymbols)
-            {
-                result[++i] = argsSyntax.Count > i && argsSyntax[i] is { NameColon: null, NameEquals: null } argSyntax
-                    ? (param, argSyntax)
-                    : (param, argsSyntax.FirstOrDefault(arg => param.Name == arg.NameColon?.Name.Identifier.ValueText));
-            }
-
-            return result;
-        }
-
-        static bool GetStringExpressionOrValue(SemanticModel model, IParameterSymbol paramSymbol, AttributeArgumentSyntax? arg, out string value)
-        {
-            value = null!;
-
-            if (arg is not null)
-            {
-                if (model.GetSymbolInfo(arg.Expression).Symbol is IFieldSymbol
-                    {
-                        IsConst: true,
-                        Type.SpecialType: SpecialType.System_String,
-                        ConstantValue: { } val
-                    })
-                {
-                    return (value = val.ToString()) != "";
-                }
-                else if (arg.Expression is LiteralExpressionSyntax { Token.ValueText: { } valueText } e
-                    && e.IsKind(SyntaxKind.StringLiteralExpression))
-                {
-                    return (value = valueText) != "";
-                }
-            }
-            else if (paramSymbol.HasExplicitDefaultValue)
-            {
-                value = paramSymbol.ExplicitDefaultValue?.ToString()!;
-                return value != "";
-            }
-
-            return false;
-        }
-    }
-
-    static bool TryGetLifetime(AttributeSyntax attrSyntax, ref INamedTypeSymbol attrClass, ref bool isExternal, out Lifetime lifetime)
-    {
-        if (GetLifetimeFromSyntax(attrSyntax, out lifetime)) return true;
-
-        bool found;
-        do
-        {
-            (isExternal, (found, lifetime)) = attrClass.GlobalNonGenericNamespace switch
-            {
-                SingletonAttr => (isExternal, (true, Lifetime.Singleton)),
-                ScopedAttr => (isExternal, (true, Lifetime.Scoped)),
-                TransientAttr => (isExternal, (true, Lifetime.Transient)),
-                { } val => (val is not DependencyAttr, GetFromCtorSymbol(attrClass))
-            };
-
-            if (found) return true;
-
-            isExternal = true;
-        }
-        while ((attrClass = attrClass?.BaseType!) is not null);
-
-        return false;
-
-        static (bool, Lifetime) GetFromCtorSymbol(INamedTypeSymbol attrClass)
-        {
-            foreach (var ctor in attrClass.Constructors)
-                foreach (var param in ctor.Parameters)
-                    if (param.Name.ToLower() is "lifetime" && param.HasExplicitDefaultValue)
-                        return (true, (Lifetime)(byte)param.ExplicitDefaultValue!);
-
-            return (false, default);
-        }
-
-        static bool GetLifetimeFromSyntax(AttributeSyntax attribute, out Lifetime lifetime)
-        {
-            foreach (var arg in attribute.ArgumentList?.Arguments ?? [])
-            {
-                if (arg is { NameColon.Name.Identifier.ValueText: "lifetime", Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: { } memberName } }
-                    && Enum.TryParse(memberName, out lifetime))
-                {
-                    return true;
-                }
-            }
-
-            lifetime = default;
-            return false;
-        }
-    }
 }

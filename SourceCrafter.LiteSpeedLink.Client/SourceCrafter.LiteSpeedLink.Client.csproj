@@ -8,14 +8,16 @@
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<Configurations>Debug;Release;Pack;DEBUG_SG</Configurations>
 		<IsTrimmable>true</IsTrimmable>
+		<IsAotCompatible>true</IsAotCompatible>
+		<PublishTrimmed>true</PublishTrimmed>
+		<TrimMode>full</TrimMode>
+		<RestoreAdditionalProjectSources>D:\Code\SourceCrafter.DependencyInjection\publish</RestoreAdditionalProjectSources>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="MemoryPack" Version="1.21.4" />
-		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
-		<Compile Include="D:\Code\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\*.cs">
-			<Link>SharedMemory\%(RecursiveDir)%(Filename)%(Extension)</Link>
-		</Compile>
+		<PackageReference Include="MemoryPack" Version="1.21.4" PrivateAssets="all" />
+		<ProjectReference Include="D:\Code\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
+		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" PrivateAssets="all" />
 	</ItemGroup>
 
 </Project>

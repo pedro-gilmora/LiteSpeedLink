@@ -10,17 +10,22 @@
 		<DefineConstants>SG_CONTEXT</DefineConstants>
 		<IsTrimmable>true</IsTrimmable>
 		<TrimMode>full</TrimMode>
+		<IsAotCompatible>true</IsAotCompatible>
+		<PublishTrimmed>true</PublishTrimmed>
+		<OptimizationPreference>Size</OptimizationPreference>
+		<DebugType>none</DebugType>
+		<StripSymbols>true</StripSymbols>
+		<TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+		<RestoreAdditionalProjectSources>D:\Code\SourceCrafter.DependencyInjection\publish</RestoreAdditionalProjectSources>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="MemoryPack" Version="1.21.4" />
+		<PackageReference Include="MemoryPack" Version="1.21.4" PrivateAssets="all" />
+		<ProjectReference Include="..\..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
-		<Compile Include="D:\Code\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\*.cs">
-			<Link>SharedMemory\%(RecursiveDir)%(Filename)%(Extension)</Link>
-		</Compile>
+		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" PrivateAssets="all" />
 	</ItemGroup>
 
 </Project>

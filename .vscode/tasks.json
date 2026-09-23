@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-generator-debug-sg",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/SourceCrafter.LiteSpeedLink.Helpers/SourceCrafter.LiteSpeedLink.Helpers.csproj",
+        "--configuration",
+        "DEBUG_SG",
+        "--no-restore"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Builds the source generator with DEBUG_SG configuration to enable Debugger.Launch()"
+    },
+    {
+      "label": "build-consumer-debug-sg",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/LiteSpeedLink/LiteSpeedLink.csproj",
+        "--configuration",
+        "DEBUG_SG",
+        "--no-restore"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Builds the consumer project with DEBUG_SG configuration"
+    }
+  ]
+}

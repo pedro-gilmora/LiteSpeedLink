@@ -51,6 +51,8 @@ public static partial class Server
 #endif
 public sealed class MemoryRequestContext(byte[] payload, int timeout, CancellationToken cancelToken) : BufferReader(payload)
 {
+    public BufferBuilder ResponseWriter => field ??= new BufferBuilder();
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(AsSpan());
 

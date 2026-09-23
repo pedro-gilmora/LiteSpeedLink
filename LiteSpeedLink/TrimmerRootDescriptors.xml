@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TrimmerRootDescriptor>
+  <Assembly Name="LiteSpeedLink" RootMode="All" />
+  <Assembly Name="Application.Contracts" RootMode="All" />
+  <Assembly Name="SourceCrafter.LiteSpeedLink.Server" RootMode="All" />
+  <Assembly Name="SourceCrafter.LiteSpeedLink.Client" RootMode="All" />
+</TrimmerRootDescriptor>

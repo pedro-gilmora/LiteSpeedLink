@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
     <Configurations>Debug;Release;DEBUG_SG</Configurations>
 		<LangVersion>latest</LangVersion>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,4 +1,5 @@
-﻿using SourceCrafter.LiteSpeedLink;
+﻿using MemoryPack;
+using SourceCrafter.LiteSpeedLink;
 
 namespace Application.Contracts;
 
@@ -7,7 +8,8 @@ namespace Application.Contracts;
 public interface IAuthService : IServiceUnit
 {
     bool TryAuthenticate(Credentials credentials, out string token);
+    string Greet(string name);
 }
 
-[MemoryPack.MemoryPackable]
+[MemoryPackable]
 public readonly partial record struct Credentials(string UserName, string Password);

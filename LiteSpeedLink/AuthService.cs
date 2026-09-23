@@ -8,6 +8,8 @@ namespace LiteSpeedLink;
 // Implementation layer
 public partial class AuthService() : IAuthService
 {
+    public string Greet(string name) => $"Hello, {name}!";
+
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
         Console.WriteLine("Are credentials correct {0}", credentials is ("pedro", "test!123"));

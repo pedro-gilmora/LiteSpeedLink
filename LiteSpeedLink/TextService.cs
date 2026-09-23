@@ -14,7 +14,7 @@ namespace SourceCrafter.LiteSpeedLink;
 public sealed record TextServiceConnectionInfo(string Port);
 
 [ServiceHost]
-[ServiceContainer]
+[ServiceProvider]
 [Scoped<IAuthService, AuthService>]
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public partial class TextService;

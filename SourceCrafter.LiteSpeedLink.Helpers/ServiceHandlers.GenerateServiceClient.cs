@@ -1,4 +1,5 @@
 ﻿using Microsoft.CodeAnalysis;
+using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 
 
@@ -18,9 +19,14 @@ public partial class ServiceHandlersGenerator
 {
     const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
 
-    private static void GenerateServiceClient(SourceProductionContext context, Compilation compilation, int compilationId, in (INamedTypeSymbol, int) serviceClientDesc, System.Threading.CancellationToken cancellationToken)
+    private static void GenerateServiceClient(
+        ServiceProviderInfo container,
+        PartialContribution contribution,
+        int connectionType,
+        System.Threading.CancellationToken cancellationToken)
     {
-        var (serviceClient, connectionType) = serviceClientDesc;
+        var compilation = container.Compilation;
+        var serviceClient = container.ContainerType;
 
         StringBuilder clientCode = new();
 
@@ -233,22 +239,22 @@ public partial class ").Append(typeShortName).Append(@"
 
                     if (outCount > 0)
                     {
-                        clientCode.Append("<");
+                        clientCode.Append('<');
 
                         if (outCount > 1)
                         {
-                            clientCode.Append("(");
+                            clientCode.Append('(');
 
                             responseTypes!.Invoke();
 
-                            clientCode.Append(")");
+                            clientCode.Append(')');
                         }
                         else
                         {
                             responseTypes!.Invoke();
                         }
 
-                        clientCode.Append(">");
+                        clientCode.Append('>');
                     }
 
                     clientCode.AddSpace().Append(methodName);
@@ -258,7 +264,7 @@ public partial class ").Append(typeShortName).Append(@"
                         clientCode.Append("Async");
                     }
 
-                    clientCode.Append("(");
+                    clientCode.Append('(');
 
                     methodParams?.Invoke();
 
@@ -303,12 +309,12 @@ public partial class ").Append(typeShortName).Append(@"
                             requestTypes!.Invoke();
 
                             clientCode
-                                .Append(")");
+                                .Append(')');
                         }
                         else
                         {
                             clientCode
-                                .Append("<");
+                                .Append('<');
 
                             requestTypes!.Invoke();
                         }
@@ -327,11 +333,11 @@ public partial class ").Append(typeShortName).Append(@"
                         {
                             if (outCount > 1)
                             {
-                                clientCode.Append("(");
+                                clientCode.Append('(');
 
                                 responseTypes!.Invoke();
 
-                                clientCode.Append(")");
+                                clientCode.Append(')');
                             }
                             else
                             {
@@ -343,11 +349,11 @@ public partial class ").Append(typeShortName).Append(@"
                     if (closeTag)
                     {
                         clientCode
-                            .Append(">");
+                            .Append('>');
                     }
 
                     clientCode
-                        .Append("(")
+                        .Append('(')
                         .Append(serviceId)
                         .Append(", ");
 
@@ -359,11 +365,11 @@ public partial class ").Append(typeShortName).Append(@"
                         }
                         else
                         {
-                            clientCode.Append("(");
+                            clientCode.Append('(');
 
                             requestParams?.Invoke();
 
-                            clientCode.Append(")");
+                            clientCode.Append(')');
                         }
                     }
 
@@ -390,10 +396,10 @@ public partial class ").Append(typeShortName).Append(@"
 
                         clientCode.Append(@"
 
-    ");
+    public ");
 
                         clientCode
-                            .Append(method.GlobalNamespaced)
+                            .Append(method.GlobalNamespaced.Replace(fullTypeName + ".", ""))
                             .Append(@"
     {
         ");
@@ -412,7 +418,7 @@ public partial class ").Append(typeShortName).Append(@"
                             }
                             else
                             {
-                                clientCode.Append(@"(");
+                                clientCode.Append('(');
 
                                 responseDeconstruct!.Invoke();
 
@@ -447,7 +453,7 @@ public partial class ").Append(typeShortName).Append(@"
         clientCode.Append(@"
 }");
 
-        context.AddSource(hintName + ".client.cs", clientCode.ToString());
+        contribution.AddSource(hintName + ".client", clientCode.ToString());
     }
     static bool Exchange(ref bool value)
     {

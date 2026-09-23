@@ -12,6 +12,59 @@
 		<AllowUnsafeBlocks>False</AllowUnsafeBlocks>
 		<LangVersion>latest</LangVersion>
 		<RestoreAdditionalProjectSources>D:\Code\SourceCrafter.DependencyInjection\publish</RestoreAdditionalProjectSources>
+
+		<!--
+			Vuelca a disco lo que emiten los generadores, incluidos los archivos .host.g.cs y
+			.client.g.cs que produce el parcial de LiteSpeedLink. El Explorador de soluciones
+			los agrupa siempre bajo el generador que llamo a AddSource -ServiceProviders, del
+			paquete de DI-, asi que este volcado es la unica forma de inspeccionarlos y
+			diferenciarlos fuera del IDE. Va dentro de obj, que ya esta excluido de Compile:
+			sacarlo de ahi duplicaria los tipos.
+		-->
+		<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+		<CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+
+		<!-- Aggressive trimming for size -->
+		<PublishTrimmed>true</PublishTrimmed>
+		<TrimMode>full</TrimMode>
+		<IsAotCompatible>true</IsAotCompatible>
+		<PublishAot>true</PublishAot>
+
+		<!-- Single-file with compression -->
+		<PublishSingleFile>true</PublishSingleFile>
+		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+		
+		<!-- Optimize for size over speed -->
+		<OptimizationPreference>Size</OptimizationPreference>
+
+		<!-- Disable reflection metadata -->
+		<IlcDisableReflection>true</IlcDisableReflection>
+		<IlcGenerateStackTraceData>true</IlcGenerateStackTraceData>
+		<IlcOptimizationPreference>Size</IlcOptimizationPreference>
+		<IlcGenerateMstatFile>true</IlcGenerateMstatFile>
+		<IlcGenerateDgmlFile>true</IlcGenerateDgmlFile>
+		
+		<!-- Metadata -->
+		<MetadataUpdateMode>None</MetadataUpdateMode>
+		<TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+		<TrimmerRootDescriptorFiles>TrimmerRootDescriptors.xml</TrimmerRootDescriptorFiles>
+	</PropertyGroup>
+
+	<!--
+		Eliminar los simbolos es una decision de tamano del binario publicado, no del ciclo de
+		desarrollo: con DebugType=none no se emite el .pdb y el depurador no puede enlazar
+		ningun punto de interrupcion -ni en Program.cs ni en el codigo generado-. Por eso el
+		recorte solo aplica fuera de Debug.
+	-->
+	<PropertyGroup Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == 'DEBUG_SG'">
+		<DebugType>portable</DebugType>
+		<DebugSymbols>true</DebugSymbols>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)' != 'Debug' And '$(Configuration)' != 'DEBUG_SG'">
+		<DebugType>none</DebugType>
+		<DebugSymbols>false</DebugSymbols>
+		<StripSymbols>true</StripSymbols>
 	</PropertyGroup>
 	<!--<ItemGroup Condition="'$(PublishBuild)' == 'true'">
 		<Compile Remove="$(TEMP)\VSGeneratedDocuments\**\*.cs" />
@@ -20,10 +73,14 @@
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
-		<PackageReference Include="SourceCrafter.DependencyInjection" Version="10.0.1" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="10.0.1" />
-		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration" Version="10.0.1" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration.Metadata" Version="10.0.1" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="10.1.2" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="10.1.0" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration" Version="10.1.0" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration.Metadata" Version="10.1.0" />
+		<PackageReference Include="MemoryPack" Version="1.21.4" />
+		<ProjectReference Include="..\..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
+		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
+
 	</ItemGroup>
 
 	<ItemGroup>

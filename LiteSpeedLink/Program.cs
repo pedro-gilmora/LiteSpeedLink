@@ -12,14 +12,14 @@ var rpcName = $"Test{Guid.CreateVersion7()}";
 
 using var server = TextService.Start(rpcName);
 
-TextServiceClient client = new (rpcName);
+IAuthService client = new TextServiceClient(rpcName);
 
 Console.WriteLine("Hola!");
 var timestamp = Stopwatch.GetTimestamp();
 try
 {
     //Debugger.Launch();
-    if (await client.TryAuthenticateAsync(new("pedro", "test!123")) is (true, var token))
+    if (client.TryAuthenticate(new("pedro", "test!123"), out var token))
     {
         Console.WriteLine(token);
     }

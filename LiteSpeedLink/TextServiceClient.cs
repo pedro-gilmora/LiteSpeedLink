@@ -8,7 +8,7 @@ using System.Runtime.Versioning;
 namespace SourceCrafter.LiteSpeedLink;
 
 [ServiceClient]
-[ServiceContainer]
+[ServiceProvider]
 #if !NETSTANDARD
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 #endif

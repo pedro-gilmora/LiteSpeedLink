@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [  
+    {
+      "name": "Debug Source Generator (DEBUG_SG)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-generator-debug-sg",
+      "program": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/LiteSpeedLink/LiteSpeedLink.csproj",
+        "--configuration",
+        "DEBUG_SG",
+        "--no-build"
+      ],
+      "cwd": "${workspaceFolder}/LiteSpeedLink",
+      "console": "internalConsole",
+      "justMyCode": false,
+      "stopAtEntry": false,
+      "env": {
+        "DOTNET_BUILD_CONTINUATION": "true"
+      }
+    },
+    {
+      "name": "Attach to Compiler (VBCSCompiler/csc)",
+      "type": "coreclr",
+      "request": "attach",
+      "processId": "${command:pickProcess}",
+      "justMyCode": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Build & Debug Generator",
+      "configurations": ["Debug Source Generator (DEBUG_SG)"],
+      "stopAll": true
+    }
+  ]
+}
