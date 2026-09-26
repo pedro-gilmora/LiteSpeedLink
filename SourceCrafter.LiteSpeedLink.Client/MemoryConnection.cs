@@ -82,7 +82,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return OpenStream<TOut>(SerializePayload(op, payload).ToArray(), token).ToBlockingEnumerable(token);
+        return OpenStream<TOut, TIn>((op, payload), token).ToBlockingEnumerable(token);
     }
 
     public IEnumerable<TOut> Enumerate<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -133,7 +133,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return OpenStream<TOut>(SerializePayload(op, payload).ToArray(), token);
+        return OpenStream<TOut, TIn>((op, payload), token);
     }
 
     public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -149,8 +149,16 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
     /// cierra el stream. Un fallo (excepcion, <c>Failed</c>, <c>NotFound</c>) termina el enumerable con error.
     /// </summary>
     // ponytail: la respuesta llega al final del stream; un timeout de RpcBuffer no se trata como fallo (streams largos).
-    private async IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-        (byte[] request, [EnumeratorCancellation] CancellationToken token)
+    private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (byte[] request, CancellationToken token) =>
+        OpenStream<TOut, byte[]>((0, request), token, static (w, s) => w.Write(s.payload));
+
+    private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
+        ((long op, TIn payload) request, CancellationToken token) =>
+        OpenStream<TOut, TIn>(request, token, WriteRequest);
+
+    private async IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, TState>
+        ((long op, TState payload) request, [EnumeratorCancellation] CancellationToken token, Action<IBufferWriter<byte>, (long op, TState payload)> write)
     {
         var buffer = Channel.CreateUnbounded<TOut>(new() { SingleReader = true, SingleWriter = true });
 
@@ -163,7 +171,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
             if (Environment.TickCount64 - Volatile.Read(ref last) > _timeout) try { idle.Cancel(); } catch (ObjectDisposedException) { }
         }, null, _timeout, _timeout);
 
-        _ = MemoryRpc.RemoteStreamAsync(request, (ReadOnlySpan<byte> payload) =>
+        _ = MemoryRpc.RemoteStreamAsync(request, write, (ReadOnlySpan<byte> payload) =>
         {
             Volatile.Write(ref last, Environment.TickCount64);
             // Lote [int32 len][item]... (ver MemoryRequestContext.Append)

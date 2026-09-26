@@ -133,6 +133,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         return WriteSlowAsync(correlationId, status, body, token, deferFlush);
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<ResponseStatus> FlushAndReleaseAsync(ResponseStatus status)
     {
         try
@@ -166,6 +167,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         _frames.EndFrame();
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<ResponseStatus> WriteSlowAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(
         int correlationId, ResponseStatus status, T? body, CancellationToken token, bool deferFlush)
     {
@@ -192,7 +194,8 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         return status;
     }
 
-    private async Task FlushLaterAsync()
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    private async ValueTask FlushLaterAsync()
     {
         await Task.Yield();
         await _gate.WaitAsync().ConfigureAwait(false);
