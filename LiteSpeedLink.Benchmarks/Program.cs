@@ -24,6 +24,11 @@ public static class Program
             return SemanticCheck.Run();
         }
 
+        if (args.Contains("--alloc"))
+        {
+            return AllocProbe.RunAsync().GetAwaiter().GetResult();
+        }
+
         var fast = args.Contains("--fast");
         var rest = args.Where(a => a != "--fast").ToArray();
 

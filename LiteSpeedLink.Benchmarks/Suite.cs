@@ -26,10 +26,16 @@ public enum Suite
     /// <summary>PoC-A: SemaphoreSlim frente a multiplexado sobre una conexion TCP real.</summary>
     TcpConcurrency = 1 << 4,
 
+    /// <summary>6.1: streaming por transporte real (Memory, UDS, TCP).</summary>
+    Streaming = 1 << 5,
+
+    /// <summary>6.1: N llamadas concurrentes sobre una MemoryConnection (UDS de referencia).</summary>
+    MemoryConcurrency = 1 << 6,
+
     /// <summary>La ruta de request/response completa, sin red.</summary>
     Wire = RequestBuilding | ServerParsing | ResponseStatus,
 
-    All = Control | Wire | TcpConcurrency
+    All = Control | Wire | TcpConcurrency | Streaming | MemoryConcurrency
 }
 
 public static class SuiteMap
@@ -41,6 +47,8 @@ public static class SuiteMap
         (Suite.ServerParsing, typeof(ServerParsingBenchmarks)),
         (Suite.ResponseStatus, typeof(ResponseStatusBenchmarks)),
         (Suite.TcpConcurrency, typeof(TcpConcurrencyBenchmarks)),
+        (Suite.Streaming, typeof(StreamingBenchmarks)),
+        (Suite.MemoryConcurrency, typeof(MemoryConcurrencyBenchmarks)),
     ];
 
     public static Type[] Resolve(Suite suite) =>
