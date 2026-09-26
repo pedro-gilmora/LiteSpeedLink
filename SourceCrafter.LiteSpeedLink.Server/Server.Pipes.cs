@@ -15,10 +15,14 @@ public static partial class Server
     /// en paralelo y su respuesta <c>[len][corrId][estado][cuerpo]</c> sale con el mismo corrId, de
     /// modo que el cliente la empareja aunque las respuestas lleguen desordenadas.
     /// </summary>
-    internal static async Task ServePipeAsync(PipeReader reader, PipeWriter writer, RequestHandler handlers, CancellationToken token)
+    /// <summary>Limite por defecto de peticiones concurrentes por conexion; al llegar se deja de leer el socket (back-pressure TCP).</summary>
+    public const int MaxInFlightPerConnection = 256;
+
+    internal static async Task ServePipeAsync(PipeReader reader, PipeWriter writer, RequestHandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection)
     {
         var responses = new ResponseChannel(writer);
         var inflight = new ConcurrentDictionary<Task, byte>();
+        using var slots = new SemaphoreSlim(maxInFlight);
 
         try
         {
@@ -38,7 +42,9 @@ public static partial class Server
                     byte[] body = ArrayPool<byte>.Shared.Rent(length);
                     content.Slice(Framing.OpIdSize).CopyTo(body);
 
-                    var request = DispatchAsync(handlers, op, new(correlationId, body.AsMemory(0, length), responses, token), body, token);
+                    await slots.WaitAsync(token).ConfigureAwait(false);
+
+                    var request = DispatchAsync(handlers, op, new(correlationId, body.AsMemory(0, length), responses, token), body, slots, token);
 
                     if (!request.IsCompleted && inflight.TryAdd(request, 0))
                         _ = request.ContinueWith(static (t, s) => ((ConcurrentDictionary<Task, byte>)s!).TryRemove(t, out _), inflight, TaskScheduler.Default);
@@ -61,7 +67,7 @@ public static partial class Server
         }
     }
 
-    private static async Task DispatchAsync(RequestHandler handlers, long op, RequestContext ctx, byte[] body, CancellationToken token)
+    private static async Task DispatchAsync(RequestHandler handlers, long op, RequestContext ctx, byte[] body, SemaphoreSlim? slots, CancellationToken token)
     {
         try
         {
@@ -80,6 +86,7 @@ public static partial class Server
         finally
         {
             ArrayPool<byte>.Shared.Return(body);
+            slots?.Release();
         }
     }
 }
@@ -92,9 +99,13 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly FrameWriter _frames = new(writer, correlated);
+    private int _flushScheduled;
+
+    // ponytail: umbral fijo; los items de stream se agrupan hasta 32 KB o hasta que corre el flush diferido.
+    private const int EagerFlushBytes = 32 * 1024;
 
     public async ValueTask<ResponseStatus> WriteAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(
-        int correlationId, ResponseStatus status, T? body, CancellationToken token)
+        int correlationId, ResponseStatus status, T? body, CancellationToken token, bool deferFlush = false)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -115,6 +126,13 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
 
             _frames.EndFrame();
 
+            if (deferFlush && writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
+            {
+                // Items seguidos del mismo productor se acumulan; un unico flush en el pool los envia juntos.
+                if (Interlocked.Exchange(ref _flushScheduled, 1) == 0) _ = FlushLaterAsync();
+                return status;
+            }
+
             // Sin token: cancelar un flush a medias partiria la trama.
             await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
         }
@@ -124,6 +142,25 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         }
 
         return status;
+    }
+
+    private async Task FlushLaterAsync()
+    {
+        await Task.Yield();
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Volatile.Write(ref _flushScheduled, 0);
+            if (writer.UnflushedBytes > 0) await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Conexion caida: el bucle de lectura la cierra.
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async ValueTask<ResponseStatus> WriteStatusAsync(int correlationId, ResponseStatus status, CancellationToken token)
@@ -180,7 +217,7 @@ public sealed class RequestContext
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<ResponseStatus> YieldAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(TData item) =>
-        _responses.WriteAsync(_correlationId, ResponseStatus.Success, item, _token);
+        _responses.WriteAsync(_correlationId, ResponseStatus.Success, item, _token, deferFlush: true);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<ResponseStatus> EndStreamingAsync()
