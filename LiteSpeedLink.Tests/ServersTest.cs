@@ -17,7 +17,7 @@ using Xunit.Abstractions;
 
 namespace LiteSpeedLink.Tests;
 
-public class ServersTest(ITestOutputHelper output)
+public partial class ServersTest(ITestOutputHelper output)
 {
     [Fact]
     [RequiresPreviewFeatures]
@@ -100,6 +100,41 @@ public class ServersTest(ITestOutputHelper output)
                     }
                 }
             }
+        }
+    }
+
+    [Fact]
+    [RequiresPreviewFeatures]
+    [SupportedOSPlatform("windows")]
+    public void TestMemoryStreamFailureDoesNotHang()
+    {
+        string MmfName = $"Test-{Guid.CreateVersion7()}";
+        using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }, 1000))
+        {
+            using var connection = new MemoryConnection(MmfName, 1000);
+
+            var run = Task.Run(() => connection.Enumerate<int>(99).ToList());
+
+            Task.WaitAny(run, Task.Delay(5000)).Should().Be(0);
+            run.Exception!.GetBaseException().Should().BeOfType<NotImplementedException>();
+        }
+    }
+
+    [Fact]
+    [RequiresPreviewFeatures]
+    [SupportedOSPlatform("windows")]
+    public async Task TestMemoryStreamsRoutedPerClient()
+    {
+        string MmfName = $"Test-{Guid.CreateVersion7()}";
+        using (Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }, 5000))
+        {
+            using var a = new MemoryConnection(MmfName, 5000);
+
+            // Streams intercalados en el mismo canal: cada StreamItem llega solo a la peticion que lo abrio.
+            var runs = Enumerable.Range(0, 8).Select(_ => a.EnumerateAsync<int>(2).ToListAsync().AsTask());
+
+            foreach (var items in await Task.WhenAll(runs))
+                items.Should().Equal(Enumerable.Range(1, 10));
         }
     }
 
@@ -488,6 +523,39 @@ public class ServersTest(ITestOutputHelper output)
         });
 
         await Task.WhenAll(calls);
+    }
+
+    /// <summary>Mas peticiones lentas que el limite por conexion: todas terminan y nunca hay mas de N a la vez.</summary>
+    [Fact]
+    [RequiresPreviewFeatures]
+    [SupportedOSPlatform("windows")]
+    public async Task TestTcpInFlightLimit()
+    {
+        const int serverPort = 5004;
+        int current = 0, peak = 0;
+
+        using var server = Server.StartTcpServer(serverPort, async (id, ctx, token) =>
+        {
+            int now = Interlocked.Increment(ref current);
+            InterlockedMax(ref peak, now);
+            await Task.Delay(20, token);
+            Interlocked.Decrement(ref current);
+            return await ctx.ReturnAsync(ctx.Get<int>());
+        }, () => { }, null, default);
+
+        await using var connection = new DnsEndPoint("localhost", serverPort).AsTcpConnection();
+
+        var total = Server.MaxInFlightPerConnection + 100;
+        var results = await Task.WhenAll(Enumerable.Range(0, total).Select(n => connection.GetAsync<int, int>(0, n).AsTask()));
+
+        results.Should().Equal(Enumerable.Range(0, total));
+        peak.Should().BeLessThanOrEqualTo(Server.MaxInFlightPerConnection);
+
+        static void InterlockedMax(ref int target, int value)
+        {
+            for (int seen = target; value > seen; seen = target)
+                if (Interlocked.CompareExchange(ref target, value, seen) == seen) return;
+        }
     }
 }
 

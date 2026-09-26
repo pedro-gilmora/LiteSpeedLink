@@ -74,7 +74,7 @@ public partial class ServiceHandlersGenerator
                   null),
             _ => ("global::SourceCrafter.LiteSpeedLink.MemoryRequestContext",
                   "StartMemoryServer",
-                  "global::SharedMemory.RpcBuffer",
+                  "global::System.IDisposable",
                   "global::System.IDisposable",
                   null,
                   null,

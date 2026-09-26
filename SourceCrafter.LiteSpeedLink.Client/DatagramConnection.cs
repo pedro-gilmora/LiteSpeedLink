@@ -213,21 +213,8 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnectionA
     {
         var body = response.AsSpan(ResponseHeaderSize);
 
-        switch ((ResponseStatus)response[Framing.CorrelationIdSize])
-        {
-            case ResponseStatus.Success: return body;
+        var status = (ResponseStatus)response[Framing.CorrelationIdSize];
 
-            case ResponseStatus.NotFound: throw new NotImplementedException($"Implementation is missing from {endpoint}");
-
-            case ResponseStatus.Failed:
-                throw new InvalidOperationException($"""
-                    Execution failed on {endpoint}:
-                    REASON:
-
-                    {Deserialize<string>(body)}
-                    """);
-
-            default: throw new InvalidDataException($"Unexpected response status {response[Framing.CorrelationIdSize]} from {endpoint}.");
-        }
+        return status is ResponseStatus.Success ? body : throw ResponseError.Create(status, endpoint.ToString()!, body);
     }
 }

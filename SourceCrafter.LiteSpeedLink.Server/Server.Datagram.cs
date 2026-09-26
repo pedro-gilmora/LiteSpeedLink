@@ -20,27 +20,42 @@ public static partial class Server
         int port,
         UdpRequestHandler requestHandlers,
         Action onFinalize,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        int maxInFlightPerEndpoint = MaxInFlightPerEndpoint,
+        int maxAmplification = 0)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlightPerEndpoint, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxAmplification);
+
         var udpServer = new UdpClient(port);
 
-        ListenAsync(udpServer, requestHandlers, onFinalize, token);
+        ListenAsync(udpServer, requestHandlers, onFinalize, maxInFlightPerEndpoint, maxAmplification, token);
 
         return udpServer;
 
-        static async void ListenAsync(UdpClient udpServer, UdpRequestHandler requestHandlers, Action onFinalize, CancellationToken token)
+        static async void ListenAsync(UdpClient udpServer, UdpRequestHandler requestHandlers, Action onFinalize, int limit, int amplification, CancellationToken token)
         {
+            var inflight = new System.Collections.Concurrent.ConcurrentDictionary<IPEndPoint, int>();
+
             try
             {
                 while (await udpServer.ReceiveAsync(token).ConfigureAwait(false) is { RemoteEndPoint: { } answerTo, Buffer: { } buffer })
                 {
                     if (buffer.Length < Framing.CorrelationIdSize + Framing.OpIdSize) continue;
 
+                    // UDP no tiene back-pressure: por encima del limite el datagrama se descarta (el cliente lo ve como perdida).
+                    if (inflight.AddOrUpdate(answerTo, 1, static (_, n) => n + 1) > limit)
+                    {
+                        Release(inflight, answerTo);
+                        continue;
+                    }
+
                     int correlationId = BinaryPrimitives.ReadInt32LittleEndian(buffer);
                     long op = Framing.ReadOpId(buffer.AsSpan(Framing.CorrelationIdSize));
-                    var ctx = new UdpRequestContext(udpServer, answerTo, correlationId, buffer.AsMemory(Framing.CorrelationIdSize + Framing.OpIdSize), token);
+                    var ctx = new UdpRequestContext(udpServer, answerTo, correlationId, buffer.AsMemory(Framing.CorrelationIdSize + Framing.OpIdSize), token,
+                                            amplification == 0 ? long.MaxValue : (long)buffer.Length * amplification);
 
-                    _ = DispatchUdpAsync(requestHandlers, op, ctx, token);
+                    _ = DispatchUdpAsync(requestHandlers, op, ctx, inflight, answerTo, token);
                 }
             }
             catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException)
@@ -52,7 +67,8 @@ public static partial class Server
             }
         }
 
-        static async Task DispatchUdpAsync(UdpRequestHandler handlers, long op, UdpRequestContext ctx, CancellationToken token)
+        static async Task DispatchUdpAsync(UdpRequestHandler handlers, long op, UdpRequestContext ctx,
+            System.Collections.Concurrent.ConcurrentDictionary<IPEndPoint, int> inflight, IPEndPoint endpoint, CancellationToken token)
         {
             try
             {
@@ -65,8 +81,25 @@ public static partial class Server
             catch
             {
             }
+            finally
+            {
+                Release(inflight, endpoint);
+            }
+        }
+
+        static void Release(System.Collections.Concurrent.ConcurrentDictionary<IPEndPoint, int> inflight, IPEndPoint endpoint)
+        {
+            // Quita la entrada al llegar a 0 para no acumular endpoints (evita crecer sin limite con IPs falsas).
+            if (inflight.AddOrUpdate(endpoint, 0, static (_, n) => n - 1) <= 0)
+                inflight.TryRemove(new(endpoint, 0));
         }
     }
+
+    /// <summary>Limite por defecto de peticiones UDP concurrentes por endpoint de origen; el exceso se descarta.</summary>
+    public const int MaxInFlightPerEndpoint = 256;
+
+    // maxAmplification (0 = sin limite, red de confianza): bytes enviados por peticion <= N x bytes recibidos.
+    // Con IP de origen falsificada el atacante no puede usar el servidor como amplificador; lo que excede se descarta.
 }
 
 public sealed class UdpRequestContext
@@ -80,9 +113,11 @@ public sealed class UdpRequestContext
     private readonly CancellationToken _token;
     private int _completed;
     private int _seq;
+    private long _budget;
 
-    internal UdpRequestContext(UdpClient client, IPEndPoint endpoint, int correlationId, ReadOnlyMemory<byte> body, CancellationToken token)
+    internal UdpRequestContext(UdpClient client, IPEndPoint endpoint, int correlationId, ReadOnlyMemory<byte> body, CancellationToken token, long budget = long.MaxValue)
     {
+        _budget = budget;
         _client = client;
         _endpoint = endpoint;
         _correlationId = correlationId;
@@ -154,6 +189,8 @@ public sealed class UdpRequestContext
         else writer.Advance(HeaderSize);
 
         if (hasBody) Serialize(writer, body);
+
+        if (Interlocked.Add(ref _budget, -writer.WrittenCount) < 0) return status;
 
         await _client.SendAsync(writer.WrittenMemory, _endpoint, _token).ConfigureAwait(false);
 

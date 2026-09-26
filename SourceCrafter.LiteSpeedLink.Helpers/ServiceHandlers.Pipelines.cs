@@ -186,8 +186,11 @@ public partial class ServiceHandlersGenerator
 
             expr = n == stages.Count - 1 && last != null ? last : StageVar(root, n);
 
-            code.Append("if (").Append(call).Append(" is not (global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success, var ").Append(expr).Append("))\n")
-                .Append(indent).Append("    throw new global::SourceCrafter.LiteSpeedLink.PipelineRejectedException(global::SourceCrafter.LiteSpeedLink.ResponseStatus.Failed, \"")
+            var status = StageVar(root, n) + "_s";
+
+            code.Append("var (").Append(status).Append(", ").Append(expr).Append(") = ").Append(call).Append(";\n")
+                .Append(indent).Append("if (").Append(status).Append(" is not global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success)\n")
+                .Append(indent).Append("    throw new global::SourceCrafter.LiteSpeedLink.PipelineRejectedException(").Append(status).Append(", \"")
                 .Append(s.Pipeline.Name).Append("\");\n").Append(n == stages.Count - 1 ? "\n" : null).Append(indent);
         }
 

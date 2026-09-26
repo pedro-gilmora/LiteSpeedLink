@@ -179,22 +179,8 @@ public sealed class QuicConnection(QuicClientConnectionOptions options) : IConne
 
         private void EnsureSuccess(in ReadOnlySequence<byte> frame)
         {
-            switch (Framing.ReadStatus(frame))
-            {
-                case ResponseStatus.Success: return;
-
-                case ResponseStatus.NotFound: throw new NotImplementedException($"Implementation is missing from {remote}");
-
-                case ResponseStatus.Failed:
-                    throw new InvalidOperationException($"""
-                        Execution failed on {remote}:
-                        REASON:
-
-                        {Deserialize<string>(frame.Slice(Framing.StatusSize))}
-                        """);
-
-                default: throw new InvalidDataException($"Unexpected response status {Framing.ReadStatus(frame)} from {remote}.");
-            }
+            if (Framing.ReadStatus(frame) is var status and not ResponseStatus.Success)
+                throw ResponseError.Create(status, remote, frame.Slice(Framing.StatusSize));
         }
 
         public async ValueTask DisposeAsync()

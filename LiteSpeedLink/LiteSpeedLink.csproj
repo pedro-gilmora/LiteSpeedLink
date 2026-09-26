@@ -20,9 +20,9 @@
 			paquete de DI-, asi que este volcado es la unica forma de inspeccionarlos y
 			diferenciarlos fuera del IDE. Va dentro de obj, que ya esta excluido de Compile:
 			sacarlo de ahi duplicaria los tipos.
-		-->
+		--><!--
 		<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
-		<CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+		<CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>-->
 
 		<!-- Aggressive trimming for size -->
 		<PublishTrimmed>true</PublishTrimmed>

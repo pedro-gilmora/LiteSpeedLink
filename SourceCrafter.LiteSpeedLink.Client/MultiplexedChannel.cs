@@ -223,22 +223,7 @@ internal sealed class MultiplexedChannel
 
     private void EnsureSuccess(in Response response)
     {
-        switch (response.Status)
-        {
-            case ResponseStatus.Success: return;
-
-            case ResponseStatus.NotFound: throw new NotImplementedException($"Implementation is missing from {_remote}");
-
-            case ResponseStatus.Failed:
-                throw new InvalidOperationException($"""
-                    Execution failed on {_remote}:
-                    REASON:
-
-                    {Deserialize<string>(response.Span)}
-                    """);
-
-            default: throw new InvalidDataException($"Unexpected response status {response.Status} from {_remote}.");
-        }
+        if (response.Status is not ResponseStatus.Success) throw ResponseError.Create(response.Status, _remote, response.Span);
     }
 
     public async ValueTask DisposeAsync()

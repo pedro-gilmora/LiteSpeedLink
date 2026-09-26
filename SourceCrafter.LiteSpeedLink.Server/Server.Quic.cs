@@ -138,7 +138,7 @@ public static partial class Server
             request.Slice(Framing.OpIdSize).CopyTo(body);
             reader.AdvanceTo(request.End);
 
-            await DispatchAsync(handlers, op, new(0, body.AsMemory(0, length), new ResponseChannel(writer, correlated: false), token), body, token).ConfigureAwait(false);
+            await DispatchAsync(handlers, op, new(0, body.AsMemory(0, length), new ResponseChannel(writer, correlated: false), token), body, null, token).ConfigureAwait(false);
         }
         finally
         {
