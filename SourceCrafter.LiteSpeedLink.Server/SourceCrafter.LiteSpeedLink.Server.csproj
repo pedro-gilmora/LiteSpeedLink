@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
@@ -20,8 +20,8 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
 		<PackageReference Include="MemoryPack" Version="1.21.4" PrivateAssets="all" />
-		<ProjectReference Include="..\..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

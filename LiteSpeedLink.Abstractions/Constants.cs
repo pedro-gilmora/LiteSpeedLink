@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel;
-using System.Diagnostics;
 using System.Net.Security;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink;
@@ -11,39 +11,42 @@ public readonly struct Constants
         protocol = new("lsl"),
         protocolStream = new("lsl-stream");
 
+    /// <summary>
+    /// Obtiene (o genera) un certificado de desarrollo autofirmado.
+    /// No depende de PowerShell ni del almac\u00e9n LocalMachine: es multiplataforma y no requiere elevaci\u00f3n.
+    /// </summary>
     public static X509Certificate2 GetDevCert(string certName = "localhost", string storeName = "teststore", string passwd = "D34lW17h")
     {
         string path = Path.Combine(Directory.GetCurrentDirectory(), $"{certName}.pfx");
 
-        Console.WriteLine("Cert path: " + path);
-
-        X509Certificate2 certificate = null!;
-
-        if (!File.Exists(path))
+        if (File.Exists(path))
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powershell",
-                Arguments = $@"-Command ""New-SelfSignedCertificate -DnsName '{certName}' -CertStoreLocation 'cert:\\LocalMachine\\My' | Export-PfxCertificate -FilePath '{path}' -Password (ConvertTo-SecureString -String '{passwd}' -AsPlainText -Force); Import-PfxCertificate -FilePath '{path}' -CertStoreLocation Cert:\\LocalMachine\\My -Password (ConvertTo-SecureString -String '{passwd}' -AsPlainText -Force)""",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            Process.Start(psi)?.WaitForExit();
-
-            using X509Store store = new (storeName, StoreLocation.LocalMachine);
-
-            certificate = new(path, passwd);
-
-            store.Open(OpenFlags.ReadWrite);
-
-            store.Add(certificate);
-
-            store.Close();
+            return X509CertificateLoader.LoadPkcs12FromFile(path, passwd, X509KeyStorageFlags.Exportable);
         }
 
-        return certificate ?? new(path, passwd);
+        using RSA rsa = RSA.Create(2048);
+
+        CertificateRequest request = new($"CN={certName}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+
+        request.CertificateExtensions.Add(
+            new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, false));
+
+        request.CertificateExtensions.Add(
+            new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], false));
+
+        SubjectAlternativeNameBuilder sanBuilder = new();
+        sanBuilder.AddDnsName(certName);
+        request.CertificateExtensions.Add(sanBuilder.Build());
+
+        var now = DateTimeOffset.UtcNow;
+
+        using X509Certificate2 generated = request.CreateSelfSigned(now.AddDays(-1), now.AddYears(1));
+
+        File.WriteAllBytes(path, generated.Export(X509ContentType.Pfx, passwd));
+
+        return X509CertificateLoader.LoadPkcs12FromFile(path, passwd, X509KeyStorageFlags.Exportable);
     }
 }
 //public interface IMaybe<T>;

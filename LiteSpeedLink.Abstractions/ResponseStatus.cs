@@ -4,5 +4,7 @@ public enum ResponseStatus : byte
 {
     Success,
     NotFound,
-    Failed
+    Failed,
+    /// <summary>Cierra un stream de resultados; no lleva cuerpo.</summary>
+    StreamEnd
 }

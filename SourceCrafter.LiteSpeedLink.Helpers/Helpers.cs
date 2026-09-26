@@ -47,6 +47,28 @@ namespace SourceCrafter.LiteSpeedLink.Helpers
                     SymbolDisplayParameterOptions.IncludeModifiers |
                     SymbolDisplayParameterOptions.IncludeName |
                     SymbolDisplayParameterOptions.IncludeDefaultValue),
+            _globalizedMemberSignature = new(
+                memberOptions:
+                    SymbolDisplayMemberOptions.IncludeType |
+                    SymbolDisplayMemberOptions.IncludeModifiers |
+                    SymbolDisplayMemberOptions.IncludeParameters |
+                    SymbolDisplayMemberOptions.IncludeConstantValue |
+                    SymbolDisplayMemberOptions.IncludeRef,
+                globalNamespaceStyle:
+                    SymbolDisplayGlobalNamespaceStyle.Included,
+                typeQualificationStyle:
+                    SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+                genericsOptions:
+                    SymbolDisplayGenericsOptions.IncludeTypeParameters |
+                    SymbolDisplayGenericsOptions.IncludeVariance,
+                miscellaneousOptions:
+                    SymbolDisplayMiscellaneousOptions.UseSpecialTypes |
+                    SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier,
+                parameterOptions:
+                    SymbolDisplayParameterOptions.IncludeType |
+                    SymbolDisplayParameterOptions.IncludeModifiers |
+                    SymbolDisplayParameterOptions.IncludeName |
+                    SymbolDisplayParameterOptions.IncludeDefaultValue),
             _globalizedNonGenericNamespace = new(
                 globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
                 typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
@@ -60,6 +82,12 @@ namespace SourceCrafter.LiteSpeedLink.Helpers
         extension(ISymbol t)
         {
             internal string GlobalNamespaced => t.ToDisplayString(_globalizedNamespace);
+
+            /// <summary>
+            /// Firma completa del miembro (tipo de retorno, nombre y parámetros globalizados)
+            /// <b>sin</b> el tipo que lo declara, para emitir implementaciones implícitas.
+            /// </summary>
+            internal string GlobalMemberSignature => t.ToDisplayString(_globalizedMemberSignature);
 
             internal string GlobalNonGenericNamespace => t.ToDisplayString(_globalizedNonGenericNamespace);
 

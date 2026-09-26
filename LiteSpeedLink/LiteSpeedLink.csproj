@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
@@ -75,10 +75,9 @@
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
 		<PackageReference Include="SourceCrafter.DependencyInjection" Version="10.1.2" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="10.1.0" />
-		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration" Version="10.1.0" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration" Version="10.1.1" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 		<PackageReference Include="SourceCrafter.DependencyInjection.MsConfiguration.Metadata" Version="10.1.0" />
 		<PackageReference Include="MemoryPack" Version="1.21.4" />
-		<ProjectReference Include="..\..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
 		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
 
 	</ItemGroup>

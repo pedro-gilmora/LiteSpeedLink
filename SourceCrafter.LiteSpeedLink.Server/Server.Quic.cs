@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.IO.Pipelines;
 using System.Net.Quic;
 using System.Runtime.CompilerServices;
@@ -7,8 +7,6 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink;
-
-public delegate ValueTask<FlushResult> RequestHandler(long id, RequestContext ctx, CancellationToken token);
 
 public static partial class Server
 {
@@ -50,7 +48,6 @@ public static partial class Server
             .ListenAsync(listenerOptions, token)
             .ConfigureAwait(false);
 
-        //Console.WriteLine("Server started...");
 
         ListenConnections(listener, handlers, onFinalize, token);
 
@@ -63,7 +60,6 @@ public static partial class Server
             Action onFinalize,
             CancellationToken token)
         {
-            //Console.WriteLine("Waiting clients...");
             try
             {
             DO: HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), handlers, token); goto DO;
@@ -84,12 +80,11 @@ public static partial class Server
             RequestHandler handlers,
             CancellationToken token)
         {
-            //Console.WriteLine("Connected with client...");
             await using (connection)
             {
                 try
                 {
-                DO: await HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, token); goto DO;
+                DO: _ = HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, token); goto DO;
                 }
                 catch
                 {
@@ -98,47 +93,57 @@ public static partial class Server
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static async ValueTask HandleStreamAsync(
+        static async Task HandleStreamAsync(
             QuicStream stream,
             RequestHandler handlers,
             CancellationToken token)
         {
             await using (stream)
             {
-                var reader = PipeReader.Create(stream);
-                PipeWriter? writer = null;
                 try
                 {
-                    while (await reader.ReadAsync(token).ConfigureAwait(false) is { IsCompleted: false, IsCanceled: false, Buffer: { IsEmpty: false } buffer })
-                    {
-                        await HandleRequestAsync(handlers, buffer, writer ??= PipeWriter.Create(stream), reader, token);
-                    }
+                    await ServeQuicStreamAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token).ConfigureAwait(false);
                 }
-                catch
+                catch (Exception ex) when (ex is OperationCanceledException or IOException or QuicException)
                 {
-                    reader.Complete();
-                    writer?.Complete();
                 }
             }
         }
+    }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static ValueTask<FlushResult> HandleRequestAsync(RequestHandler handlers, ReadOnlySequence<byte> buffer, PipeWriter writer, PipeReader reader, CancellationToken token)
+    /// <summary>
+    /// Un stream QUIC es un RPC: la peticion <c>[opId][cuerpo]</c> la delimita el FIN y el propio
+    /// stream empareja las respuestas <c>[len][estado][cuerpo]</c>, asi que no hace falta corrId.
+    /// </summary>
+    internal static async Task ServeQuicStreamAsync(PipeReader reader, PipeWriter writer, RequestHandler handlers, CancellationToken token)
+    {
+        try
         {
-            try
+            ReadResult result;
+
+            while (!(result = await reader.ReadAsync(token).ConfigureAwait(false)).IsCompleted)
             {
-                RequestContext requestContext = new(buffer.Slice(8), writer);
-                return handlers(Deserialize<long>(buffer.Slice(0, 8)), requestContext, token);
+                if (result.Buffer.Length > Framing.MaxFrameSize) throw new InvalidDataException($"Request too large: {result.Buffer.Length}.");
+
+                reader.AdvanceTo(result.Buffer.Start, result.Buffer.End);
             }
-            catch (Exception ex)
-            {
-                return writer.WriteAsync(Serialize(ex.ToString()), token);
-            }
-            finally
-            {
-                reader.AdvanceTo(buffer.End);
-            }
+
+            var request = result.Buffer;
+
+            if (request.Length is < Framing.OpIdSize or > Framing.MaxFrameSize) throw new InvalidDataException($"Invalid request length: {request.Length}.");
+
+            long op = Framing.ReadOpId(request);
+            int length = (int)request.Length - Framing.OpIdSize;
+            byte[] body = ArrayPool<byte>.Shared.Rent(length);
+            request.Slice(Framing.OpIdSize).CopyTo(body);
+            reader.AdvanceTo(request.End);
+
+            await DispatchAsync(handlers, op, new(0, body.AsMemory(0, length), new ResponseChannel(writer, correlated: false), token), body, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            await reader.CompleteAsync().ConfigureAwait(false);
+            await writer.CompleteAsync().ConfigureAwait(false);
         }
     }
 }

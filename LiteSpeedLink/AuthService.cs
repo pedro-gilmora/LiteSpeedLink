@@ -1,19 +1,21 @@
-﻿//Console.WriteLine("Test");
 
-//Console.WriteLine("Test");
 using Application.Contracts;
 
 namespace LiteSpeedLink;
 
 // Implementation layer
-public partial class AuthService() : IAuthService
+public partial class AuthService() : IAuth
 {
     public string Greet(string name) => $"Hello, {name}!";
 
+    public string Echo(string text) => text;
+
+    public int Square(int value) => value * value;
+
+    public string Twice(string value) => value + value;
+
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
-        Console.WriteLine("Are credentials correct {0}", credentials is ("pedro", "test!123"));
-        //authServiceLogger.Log(LogLevel.Information, "testing logging");
         if (credentials is ("pedro", "test!123"))
         {
             token = "Token";

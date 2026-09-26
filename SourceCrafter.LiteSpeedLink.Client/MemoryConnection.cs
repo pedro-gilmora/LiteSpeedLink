@@ -1,5 +1,6 @@
-﻿using MemoryPack;
+using MemoryPack;
 using SharedMemory;
+using System.Buffers;
 using System.Collections;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -13,12 +14,13 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 
 
 [SupportedOSPlatform("windows")]
-public sealed class MemoryConnection(string contextId, int timeout = 100, System.Text.Encoding? encoding = null) : IConnectionAsync, IConnection, IDisposable
+public sealed class MemoryConnection(string contextId, int timeout = 5000, System.Text.Encoding? encoding = null) : IConnectionAsync, IConnection, IDisposable
 {
     private readonly string _contextId = contextId;
     private readonly int _timeout = timeout;
     public System.Text.Encoding Encoding { get; } = encoding ??= System.Text.Encoding.Default;
     private readonly Lock _lock = new();
+    private RpcBuffer? _rpc;
 
     private RpcBuffer MemoryRpc
     {
@@ -26,9 +28,10 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
         {
             lock (_lock)
             {
-                if (field?.DisposeFinished is null or true) field = new RpcBuffer(_contextId);
+                if (_rpc?.DisposeFinished is null or true) _rpc = new RpcBuffer(_contextId);
+
+                return _rpc;
             }
-            return field;
         }
     }
 
@@ -38,20 +41,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        Console.WriteLine($"Sent {op}: {payload}");
-        var response = MemoryRpc.RemoteRequest(SerializePayload(op, payload), _timeout, token);
-
-        Console.WriteLine($"Received {response.Success}: {response.Data?.Length} bytes");
-
-        if (response is { Success: true, Data: { Length: > 0 } responseData })
-        {
-            TOut? @out = Deserialize<TOut>(responseData);
-            Console.WriteLine($"Response: {@out}");
-            return @out;
-        }
-        Console.WriteLine($"Response: Nothing");
-
-        return default;
+        return ReadResponse<TOut>(MemoryRpc.RemoteRequest(SerializePayload(op, payload), _timeout, token));
     }
 
     public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -59,12 +49,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        if (MemoryRpc.RemoteRequest(BitConverter.GetBytes(op), _timeout, token) is { Success: true, Data: { Length: > 0 } responseData })
-        {
-            return Deserialize<TOut>(responseData);
-        }
-
-        return default;
+        return ReadResponse<TOut>(MemoryRpc.RemoteRequest(SerializeOpId(op), _timeout, token));
     }
 
     public bool Send<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
@@ -73,7 +58,8 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return MemoryRpc.RemoteRequest(SerializePayload(op, payload), _timeout, token).Success;
+        ReadResponse<byte>(MemoryRpc.RemoteRequest(SerializePayload(op, payload), _timeout, token));
+        return true;
     }
 
     public bool Send(
@@ -81,7 +67,8 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
         CancellationToken token = default,
         [CallerMemberName] string name = "")
     {
-        return MemoryRpc.RemoteRequest(BitConverter.GetBytes(op), _timeout, token).Success;
+        ReadResponse<byte>(MemoryRpc.RemoteRequest(SerializeOpId(op), _timeout, token));
+        return true;
     }
 
     public IEnumerable<TOut> Enumerate<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -151,20 +138,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        Console.WriteLine($"Sent {op}: {payload}");
-        var response = await MemoryRpc.RemoteRequestAsync(SerializePayload(op, payload), _timeout, token);
-
-        Console.WriteLine($"Received {response.Success}: {response.Data?.Length} bytes");
-
-        if (response is { Success: true, Data: { Length: > 0 } responseData })
-        {
-            TOut? @out = Deserialize<TOut>(responseData);
-            Console.WriteLine($"Response: {@out}");
-            return @out;
-        }
-        Console.WriteLine($"Response: Nothing");
-
-        return default;
+        return ReadResponse<TOut>(await MemoryRpc.RemoteRequestAsync(SerializePayload(op, payload), _timeout, token).ConfigureAwait(false));
     }
 
     public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -172,13 +146,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-
-        if (await MemoryRpc.RemoteRequestAsync(BitConverter.GetBytes(op), _timeout, token) is { Success: true, Data: { Length: > 0 } responseData })
-        {
-            return Deserialize<TOut>(responseData);
-        }
-
-        return default;
+        return ReadResponse<TOut>(await MemoryRpc.RemoteRequestAsync(SerializeOpId(op), _timeout, token).ConfigureAwait(false));
     }
 
     public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
@@ -187,8 +155,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        //Console.WriteLine($"{_contextId}: Sending request: {name} for operation: {op} with payload: {payload}");
-        await MemoryRpc.RemoteRequestAsync(SerializePayload(op, payload), _timeout, token);
+        ReadResponse<byte>(await MemoryRpc.RemoteRequestAsync(SerializePayload(op, payload), _timeout, token).ConfigureAwait(false));
     }
 
     public async ValueTask SendAsync(
@@ -196,7 +163,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
         CancellationToken token = default,
         [CallerMemberName] string name = "")
     {
-        await MemoryRpc.RemoteRequestAsync(BitConverter.GetBytes(op), _timeout, token);
+        ReadResponse<byte>(await MemoryRpc.RemoteRequestAsync(SerializeOpId(op), _timeout, token).ConfigureAwait(false));
     }
 
     public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -260,26 +227,64 @@ public sealed class MemoryConnection(string contextId, int timeout = 100, System
         return buffer.ReceiveAllAsync(token);
     }
 
-    private static byte[]? SerializePayload<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn payload)
+    [ThreadStatic] private static ArrayBufferWriter<byte>? _requestWriter;
+
+    /// <summary>Construye <c>[opId][cuerpo]</c> sobre un buffer por hilo; solo asigna el array que exige RpcBuffer.</summary>
+    private static byte[] SerializePayload<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn payload)
     {
-        ReadOnlySpan<byte> body = Serialize(payload);
+        var writer = _requestWriter ??= new(256);
 
-        int reqLen = body.Length + 8;
+        writer.ResetWrittenCount();
 
-        Memory<byte> requestBuffer = new byte[reqLen];
+        Framing.WriteOpId(writer.GetSpan(Framing.OpIdSize), op);
+        writer.Advance(Framing.OpIdSize);
 
-        BitConverter.GetBytes(op).CopyTo(requestBuffer);
+        Serialize(writer, payload);
 
-        body.CopyTo(requestBuffer.Span[8..]);
+        return writer.WrittenSpan.ToArray();
+    }
 
-        return MemoryMarshal.TryGetArray((ReadOnlyMemory<byte>)requestBuffer, out var arr) ? arr.Array : null;
+    private TOut? ReadResponse<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(RpcResponse response)
+    {
+        if (!response.Success) throw new TimeoutException($"No response from memory server '{_contextId}'.");
+
+        if (response.Data is not { Length: > 0 } data) throw new InvalidDataException("Empty response.");
+
+        switch ((ResponseStatus)data[0])
+        {
+            case ResponseStatus.Success: return Deserialize<TOut>(data.AsSpan(Framing.StatusSize));
+
+            case ResponseStatus.StreamEnd: return default;
+
+            case ResponseStatus.NotFound: throw new NotImplementedException($"Implementation is missing from '{_contextId}'");
+
+            case ResponseStatus.Failed:
+                throw new InvalidOperationException($"""
+                    Execution failed on '{_contextId}':
+                    REASON:
+
+                    {Deserialize<string>(data.AsSpan(Framing.StatusSize))}
+                    """);
+
+            default: throw new InvalidDataException($"Unexpected response status {data[0]}.");
+        }
+    }
+
+    private static byte[] SerializeOpId(long op)
+    {
+        var request = new byte[Framing.OpIdSize];
+
+        Framing.WriteOpId(request, op);
+
+        return request;
     }
 
     public void Dispose()
     {
         lock (_lock)
         {
-            MemoryRpc?.Dispose();
+            _rpc?.Dispose();
+            _rpc = null;
         }
     }
 }

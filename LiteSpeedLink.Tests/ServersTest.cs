@@ -1,4 +1,4 @@
-﻿using FluentAssertions;
+using FluentAssertions;
 using MemoryPack;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
 using SharedMemory;
@@ -24,7 +24,6 @@ public class ServersTest(ITestOutputHelper output)
     [SupportedOSPlatform("windows")]
     public void TestMemory()
     {
-        var timeStamp = Stopwatch.GetTimestamp();
         const int timeout = 1000;
         string MmfName = $"Test-{Guid.CreateVersion7()}";
         using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }, timeout))
@@ -59,8 +58,6 @@ public class ServersTest(ITestOutputHelper output)
                     }
                 }
             }
-
-            output.WriteLine($"Took: {Stopwatch.GetElapsedTime(timeStamp)}");
         }
     }
 
@@ -69,7 +66,6 @@ public class ServersTest(ITestOutputHelper output)
     [SupportedOSPlatform("windows")]
     public async Task TestMemoryAsync()
     {
-        var timeStamp = Stopwatch.GetTimestamp();
         const int timeout = 1000;
         string MmfName = $"Test-{Guid.CreateVersion7()}";
         using (Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }, timeout))
@@ -104,14 +100,12 @@ public class ServersTest(ITestOutputHelper output)
                     }
                 }
             }
-
-            output.WriteLine($"Took: {Stopwatch.GetElapsedTime(timeStamp)}");
         }
     }
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
-    static async Task<byte[]?> HandleAsyncMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
+    static async Task<byte[]> HandleAsyncMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
     {
         switch (op)
         {
@@ -119,18 +113,17 @@ public class ServersTest(ITestOutputHelper output)
 
                 var (a, b, _) = ctx.Get<(int, int, bool)>();
 
-                return MemoryPackSerializer.Serialize(a + b);
+                return ctx.Return(a + b);
 
             case 1:
 
                 string body = ctx.Get<string>()!;
 
-                return MemoryPackSerializer.Serialize(new string([.. body.Reverse()]));
+                return ctx.Return(new string([.. body.Reverse()]));
 
             case 2:
 
-                await ctx.Yield(StreamInts(token), token);
-                return null;
+                return await ctx.Yield(StreamInts(token));
 
                 static IAsyncEnumerable<int> StreamInts(CancellationToken token)
                 {
@@ -144,8 +137,22 @@ public class ServersTest(ITestOutputHelper output)
                     return buffer.ReceiveAllAsync(token);
                 }
 
-            default: return null;
+            default: return ctx.NotFound();
         }
+    }
+
+    [Fact]
+    public async Task TestUdpConcurrentRoundtrips()
+    {
+        const int serverPort = 5003;
+
+        using UdpClient server = Server.StartUdpServer(serverPort, HandleUdpRequestAsync, () => { }, default);
+        using var connection = new DnsEndPoint("localhost", serverPort).AsUdpConnection();
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 200).Select(i =>
+            connection.GetAsync<(int, int, bool), int>(0, (i, i, false)).AsTask()));
+
+        results.Should().Equal(Enumerable.Range(0, 200).Select(i => i * 2));
     }
 
     [Fact]
@@ -242,21 +249,21 @@ public class ServersTest(ITestOutputHelper output)
         output.WriteLine($"Took: {Stopwatch.GetElapsedTime(timeStamp)}");
     }
 
-    private ValueTask<FlushResult> HandleRequestAsync(long id, RequestContext ctx, CancellationToken token)
+    private ValueTask<ResponseStatus> HandleRequestAsync(long id, RequestContext ctx, CancellationToken token)
     {
         switch (id)
         {
             case 0:
                 var (a, b, isOdd) = ctx.Get<(int, int, bool)>();
 
-                return ctx.ReturnAsync(a + b, token);
+                return ctx.ReturnAsync(a + b);
             case 1:
                 string body = ctx.Get<string>()!;
 
-                return ctx.ReturnAsync(body.Reverse().ToArray(), token);
+                return ctx.ReturnAsync(body.Reverse().ToArray());
             case 2:
 
-                return ctx.EnumerateAsync(SendItems, token);
+                return ctx.EnumerateAsync(SendItems);
 
                 static IEnumerable<int> SendItems()
                 {
@@ -267,35 +274,35 @@ public class ServersTest(ITestOutputHelper output)
                 }
         }
 
-        return default;
+        return ctx.NotFoundAsync();
     }
 
-    private async ValueTask<int> HandleUdpRequestAsync(long id, UdpRequestContext ctx, CancellationToken token)
+    private async ValueTask<ResponseStatus> HandleUdpRequestAsync(long id, UdpRequestContext ctx, CancellationToken token)
     {
         switch (id)
         {
             case 0:
                 var (a, b, _) = ctx.Get<(int, int, bool)>();
 
-                return await ctx.ReturnAsync(a + b, token);
+                return await ctx.ReturnAsync(a + b);
 
             case 1:
 
                 string body = ctx.Get<string>()!;
 
-                return await ctx.ReturnAsync(body.Reverse().ToArray(), token);
+                return await ctx.ReturnAsync(body.Reverse().ToArray());
 
             case 2:
 
                 for (int i = 1; i <= 10; i++)
                 {
-                    await ctx.ReturnAsync(i, token);
+                    await ctx.YieldAsync(i);
                 }
 
-                return await ctx.EndStreamingAsync(token);
+                return await ctx.EndStreamingAsync();
         }
 
-        return default;
+        return await ctx.NotFoundAsync();
     }
 
     [Fact]
@@ -356,17 +363,17 @@ public class ServersTest(ITestOutputHelper output)
 
                 var (a, b, _) = ctx.Get<(int, int, bool)>();
 
-                return MemoryPackSerializer.Serialize(a + b);
+                return ctx.Return(a + b);
 
             case 1:
 
                 string body = ctx.Get<string>()!;
 
-                return MemoryPackSerializer.Serialize(new string([.. body.Reverse()]));
+                return ctx.Return(new string([.. body.Reverse()]));
 
             case 2:
 
-                ctx.Yield(StreamInts(), token);
+                return ctx.Yield(StreamInts());
 
                 static IEnumerable<int> StreamInts()
                 {
@@ -377,8 +384,7 @@ public class ServersTest(ITestOutputHelper output)
                     yield break;
                 }
 
-                goto default;
-            default: return null;
+            default: return ctx.NotFound();
         }
     }
 
@@ -426,6 +432,62 @@ public class ServersTest(ITestOutputHelper output)
         }
 
         output.WriteLine($"Took: {Stopwatch.GetElapsedTime(timeStamp)}");
+    }
+
+    [Fact]
+    public async Task TestTcpRejectsOversizedFrame()
+    {
+        const int serverPort = 5004;
+
+        using var server = Server.StartTcpServer(serverPort, HandleRequestAsync, () => { }, null, default);
+        using var socket = new System.Net.Sockets.TcpClient();
+        await socket.ConnectAsync("localhost", serverPort);
+        var stream = socket.GetStream();
+
+        await stream.WriteAsync(BitConverter.GetBytes(int.MaxValue));
+
+        var read = await stream.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        read.Should().Be(0);
+    }
+
+    [Fact]
+    [RequiresPreviewFeatures]
+    [SupportedOSPlatform("windows")]
+    public async Task TestTcpConcurrentRoundtrips()
+    {
+        const int serverPort = 5002;
+
+        using var server = Server.StartTcpServer(serverPort, HandleRequestAsync, () => { }, null, default);
+
+        await using var connection = new DnsEndPoint("localhost", serverPort).AsTcpConnection();
+
+        var calls = Enumerable.Range(0, 500).Select(async n =>
+        {
+            switch (n % 4)
+            {
+                case 0:
+                    (await connection.GetAsync<(int, int, bool), int>(0, (n, 7, false))).Should().Be(n + 7);
+                    break;
+
+                case 1:
+                    var payload = $"payload-{n}";
+                    (await connection.GetAsync<string, string>(1, payload)).Should().Be(new string([.. payload.Reverse()]));
+                    break;
+
+                case 2:
+                    int y = 1;
+                    await foreach (var item in connection.EnumerateAsync<int>(2)) item.Should().Be(y++);
+                    y.Should().Be(11);
+                    break;
+
+                default:
+                    var act = async () => await connection.GetAsync<int>(99);
+                    await act.Should().ThrowAsync<NotImplementedException>();
+                    break;
+            }
+        });
+
+        await Task.WhenAll(calls);
     }
 }
 

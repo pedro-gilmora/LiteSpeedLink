@@ -12,6 +12,10 @@ internal sealed class ServiceHostAttribute(ServiceConnectionType connectionType 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 internal sealed class ServiceClientAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
 
+/// <summary>Servicio expuesto por un [ServiceClient] como propiedad (IAuth -> Auth).</summary>
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+internal sealed class ClientServiceAttribute<TService> : Attribute where TService : IServiceUnit;
+
 [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
 internal sealed class ServiceAttribute(string? name = null) : Attribute;
 

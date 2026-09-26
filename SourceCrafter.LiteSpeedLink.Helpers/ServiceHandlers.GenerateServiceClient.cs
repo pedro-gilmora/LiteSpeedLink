@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 
@@ -67,8 +67,6 @@ public partial class ").Append(typeShortName).Append(@"
 {
     private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
-    private readonly static object _lock = new object();
-
     public ").Append(typeShortName).Append(connectionType > 0
             // QUIC, TCP, UDP
             ? @"(string hostname, int port)
@@ -81,7 +79,13 @@ public partial class ").Append(typeShortName).Append(@"
 
 
         clientCode.Append(connTypeName).Append(@"Connection();
-    }");
+    }
+
+    private readonly global::System.Threading.Lock __servicesLock = new();");
+
+        string header = nsStr.Length > 0
+            ? "using SourceCrafter.LiteSpeedLink.Client;\n\nnamespace " + nsStr + ";\n"
+            : "using SourceCrafter.LiteSpeedLink.Client;\n";
 
         string
             typeName = serviceClient.GlobalNamespaced,
@@ -90,16 +94,52 @@ public partial class ").Append(typeShortName).Append(@"
             justTypeMeta = nsMeta.Length > 0 ? typeMeta.Replace(nsMeta, "") : typeMeta,
             hintName = nsStr.Length > 0 ? nsStr + "." + justTypeMeta : justTypeMeta;
 
-        foreach (var iFace in
-            serviceClient.AllInterfaces.Where(i =>
-                 i.Interfaces.Any(ii => ii.GlobalNamespaced == "global::SourceCrafter.LiteSpeedLink.IServiceUnit")).ToImmutableArray().AsSpan())
+        clientCode.Append(@"
+}");
+
+        contribution.AddSource(hintName + ".client", clientCode.ToString());
+
+        foreach (var iFace in serviceClient.GetAttributes()
+            .Where(a => a.AttributeClass is { IsGenericType: true } ac
+                && ac.ConstructedFrom.ToDisplayString() == ClientServiceAttr)
+            .Select(a => a.AttributeClass!.TypeArguments[0])
+            .OfType<INamedTypeSymbol>()
+            .Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default))
         {
             var fullTypeName = iFace.GlobalNamespaced;
+            var ifaceName = iFace.Name;
+            var propName = ifaceName.Length > 1 && ifaceName[0] == 'I' && char.IsUpper(ifaceName[1]) ? ifaceName.Substring(1) : ifaceName;
+            var implName = propName + "Client";
+            var fieldName = "__" + char.ToLowerInvariant(propName[0]) + propName.Substring(1);
+
+            clientCode = new StringBuilder(header).Append(@"
+public partial class ").Append(typeShortName).Append(@"
+{
+    private ").Append(implName).Append("? ").Append(fieldName).Append(@";
+
+    public ").Append(implName).Append(' ').Append(propName).Append(@"
+    {
+        get
+        {
+            if (").Append(fieldName).Append(@" is null)
+                lock (__servicesLock)
+                    ").Append(fieldName).Append(@" ??= new(__connection, this);
+
+            return ").Append(fieldName).Append(@";
+        }
+    }
+
+    public sealed class ").Append(implName).Append("(global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append("Connection __connection, ").Append(typeShortName).Append(" __provider) : ").Append(fullTypeName).Append(@"
+    {");
+
+            var membersStart = clientCode.Length;
 
             foreach (var member in iFace.GetMembers())
             {
                 if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                 {
+                    if (TryGenerateProcessedClientMethod(clientCode, container, iFace, method, contribution)) continue;
+
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
                         isTask = method.ReturnType.TryGetAsyncType(out var returnType, out var hasReturnType, out var isValueTask),
@@ -399,7 +439,7 @@ public partial class ").Append(typeShortName).Append(@"
     public ");
 
                         clientCode
-                            .Append(method.GlobalNamespaced.Replace(fullTypeName + ".", ""))
+                            .Append(method.GlobalMemberSignature)
                             .Append(@"
     {
         ");
@@ -448,12 +488,16 @@ public partial class ").Append(typeShortName).Append(@"
                 }
             }
 
-        }
+            // Los miembros se emiten a 4 espacios; se anidan un nivel dentro de la clase cliente.
+            clientCode.Replace("\n", "\n    ", membersStart, clientCode.Length - membersStart);
+            clientCode.Replace("\n    \n", "\n\n", membersStart, clientCode.Length - membersStart).Replace("\n    \r\n", "\n\r\n", membersStart, clientCode.Length - membersStart);
 
-        clientCode.Append(@"
+            clientCode.Append(@"
+    }
 }");
 
-        contribution.AddSource(hintName + ".client", clientCode.ToString());
+            contribution.AddSource(hintName + "." + propName + ".client", clientCode.ToString());
+        }
     }
     static bool Exchange(ref bool value)
     {

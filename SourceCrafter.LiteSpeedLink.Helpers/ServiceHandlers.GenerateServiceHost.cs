@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SourceCrafter.DependencyInjection.Generation;
@@ -81,7 +81,7 @@ public partial class ServiceHandlersGenerator
                   null),
         };
 
-        var handlerReturnType = connectionType switch { 0 => "byte[]?", 1 => "int", _ => "global::System.IO.Pipelines.FlushResult" };
+        var handlerReturnType = connectionType is 0 ? "byte[]" : "global::SourceCrafter.LiteSpeedLink.ResponseStatus";
 
         var handlerType = context.Replace("Context", "Handler");
 
@@ -156,8 +156,16 @@ public partial class ").Append(typeName).Append(@"
         ").Append(context).Append(@" __context,
         global::System.Threading.CancellationToken __token)
     {
+        try
+        {");
+
+        var switchStart = hostCode.Length;
+
+        hostCode.Append(@"
         switch(id)
         {");
+
+        var casesStart = hostCode.Length;
 
         int providerTypeId = SymbolEqualityComparer.Default.GetHashCode(serviceHost);
 
@@ -210,6 +218,9 @@ public partial class ").Append(typeName).Append(@"
             // El tipo expuesto ya viene resuelto en la propia fila: no hace falta el mapa
             // lateral que antes evitaba retener ISymbol.
             if (dependency.ExportType is not { } exportType) continue;
+
+            // Los pipelines registrados se consumen desde los handlers; no son operaciones remotas.
+            if (exportType is INamedTypeSymbol namedExport && TryGetStage(namedExport, out _)) continue;
 
             foreach (var member in exportType.GetMembers())
             {
@@ -286,12 +297,18 @@ public partial class ").Append(typeName).Append(@"
                     separateRequestTypes = false,
                     cancelTokenIsSet = false;
 
+                var methodLocation = method.Locations.FirstOrDefault();
+                var serverPost = GetStages(method.GetReturnTypeAttributes(), true, container, contribution, methodLocation);
+                Action? applyPreStages = null;
+
                 if (returnsType)
                 {
+                    ValidateChain(compilation, method.ReturnType, serverPost, null, methodName + " server response", contribution, methodLocation);
+
                     outCount++;
                     resultExpression += () =>
                     {
-                        hostCode.Append("___result");
+                        hostCode.Append(serverPost.Count > 0 ? StageVar("___result", serverPost.Count - 1) : "___result");
 
                         separateResponseParams = true;
                     };
@@ -350,15 +367,33 @@ public partial class ").Append(typeName).Append(@"
 
                         requestParamsCount++;
 
+                        var serverPre = GetStages(param.GetAttributes(), true, container, contribution, methodLocation);
+
+                        if (serverPre.Count > 0 && param.RefKind is not RefKind.None)
+                        {
+                            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, methodLocation, methodName + ": processors don't support ref/out/in parameters yet"));
+                            serverPre.Clear();
+                        }
+
                         if (param.RefKind != RefKind.Out)
                         {
+                            var wireName = serverPre.Count > 0 ? "__w_" + param.Name : param.Name;
+                            var wireType = serverPre.Count > 0 ? serverPre[0].In.GlobalNamespaced : paramType;
+
+                            if (serverPre.Count > 0)
+                            {
+                                ValidateChain(compilation, null, serverPre, param.Type, methodName + "(" + param.Name + ") server request", contribution, methodLocation);
+
+                                applyPreStages += () => hostCode.Append(ApplyStages(wireName, serverPre, connectionType > 0, provider, "            ", param.Name));
+                            }
+
                             //Register params to deconstruct request from deserialization
                             requestDeconstruct += () =>
-                                (Exchange(ref separateRequestParams) ? hostCode.Append(", ") : hostCode).Append(param.Name);
+                                (Exchange(ref separateRequestParams) ? hostCode.Append(", ") : hostCode).Append(wireName);
 
                             //Register types for request deserialization
                             requestTypes += () =>
-                                (Exchange(ref separateRequestTypes) ? hostCode.Append(", ") : hostCode).Append(paramType);
+                                (Exchange(ref separateRequestTypes) ? hostCode.Append(", ") : hostCode).Append(wireType);
                         }
 
 
@@ -459,6 +494,8 @@ public partial class ").Append(typeName).Append(@"
                     }
                 }
 
+                applyPreStages?.Invoke();
+
                 if (returnsType)
                 {
                     hostCode.Append(@"var ___result = ");
@@ -480,7 +517,12 @@ public partial class ").Append(typeName).Append(@"
 
                 hostCode.Append(@");
 
-            return ").Append(connectionType == 0 ? "__context.Return(" : "await __context.ReturnAsync(");
+            ");
+
+                if (returnsType && serverPost.Count > 0)
+                    hostCode.Append(ApplyStages("___result", serverPost, connectionType > 0, provider, "            "));
+
+                hostCode.Append("return ").Append(connectionType == 0 ? "__context.Return(" : "await __context.ReturnAsync(");
 
                 if (outCount > 0)
                 {
@@ -497,8 +539,10 @@ public partial class ").Append(typeName).Append(@"
                         hostCode.Append(')');
                     }
                 }
-
-                if (connectionType > 0) hostCode.Append(", __token");
+                else
+                {
+                    hostCode.Append("false");
+                }
 
                 hostCode.Append(@");
         }
@@ -507,16 +551,31 @@ public partial class ").Append(typeName).Append(@"
         }
 
         hostCode.Append(@"
-
         default:
+            return ").Append(connectionType is 0 ? "__context.NotFound()" : "await __context.NotFoundAsync()").Append(@";");
 
-            return ").Append(connectionType == 0 ? "null" : "await __context.ReturnAsync(false)").Append(@";
+        hostCode.Replace("\n        ", "\n            ", casesStart, hostCode.Length - casesStart);
+
+        hostCode.Append(@"
+        }");
+
+        hostCode.Replace("\n        ", "\n            ", switchStart, hostCode.Length - switchStart);
+
+        hostCode.Append(@"
+        }
+        catch (global::System.OperationCanceledException) when (__token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (global::System.Exception __ex)
+        {
+            return ").Append(connectionType is 0 ? "__context.Fail(__ex)" : "await __context.FailAsync(__ex)").Append(@";
         }
     }
 }");
         if (handlerResultType.HasValue)
         {
-            hostCode.Insert(handlerResultType.Value, /*isMemoryAsync ? "global::System.Threading.Tasks.Task<byte[]?>" : */"byte[]?");
+            hostCode.Insert(handlerResultType.Value, "byte[]");
         }
 
         hostCode.Insert(onFinalizePoint, containerDisposability switch
@@ -582,12 +641,23 @@ public partial class ").Append(typeName).Append(@"
                 && services.TryGetValue((resolvedLifetime, exportTypeFullName, param.Name), out service!));
     }
 
+    /// <summary>
+    /// Identificador estable de una operación. Debe producir el mismo valor en cliente y host,
+    /// independientemente de la máquina, la cultura o el codepage ANSI por defecto.
+    /// </summary>
     public static long GetServiceId(string input)
     {
-        using MD5 md5 = MD5.Create();
-        Guid id = new(md5.ComputeHash(Encoding.Default.GetBytes(input)));
+        const ulong offsetBasis = 14695981039346656037;
+        const ulong prime = 1099511628211;
 
-        return BitConverter.ToInt64(id.ToByteArray(), 8);
+        var hash = offsetBasis;
+
+        foreach (var b in Encoding.UTF8.GetBytes(input))
+        {
+            hash = (hash ^ b) * prime;
+        }
+
+        return unchecked((long)hash);
     }
 
     internal const string

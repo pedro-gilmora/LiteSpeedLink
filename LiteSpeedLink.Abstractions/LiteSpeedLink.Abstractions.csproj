@@ -13,6 +13,8 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.CodeAnalysis.Common" Version="5.3.0" />
+		<!-- Fork modificado de SharedMemory: fluye como dll transitiva a quien referencie Abstractions, nunca como paquete. -->
+		<ProjectReference Include="..\..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
 		<Compile Include="D:\Code\SourceCrafter.DependencyInjection\Solution\Metadata\Constants.cs">
 			<Link>DISG\%(RecursiveDir)%(Filename)%(Extension)</Link>
 		</Compile>

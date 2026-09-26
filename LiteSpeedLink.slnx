@@ -4,9 +4,12 @@
     <BuildType Name="DEBUG_SG" />
     <BuildType Name="Release" />
   </Configurations>
-  <Folder Name="/General/" />
+  <Folder Name="/Generals/">
+    <File Path="PLAN.md" />
+  </Folder>
   <Folder Name="/Tests/">
     <Project Path="Application.Contracts/Application.Contracts.csproj" />
+    <Project Path="LiteSpeedLink.Benchmarks/LiteSpeedLink.Benchmarks.csproj" />
     <Project Path="LiteSpeedLink.Tests/LiteSpeedLink.Tests.csproj" />
     <Project Path="LiteSpeedLink/LiteSpeedLink.csproj" />
   </Folder>
