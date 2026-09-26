@@ -42,12 +42,18 @@ Código generado: `LiteSpeedLink\obj\Generated\SourceCrafter.DependencyInjection
 - **Deadlock sync tras async en Memory**: resuelto con `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (fork). Si reaparece un timeout en una llamada sync, mirar ahí.
 - **Id de operación**: `GetServiceId` se calcula sobre el nombre completo del método; no alterarlo al cambiar el formato de firmas (5.3).
 - Warnings `MSB3270` (MSIL vs AMD64 de `SharedMemory.dll`): conocidos e inocuos.
+- **`SharedMemory.dll` se consume publicado**: tras tocar el fork, `dotnet publish ..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj -c Release -f net10.0 -r win-x64 --self-contained false -o ..\SourceCrafter.DependencyInjection\publish\net10.0\win-x64`.
+- **Ediciones desde VS que no llegan a disco** en ficheros abiertos (`ServersTest.cs`): verificar con `Test-Path`/`Select-String`.
 
 ### Siguiente paso
 
-1. Commit pendiente en ambos repos (`MemLink`/`dev` y `SharedMemory`/`migrating-to-modern-memory-management`).
-2. Pendientes de 5.2: estado real del rechazo en el cliente, test del diagnóstico de implementación implícita, `ref`/`out`/`in` y streams con procesadores.
-3. Después, por prioridad: PoC-A (concurrencia) → 3.3 framing TCP → 5.7 + 2.1 (`SharedMemory` interno, cero copias).
+0. Regla: cada item hecho lleva test o PoC. `CoverageGapTests.cs` cubre 2.4, 3.1, 3.3 (trama incompleta),
+   3.4 (TCP y memoria), 3.7 (QUIC concurrente) y 5.4. Sin test automático (requieren arnés Roslyn):
+   1.3, 3.2, 5.2, 5.3 → hoy su PoC es `LiteSpeedLink/Program.cs` (compila el código generado y lo ejecuta).
+
+1. ~~Commit en ambos repos~~ hecho.
+2. Pendientes de 5.2: test de SCLSL014 (necesita arnés Roslyn), `ref`/`out`/`in` y streams con procesadores, early-return sin excepción.
+3. Después, por prioridad: PoC-A ✔ → 3.3 ✔ → 5.7 + 2.1 (`SharedMemory` interno, cero copias).
 
 ---
 
@@ -111,7 +117,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 ## Fase 1 — Limpieza
 
 - [x] **1.1 `Console.WriteLine` fuera de la ruta caliente** — *hecho en `MemoryConnection`*
-  - **Pendiente**: quedan 3 en el servidor → `Server.Memory.cs:26`, `:43`, `:62`.
+  - [x] ~~Pendiente~~: ya no quedan `Console.WriteLine` en `Server.*` ni en `AuthService`.
 	La de la línea 62 (`Server return: {@in}`) está en `MemoryRequestContext.Return<T>`, es decir,
 	**en cada respuesta**, con boxing de `TIn`.
   - También `AuthService.cs:15` (servicio de prueba, contamina el benchmark).
@@ -136,7 +142,15 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ## Fase 2 — Asignaciones por petición
 
-- [~] **2.1 `SerializePayload` sin asignaciones intermedias** *(acordado)*
+- [x] **2.1 `SerializePayload` sin asignaciones intermedias** *(acordado)*
+  - Hecho: el fork acepta `ReadOnlyMemory<byte>` hasta `WriteProtocolV1` (antes `Send(ReadOnlyMemory)`
+	descartaba el payload si no era un array completo). El cliente envía `WrittenMemory` del writer por
+	hilo: 0 asignaciones de payload; es seguro porque `RpcBuffer` copia de forma síncrona antes de
+	devolver la `Task`. Streams siguen con `ToArray()` (una asignación por apertura).
+  - Hecho (0 copias): `RpcBuffer.Send/SendAsync<TState>(state, Action<IBufferWriter<byte>, TState>)`;
+	un `NodeWriter` escribe directamente en el nodo de memoria compartida. Si el payload no cabe en un
+	nodo, desborda a un buffer reutilizable y se trocea como antes (test `TestMemoryMultiPacketPayload`).
+	El cliente usa `WriteRequest` para Get/Send con payload.
   - `MemoryConnection.cs:263-276`: 3 asignaciones por llamada.
   - Paso 1 (independiente de `SharedMemory`): un único `ArrayPool<byte>` +
 	`BinaryPrimitives` + `MemoryPackSerializer.Serialize(bufferWriter, payload)`. 3 allocs → 1 alquiler.
@@ -244,7 +258,8 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 	(`XxHash64` / FNV-1a en lugar de MD5).
   - Diagnóstico del generador si dos métodos colisionan (compile-time, coherente con P1).
 
-- [~] **3.3 Framing por longitud en TCP** *(acordado)*
+- [x] **3.3 Framing por longitud en TCP** *(acordado)* — `Framing.TryReadFrame` en `MultiplexedChannel`/`ServePipeAsync`. Test `TestTcpFragmentedFrames` (2 peticiones byte a byte, respuestas por `corrId`).
+  - [ ] Test de cliente con servidor falso que responda byte a byte (bucle de `MultiplexedChannel`). Hoy de bajo valor: mismo `TryReadFrame` y bucle calcado de `ServePipeAsync`. Hacerlo cuando el bucle del cliente diverja (TLS 3.8, streaming 4.2).
   - `TcpConnection.cs:108-112` asume `1 ReadAsync == 1 mensaje`. Falso por definición en TCP (P4).
   - Formato: `[int32 length][int64 opId][payload]`, lectura con `SequenceReader<byte>` en bucle.
   - **Prerrequisito de 3.6** (sin delimitación no hay demultiplexación).
@@ -261,7 +276,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Elimina el control de flujo por excepciones del cliente (`TcpConnection.cs:116-131`,
 	que hoy captura `MemoryPackSerializationException` para inferir el estado).
 
-- [ ] **3.5 Fire-and-forget en streaming** — *propuestas pedidas*
+- [x] **3.5 Fire-and-forget en streaming** — *A + B hechas en `MemoryConnection.OpenStream`*: los 4 `Enumerate*` comparten un iterador que crea la sesión antes de enviar (sin carrera) y termina con error si la petición falla (`Failed`/`NotFound`/excepción). El timeout de `RpcBuffer` no cuenta como fallo (la respuesta llega al final del stream). Test `TestMemoryStreamFailureDoesNotHang`. C queda en 4.2.
 
   **Problema**: `MemoryConnection.cs:113, 143, 228, 258`
 
@@ -339,14 +354,22 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 - [~] **3.8 Seguridad en la frontera de red**
   - [x] `Framing.MaxFrameSize` (16 MiB): TCP y QUIC cortan la conexión ante longitudes hostiles. Test `TestTcpRejectsOversizedFrame`.
   - [x] TCP valida trama < `opId`; `Failed` envía `Message`, no la traza.
-  - [ ] Confidencialidad/integridad: QUIC ya usa TLS. TCP → `SslStream` opcional. UDP → sin cifrar (DTLS no está en .NET); solo red de confianza.
+  - [~] Confidencialidad/integridad: QUIC ya usa TLS. TCP → `SslStream` opcional (`cert`): hecho, mTLS con pinning por hash del
+    certificado configurado (antes fallaba con autofirmados: `UntrustedRoot`). Test `TestTcpTls`. UDP → sin cifrar (DTLS no está en .NET); solo red de confianza.
   - [ ] Autenticación: pipeline de servidor (5.2), no transporte.
-  - [ ] Límite de peticiones en vuelo por conexión TCP y por endpoint UDP (hoy ilimitado → DoS).
-  - [ ] UDP: el servidor responde a la IP de origen sin verificarla → amplificación posible. Respuesta ≤ petición o token/cookie.
+  - [x] Límite de peticiones en vuelo por conexión TCP: `Server.MaxInFlightPerConnection` (256). Al
+    llenarse, el lector deja de leer el socket → back-pressure TCP, sin rechazos. Test `TestTcpInFlightLimit`.
+    QUIC no lo necesita (un stream por petición, lo limita QUIC).
+  - [x] Límite por endpoint UDP: `Server.MaxInFlightPerEndpoint` (256). Sin back-pressure posible, el
+    exceso se descarta (el cliente lo ve como pérdida); la entrada se elimina al llegar a 0 para no
+    crecer con IPs falsas. Test `TestUdpInFlightLimit`.
+  - [x] Límites configurables: parámetros opcionales `maxInFlightPerConnection` (`StartTcpServer`) y
+    `maxInFlightPerEndpoint` (`StartUdpServer`), por defecto las constantes; `< 1` lanza. Test `TestCustomInFlightLimits`.
+  - [x] UDP anti-amplificación: `StartUdpServer(..., maxAmplification)` — bytes enviados por petición ≤ N × recibidos; el exceso se descarta. 0 = sin límite (red de confianza, por defecto). Cookie/token queda pendiente si hiciera falta. Test `TestUdpAmplificationBudget`.
 
 ## Fase 4 — Streaming
 
-- [ ] **4.1 `System.Threading.Channels` en lugar de TPL Dataflow** *(acordado, condicionado a medición)*
+- [x] **4.1 `System.Threading.Channels` en lugar de TPL Dataflow** — hecho sin benchmark: mismo código, sin dependencia Dataflow, fallo propagado con `TryComplete(ex)`. `ToBlockingEnumerable` sigue en los `Enumerate` síncronos (API síncrona por diseño). Cubierto por los tests de streaming en memoria (`TestMemoryStreamFailureDoesNotHang`).
   - `MemoryConnection.cs:95,125`: `BufferBlock<T>`; `ToBlockingEnumerable()` (115, 145) bloquea
 	hilos del ThreadPool.
   - **Condición tuya**: se implementa si el benchmark demuestra ganancia. Nota: esto crea dependencia
@@ -354,11 +377,27 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Beneficio no discutible aparte del rendimiento: `Channel` da terminación con excepción (3.5-A)
 	y back-pressure, que `ToBlockingEnumerable` no da.
 
-- [ ] **4.2 No crear un `RpcBuffer` por stream** *(acordado)*
+- [x] **4.2 No crear un `RpcBuffer` por stream** *(opción 2 implementada)*
+  - Opciones:
+    1. Canal propio por cliente: un `RpcBuffer` por `MemoryConnection`, streams multiplexados por `streamId` dentro. Aísla clientes; coste por cliente en vez de por stream.
+    2. **(elegida)** En el fork, `MessageType.StreamItem` con `ResponseId` = `MsgId` de la petición que abrió el stream; solo lo entrega quien la hizo. Fin = la propia respuesta (`StreamEnd`). Sin `RpcBuffer`/eventos/`Guid` por stream ni ack por item.
+    3. Dejarlo pendiente: coste actual = un `RpcBuffer` nombrado por stream, sin medir si importa.
   - `MemoryConnection.cs:93-111, 123-141`: cada `Enumerate` crea memoria compartida + eventos
 	nombrados + `Guid.NewGuid()` formateado a string.
   - → multiplexar sobre el canal principal con `streamId` en la cabecera.
   - Resuelve además 3.5 por completo.
+  - Hecho: `RemoteStreamAsync`/`SendStreamItem` en el fork; `OpenStream` con timeout de inactividad (se reinicia por item) para que un mensaje perdido no cuelgue el stream. Test: `TestMemoryStreamsRoutedPerClient` (8 streams intercalados en un canal).
+  - Optimizado: `SendStreamItem<TState>` serializa directo al nodo (sin `byte[]` por item en servidor); el cliente anota `TickCount64` por item y un `Timer` periodico vigila la inactividad (sin `CancelAfter` por item).
+  - [x] **Validar la optimizacion de streams** — `MemoryStreamBatchingTest`: lotes >16 KB (orden/cantidad), items > nodo (multipaquete), buffers de lote reutilizados bajo concurrencia, y watchdog que cancela un stream parado.
+  1124 µs / 481,6 KB → 852 µs / 278,5 KB.
+    (~90 B/item: `Channel` + boxing del iterador).
+      +~8 KB por los flush en el pool).
+        - [x] **Closures por paquete en `RpcBuffer`** (medido con `--alloc`, `AllocProbe` = GCAllocationTick por tipo): la lambda de los paquetes 2..N y el `Task.Run` de `RpcRequest` capturaban locales y el closure se asignaba en cada llamada aunque no se usara. Movidos a `WriteRemainingPackets`/`DispatchRequest`. Memory 1000 items: 91 KB → 5 KB (88,7 → 0,1 B/item).
+        - [x] **Spin antes de `DataExists.WaitOne`** en `CircularBuffer.GetNodeForReading`: Memory 1000 items 1008 → 702 µs. Memory 1000 items 1008 → 702 µs.
+  - [x] **POC A · lotes por nodo** (`MemoryRequestContext.Append/Flush`): el servidor agrupa `[int32 len][item]` en un solo `StreamItem` (lote 16 KB, buffer reutilizado; se vacía si el productor async va a esperar). Sin tipo de mensaje nuevo. Memory 1000 items: 702 → 109 µs.
+  - [x] **POC B · drenado en lote en el cliente** (`WaitToReadAsync` + `TryRead` en `OpenStream`): 109 → ~100 µs, marginal pero gratis. Resultado: Memory 100 µs / 8 KB vs UDS 304 µs y TCP 344 µs (1000 items). Tests de streaming Memory cubren ambos.
+  - [x] **Varios clientes por `contextId`**: Hecho con `MemoryLobby` (servidor) + `MemoryConnection.Join`: mutex `_LSL_Gate` serializa, el cliente escribe su nombre de sesion en la MMF `_LSL_Lobby`, senala `_LSL_Req`, espera `_LSL_Ready`; el servidor abre un `RpcBuffer` dedicado. `MemoryMultiClientTest` activo y en verde. Pendiente: liberar sesiones de clientes caidos. Contexto previo: `RpcBuffer` es un par master/slave. Dos `MemoryConnection` al mismo nombre comparten el buffer circular de lectura (lectura destructiva) y sus `MsgId` colisionan => respuestas cruzadas (esperado 1, llega 4) y streams cancelados. Evidencia: `MemoryMultiClientTest`. Arreglo real = opcion 1 (canal por cliente: handshake en canal de control que asigna `contextId_n`); no es de streams, afecta a toda la RPC.
+  - [ ] **Investigar `ToListAsync()`** (System.Linq.AsyncEnumerable) sobre `EnumerateAsync`: con el test `TestMemoryStreamsRoutedPerClient` fallaba con `TaskCanceledException` incluso con 1 stream; con `await foreach` dentro de `Task.Run` pasa. Sospecha: continuaciones sincronas en el hilo lector del `RpcBuffer` (`ExecuteSynchronously` + `ReadAllAsync`) que lo bloquean.
 
 - [x] **4.3 Streaming UDP ordenado**
   - Item: `[corrId][status][seq][body]`; fin: `[corrId][StreamEnd][count]`.
@@ -369,10 +408,13 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ## Fase 5 — Diseño
 
-- [ ] **5.1 Deduplicar transportes** *(acordado)*
+- [x] **5.1 Deduplicar transportes** *(acordado)* — cerrado con PoC-B.
   - `Tcp/Udp/Quic` repiten `BuildRequest`, manejo de errores y flujo de lectura.
   - Base `internal` compartida, **no** extensible públicamente (P1).
   - → Alcance real a decidir con **PoC-B**.
+  - [x] Primer paso, sin abstraccion: `ResponseError.Create` (internal) unifica el mapeo status -> excepcion que repetian `Datagram`/`Memory`/`MultiplexedChannel`/`Quic` (4 switches -> 1). Cubierto por los tests de `NotFound`/`Failed` existentes de cada transporte.
+  - [x] Segundo paso: base `StreamConnection` (constructor `private protected` => no extensible fuera, P1) con conexion diferida unica (lock + `Task` compartida, sin semaforo), reenvio Get/Send/Enumerate y orden de cierre (transporte antes que canal: el bucle lector no se desbloquea con `CompleteAsync`). `TcpConnection` y `UdsConnection` solo implementan `OpenAsync`/`Close`. Arregla de paso el posible cuelgue de `TcpConnection.DisposeAsync`. Cubierto por los tests TCP/TLS/UDS existentes.
+  - Lo que queda duplicado (escritura `[opId][cuerpo]`, `Invalid parameters`) difiere por transporte (`corrId`, FIN de QUIC, nodo de memoria); unificarlo exige la base comun => PoC-B.
 
 - [~] **5.2 Pipelines diseñados en compile-time**
 
@@ -382,7 +424,8 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] **5.2-D Ejemplos TIn≠TOut**: `ParseInt : IPipeline<string,int>`, `IntToString : IPipeline<int,string>`. `IAuth.Square` (servidor: red string ↔ contrato int; cliente público `string Square(string)`) e `IAuth.Twice` (cliente: público `int Twice(int)` ↔ red/contrato string). Demo en `Program.cs`.
   - [x] **5.2-D Ejemplo completo**: `IAuth.Echo` usa los 7 atributos (`TrimName`, `Upper`, `Bracket` Task, `Tag`, `Exclaim` ValueTask); `Program.cs` muestra async, sync y rechazo. Salida: `[[HI#]#]#!#`.
   - [x] **Fix transporte memoria**: `RpcBuffer.ResponseReady` con `TaskCreationOptions.RunContinuationsAsynchronously` (fork SharedMemory). Antes la continuación del `await` corría en el hilo lector y una llamada sync posterior lo bloqueaba (deadlock -> timeout 100 s).
-  - [ ] Pendiente: ref/out/in y streams con procesadores (hoy SCLSL012), early-return sin excepción, estado real del rechazo en el cliente (hoy siempre `Failed`), test de SCLSL014.
+  - [x] **Estado real del rechazo**: cada etapa se emite como `var (__x_n_s, __x_n) = etapa; if (__x_n_s is not Success) throw new PipelineRejectedException(__x_n_s, ...)`; ya no se fija `Failed`.
+  - [ ] Pendiente: ref/out/in y streams con procesadores (hoy SCLSL012), early-return sin excepción, test de SCLSL014 (requiere arnés Roslyn con el generador de DI; los tests no referencian `Helpers`).
 
   `Pipeline.cs` actual: 4 interfaces sin uso, y `IPipelineAsync.ProcessAsync` devuelve `TOut` en vez
   de `Task<TOut>`. Se reemplaza entero.
@@ -478,19 +521,22 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - `Constants.cs:14-47`: lanza un proceso, requiere admin, contraseña hardcodeada.
   - → `CertificateRequest.CreateSelfSigned`, puro .NET y cross-platform.
 
-- [ ] **5.5 Timeout y cancelación** *(acordado)*
+- [~] **5.5 Timeout y cancelación** *(acordado)* — timeout por defecto ya es 5000 ms; `Yield` usa el token del servidor por diseño (el generador no inyecta otro).
   - `MemoryConnection`: `timeout = 100` ms por defecto, muy agresivo para handlers no triviales.
   - `Server.Memory.cs:67-88`: `Yield` recibe `token` como parámetro y **usa `cancelToken` del
 	contexto**, ignorando el argumento.
 
-- [ ] **5.6 Unix Domain Sockets como equivalente local de memoria compartida** *(acordado)*
+- [x] **5.6 Unix Domain Sockets como equivalente local de memoria compartida** *(acordado)* — Hecho: `Server.StartUdsServer` + `UdsConnection` reutilizando `ServePipeAsync`/`MultiplexedChannel` (framing 3.3). Test: `UdsTest.TestUdsRoundtrip`. Pendiente: selección automática `LocalConnection` (RpcBuffer/UDS) en el generador. Nota: `MultiplexedChannel.DisposeAsync` cuelga si el socket no se cierra antes (read loop bloqueado); revisar también en TCP.
   - `MemoryConnection` es `[SupportedOSPlatform("windows")]` por `RpcBuffer`.
   - Nuevo transporte `LocalConnection`: `RpcBuffer` en Windows, UDS (`UnixDomainSocketEndPoint`)
 	en Linux/macOS, seleccionado por el generador o en runtime vía `OperatingSystem.IsWindows()`.
   - Reutiliza el framing de 3.3 — UDS es un stream, mismas reglas que TCP (P4).
   - Elimina los `#if`/`SupportedOSPlatform` que hoy se propagan hasta `Program.cs:37`.
 
-- [ ] **5.7 `SharedMemory` como código interno, no como dependencia expuesta** *(decisión tuya)*
+- [~] **5.7 `SharedMemory` como código interno, no como dependencia expuesta** *(decisión tuya)*
+  - Hecho: `StartMemoryServer*` y el host generado devuelven `IDisposable`; `RpcBuffer` ya no aparece
+	Aplazado (no necesario para funcionar): hacer `internal` los tipos del fork
+	`InternalsVisibleTo`); los tests usan `RpcBuffer` directamente y habría que darles acceso.
   - Hoy: `SharedMemory.csproj` referenciado como proyecto y **público** en la superficie de
 	`Client`/`Server`.
   - → incorporar como **linked files** `internal` dentro de `SourceCrafter.LiteSpeedLink.Server` y
@@ -500,7 +546,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - ⚠️ Ojo con duplicar los tipos en dos ensamblados si ambos comparten memoria en el mismo proceso;
 	valorar un tercer proyecto `internal` compartido o `InternalsVisibleTo`.
 
-- [ ] **5.8 Configuración de endpoints** *(de tus descartes)*
+- [ ] **5.8 Configuración de endpoints** *(de tus descartes)* — **Pospuesto** por decisión del usuario; hoy la dirección/nombre se pasa por constructor.
   - El diseño es compile-time, pero **host/puerto/nombre de canal no pueden serlo**: cambian por entorno.
   - Propuesta: mantener el *contrato* en compile-time y externalizar solo la *dirección*, vía variables
 	de entorno o `appsettings`, leídas en el constructor generado.
@@ -512,7 +558,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ## PoCs (antes de comprometer diseño)
 
-- [ ] **PoC-A · Multiplexación y concurrencia del cliente** *(no descartado; hay que demostrarlo)*
+- [x] **PoC-A · Multiplexación y concurrencia del cliente** — TCP/UDP ya multiplexados (3.6/3.7, tests `Test{Tcp,Udp}ConcurrentRoundtrips`). Memory: `RpcBuffer` ya empareja y es seguro con N en vuelo; fallaba por **inanición del thread pool** (bucle lector bloqueante en `Task.Run`; cuello a partir de ~64 llamadas con `Get` sync). Fix en el fork: lector con `TaskCreationOptions.LongRunning`. Test `TestMemoryConcurrentRoundtrips` (200 llamadas mixtas sync/async/stream/NotFound, una instancia).
   - Escenario: N hilos (1, 2, 8, 32) llamando a `Greet` sobre **una misma instancia** de cliente.
   - Medir, por transporte (Memory y TCP): corrección (¿respuestas cruzadas o corruptas?),
 	throughput y latencia p99.
@@ -522,7 +568,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Salida esperada: decidir entre *(a)* serializar por conexión, *(b)* pool de conexiones,
 	*(c)* multiplexación real con `correlationId`.
 
-- [ ] **PoC-B · ¿Necesita la librería una abstracción `ITransport`?**
+- [x] **PoC-B · ¿Necesita la librería una abstracción `ITransport`?** — **No.** `StreamConnection` elimina la duplicación real (TCP/UDS: ~75 líneas de TCP y todo el reenvío de UDS) y el único despacho virtual es `OpenAsync`/`Close`, una vez por conexión: coste nulo en la ruta caliente, no hace falta medir. UDP (datagramas, `corrId` propio) y QUIC (stream por llamada, FIN) no comparten canal; unificarlos bajo `ITransport` añadiría indirección sin quitar código. Genéricos `where TTransport` descartados por lo mismo.
   - Extraer la base común de `Tcp`/`Udp`/`Quic` en una rama y medir: ¿cuántas líneas se eliminan?
 	¿se degrada el rendimiento por la indirección (interfaz vs. llamada directa)?
   - Alternativa a evaluar: genéricos con `where TTransport : ITransport` para que el JIT desvirtualice,
@@ -533,7 +579,17 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ## Fase 6 — Línea base medible *(movida al final)*
 
-- [~] **6.1 Proyecto `LiteSpeedLink.Benchmarks` (BenchmarkDotNet)** — *existen arnés y escenarios `Control`, `RequestBuilding`, `ResponseStatus`, `ServerParsing`, `TcpConcurrency`; faltan streaming y Memory multihilo*
+- [x] **6.1 Proyecto `LiteSpeedLink.Benchmarks` (BenchmarkDotNet)** — escenarios `Control`, `RequestBuilding`, `ResponseStatus`, `ServerParsing`, `TcpConcurrency`, `Streaming` (suite 32), `MemoryConcurrency` (suite 64); `--alloc` muestrea asignaciones por tipo.
+  - **Streaming, 1000 items (`--fast`)** — inicial → actual:
+
+    | Transporte | Inicial | Actual |
+    |---|---|---|
+    | Memory | 1124 µs / 481,6 KB | **100 µs / 8,2 KB** |
+    | UDS | 1257 µs / 3,1 KB | 304 µs / 12,4 KB |
+    | TCP | 8962 µs / 2,5 KB | 344 µs / 10,5 KB |
+
+  - **Streaming, 10 items**: Memory 33 µs / 4,5 KB, UDS 36 µs, TCP 45 µs.
+  - **MemoryConcurrency** (N llamadas sobre una `MemoryConnection`, medición inicial): 64 → Memory 195 µs / 188 KB vs UDS 219 µs / 158 KB; sin respuestas cruzadas.
   - Escenarios: `Greet` (string→string), `TryAuthenticate` (record struct + `out`), streaming,
 	y concurrencia multihilo (alimenta PoC-A).
   - Métricas: latencia media/p99, **allocs por operación**, ops/s.
