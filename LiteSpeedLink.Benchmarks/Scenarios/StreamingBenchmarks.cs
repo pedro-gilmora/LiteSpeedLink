@@ -17,6 +17,9 @@ public class StreamingBenchmarks
     private MemoryConnection _memory = null!;
     private UdsConnection _uds = null!;
     private TcpConnection _tcp = null!;
+    private System.Net.Quic.QuicListener _quicServer = null!;
+#pragma warning disable CA2252 // QUIC es preview: el banco lo acepta a sabiendas
+    private QuicConnection _quic = null!;
 
     [Params(10, 1000)]
     public int Items { get; set; }
@@ -35,8 +38,12 @@ public class StreamingBenchmarks
         _tcpServer = Server.StartTcpServer(0, (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { });
         _tcp = new TcpConnection(new System.Net.DnsEndPoint("localhost", ((System.Net.IPEndPoint)_tcpServer.LocalEndpoint).Port));
 
+        var cert = Constants.GetDevCert();
+        _quicServer = await Server.StartQuicServerAsync(0, (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { }, cert);
+        _quic = new System.Net.DnsEndPoint("localhost", _quicServer.LocalEndPoint.Port).AsQuicConnection(cert);
+
         // Calentar: la primera llamada abre sesion/socket.
-        await Memory(); await Uds(); await Tcp();
+        await Memory(); await Uds(); await Tcp(); await Quic();
     }
 
     private static async IAsyncEnumerable<int> Range(int count)
@@ -51,6 +58,7 @@ public class StreamingBenchmarks
         _memory.Dispose(); _memServer.Dispose();
         await _uds.DisposeAsync(); _udsServer.Dispose();
         await _tcp.DisposeAsync(); _tcpServer.Stop();
+        await _quic.DisposeAsync(); await _quicServer.DisposeAsync();
     }
 
     [Benchmark(Baseline = true)]
@@ -61,6 +69,11 @@ public class StreamingBenchmarks
 
     [Benchmark]
     public Task<int> Tcp() => Drain(_tcp.EnumerateAsync<int, int>(0, Items));
+
+    [Benchmark]
+    public Task<int> Quic() => Drain(_quic.EnumerateAsync<int, int>(0, Items));
+
+#pragma warning restore CA2252
 
     private async Task<int> Drain(IAsyncEnumerable<int> items)
     {

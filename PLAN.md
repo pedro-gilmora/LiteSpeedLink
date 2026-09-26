@@ -587,8 +587,10 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
     | Memory | 1124 µs / 481,6 KB | **100 µs / 8,2 KB** |
     | UDS | 1257 µs / 3,1 KB | 304 µs / 12,4 KB |
     | TCP | 8962 µs / 2,5 KB | 344 µs / 10,5 KB |
+    | QUIC | — | 414 µs / 45 KB |
 
-  - **Streaming, 10 items**: Memory 33 µs / 4,5 KB, UDS 36 µs, TCP 45 µs.
+  - **Streaming, 10 items**: Memory 33 µs / 4,5 KB, UDS 36 µs, TCP 45 µs, QUIC 211 µs / 41 KB.
+  - **QUIC**: hereda el flush diferido (`ResponseChannel`). Coste dominado por lo fijo por llamada (~200 µs y ~40 KB: stream nuevo + `PipeReader/Writer` por RPC, ver 3.7); el incremento por item (~0,2 µs) es como TCP/UDS. Optimizarlo = reutilizar streams, contrario al diseño stream-por-RPC: no se hace salvo que QUIC sea el transporte principal.
   - **MemoryConcurrency** (N llamadas sobre una `MemoryConnection`, medición inicial): 64 → Memory 195 µs / 188 KB vs UDS 219 µs / 158 KB; sin respuestas cruzadas.
   - Escenarios: `Greet` (string→string), `TryAuthenticate` (record struct + `out`), streaming,
 	y concurrencia multihilo (alimenta PoC-A).
