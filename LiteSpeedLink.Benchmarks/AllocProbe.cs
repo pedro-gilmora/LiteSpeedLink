@@ -51,7 +51,37 @@ internal sealed class AllocProbe : EventListener
         return 0;
     }
 
-    public static async Task<int> RunAsync()
+    public static async Task<int> RunAsync(string transport = "memory")
+    {
+        var bench = new StreamingBenchmarks { Items = 1 };
+        await bench.Setup();
+        Func<Task<int>> run = transport switch
+        {
+            "tcp" => bench.Tcp,
+            "uds" => bench.Uds,
+            "quic" => bench.Quic,
+            _ => bench.Memory
+        };
+
+        foreach (var (items, reps) in new[] { (1, 5000), (100_000, 5) })
+        {
+            bench.Items = items;
+            await run();
+            using var probe = new AllocProbe();
+            long before = GC.GetTotalAllocatedBytes(true);
+            for (int i = 0; i < reps; i++) await run();
+            long total = GC.GetTotalAllocatedBytes(true) - before;
+
+            Console.WriteLine($"[{transport}] items={items}: {total / (double)reps:F0} B/llamada ({total / (double)(reps * items):F1} B/item)");
+            foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(10))
+                Console.WriteLine($"{bytes * 100.0 / total,6:F1}%  {type}");
+        }
+
+        await bench.Cleanup();
+        return 0;
+    }
+
+    public static async Task<int> RunStreamAsync()
     {
         var bench = new StreamingBenchmarks { Items = 1_000_000 };
         await bench.Setup();

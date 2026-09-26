@@ -26,7 +26,10 @@ public static class Program
 
         if (args.Contains("--alloc"))
         {
-            return (args.Contains("quic") && OperatingSystem.IsWindows() ? AllocProbe.RunQuicAsync() : AllocProbe.RunAsync()).GetAwaiter().GetResult();
+            var t = args.FirstOrDefault(a => a is "tcp" or "uds" or "memory" or "quicstream");
+            return (args.Contains("quic") && OperatingSystem.IsWindows() ? AllocProbe.RunQuicAsync()
+                : t is null ? AllocProbe.RunStreamAsync()
+                : AllocProbe.RunAsync(t == "quicstream" ? "quic" : t)).GetAwaiter().GetResult();
         }
 
         var fast = args.Contains("--fast");
