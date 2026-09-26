@@ -586,11 +586,16 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
     |---|---|---|
     | Memory | 1124 µs / 481,6 KB | **100 µs / 8,2 KB** |
     | UDS | 1257 µs / 3,1 KB | 304 µs / 12,4 KB |
-    | TCP | 8962 µs / 2,5 KB | 344 µs / 10,5 KB |
-    | QUIC | — | 414 µs / 45 KB |
+    | TCP | 8962 µs / 2,5 KB | 479 µs / 26 KB (completo) |
+    | QUIC | 414 µs / 45 KB | 440 µs / 11,5 KB (completo) |
 
   - **Streaming, 10 items**: Memory 33 µs / 4,5 KB, UDS 36 µs, TCP 45 µs, QUIC 211 µs / 41 KB.
   - **QUIC**: hereda el flush diferido (`ResponseChannel`). Coste dominado por lo fijo por llamada (~200 µs y ~40 KB: stream nuevo + `PipeReader/Writer` por RPC, ver 3.7); el incremento por item (~0,2 µs) es como TCP/UDS. Optimizarlo = reutilizar streams, contrario al diseño stream-por-RPC: no se hace salvo que QUIC sea el transporte principal.
+  - **QUIC**: `QuicOverheadBenchmarks` descompone lo fijo por llamada: stream crudo 86 µs / 3,2 KB (suelo), + pipes 94 µs / 4,3 KB, RPC LSL 211 → 110 µs / 7,2 KB. Causa: `Call.DisposeAsync` cerraba sin consumir el FIN y QuicStream creaba una `QuicException` con traza por llamada. Test: `TestQuicCallDoesNotThrowInternally`.
+  - **Pipes (TCP/UDS/QUIC) por item**: `ResponseChannel.WriteAsync` con camino síncrono y caminos async con `PoolingAsyncValueTaskMethodBuilder`. TCP 19 → 6,8 B/item. `--alloc tcp|uds|memory|quicstream` y `--alloc quic`.
+  - **Memory, petición de stream**: `RpcBuffer.RemoteStreamAsync<TState>` (fork) escribe directo en el nodo; fuera `ToArray()`. 1,9 → 0,6 B/item.
+  - **Arnés completo (publicable), 1000 items**: Memory 108 µs / 10,9 KB, UDS 293 µs / 9 KB, TCP 479 µs / 26 KB, QUIC 440 µs / 11,5 KB. 10 items: Memory 33, UDS 39, TCP 69, QUIC 208 µs. TCP/1000 con 26 KB es la anomalía a investigar.
+  - El `ArgumentNullException ('array')` del arranque viene de `SemanticCheck` (clientes POC rotos a propósito).
   - **MemoryConcurrency** (N llamadas sobre una `MemoryConnection`, medición inicial): 64 → Memory 195 µs / 188 KB vs UDS 219 µs / 158 KB; sin respuestas cruzadas.
   - Escenarios: `Greet` (string→string), `TryAuthenticate` (record struct + `out`), streaming,
 	y concurrencia multihilo (alimenta PoC-A).
