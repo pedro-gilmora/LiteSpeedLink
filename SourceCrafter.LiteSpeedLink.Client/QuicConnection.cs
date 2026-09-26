@@ -185,6 +185,18 @@ public sealed class QuicConnection(QuicClientConnectionOptions options) : IConne
 
         public async ValueTask DisposeAsync()
         {
+            // Consumir el FIN antes de cerrar: si no, QuicStream aborta la lectura y msquic
+            // construye una QuicException con stack trace en cada llamada (~20 KB).
+            if (stream.ReadsClosed.IsCompleted is false)
+            {
+                try
+                {
+                    ReadResult r;
+                    while (!(r = await _reader.ReadAsync().ConfigureAwait(false)).IsCompleted) _reader.AdvanceTo(r.Buffer.End);
+                }
+                catch (Exception ex) when (ex is IOException or QuicException or OperationCanceledException) { }
+            }
+
             await _reader.CompleteAsync().ConfigureAwait(false);
             await stream.DisposeAsync().ConfigureAwait(false);
         }

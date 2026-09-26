@@ -26,7 +26,7 @@ public static class Program
 
         if (args.Contains("--alloc"))
         {
-            return AllocProbe.RunAsync().GetAwaiter().GetResult();
+            return (args.Contains("quic") && OperatingSystem.IsWindows() ? AllocProbe.RunQuicAsync() : AllocProbe.RunAsync()).GetAwaiter().GetResult();
         }
 
         var fast = args.Contains("--fast");

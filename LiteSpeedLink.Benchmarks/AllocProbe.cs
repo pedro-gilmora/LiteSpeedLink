@@ -28,6 +28,29 @@ internal sealed class AllocProbe : EventListener
         _bytes.AddOrUpdate((string)e.Payload[t]!, amount, (_, v) => v + amount);
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static async Task<int> RunQuicAsync()
+    {
+        var bench = new QuicOverheadBenchmarks();
+        await bench.Setup();
+        const int calls = 5000;
+
+        var excs = new ConcurrentDictionary<string, int>();
+        AppDomain.CurrentDomain.FirstChanceException += (_, e) => excs.AddOrUpdate($"{e.Exception.GetType().Name}: {e.Exception.Message} @ {e.Exception.TargetSite?.DeclaringType?.Name}.{e.Exception.TargetSite?.Name}", 1, (_, v) => v + 1);
+        using var probe = new AllocProbe();
+        long before = GC.GetTotalAllocatedBytes(true);
+        for (int i = 0; i < calls; i++) await bench.Lsl();
+        long total = GC.GetTotalAllocatedBytes(true) - before;
+        foreach (var (k, v) in excs) Console.WriteLine($"EXC x{v}: {k}");
+
+        Console.WriteLine($"Total: {total / 1_000_000.0:F1} MB ({total / (double)calls:F0} B/llamada)");
+        foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(20))
+            Console.WriteLine($"{bytes * 100.0 / total,6:F1}%  {type}");
+
+        await bench.Cleanup();
+        return 0;
+    }
+
     public static async Task<int> RunAsync()
     {
         var bench = new StreamingBenchmarks { Items = 1_000_000 };
