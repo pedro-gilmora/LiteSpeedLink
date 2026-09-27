@@ -61,7 +61,7 @@ public class ComparisonBenchmarks
         b.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.TypeInfoResolverChain.Insert(0, CmpJson.Default));
         _aspnet = b.Build();
         _aspnet.MapPost("/add", (AddDto d) => d.A + d.B);
-        _aspnet.MapGet("/range/{n:int}", (int n) => Enumerable.Range(0, n));
+        _aspnet.MapGet("/range/{n:int}", (int n) => TypedResults.ServerSentEvents(RangeAsync(n)));
         await _aspnet.StartAsync();
         _aspnetClient = Http(p, HttpVersion.Version11);
 
@@ -82,13 +82,21 @@ public class ComparisonBenchmarks
             ctx.Response.BodyWriter.Advance(4);
             await ctx.Response.BodyWriter.FlushAsync();
         });
+        // SSE a mano: "data: i\n\n" en BodyWriter con flush por evento (como SSE real).
         _aspnetSlim.MapGet("/range/{n:int}", static async ctx =>
         {
             int n = int.Parse((string)ctx.Request.RouteValues["n"]!);
+            ctx.Response.ContentType = "text/event-stream";
             var w = ctx.Response.BodyWriter;
-            ctx.Response.ContentLength = n * 4L;
-            for (int i = 0; i < n; i++) { BinaryPrimitives.WriteInt32LittleEndian(w.GetSpan(4), i); w.Advance(4); }
-            await w.FlushAsync();
+            for (int i = 0; i < n; i++)
+            {
+                var span = w.GetSpan(32);
+                "data: "u8.CopyTo(span);
+                System.Buffers.Text.Utf8Formatter.TryFormat(i, span[6..], out int len);
+                "\n\n"u8.CopyTo(span[(6 + len)..]);
+                w.Advance(8 + len);
+                await w.FlushAsync();
+            }
         });
         await _aspnetSlim.StartAsync();
         _aspnetSlimClient = Http(p, HttpVersion.Version11);
@@ -169,8 +177,11 @@ public class ComparisonBenchmarks
     [Benchmark, BenchmarkCategory("Stream")]
     public async Task<int> AspNet_Stream()
     {
+        using var r = await _aspnetClient.GetAsync($"/range/{Items}", HttpCompletionOption.ResponseHeadersRead);
+        await using var s = await r.Content.ReadAsStreamAsync();
         int n = 0;
-        await foreach (var _ in _aspnetClient.GetFromJsonAsAsyncEnumerable($"/range/{Items}", CmpJson.Default.Int32)) n++;
+        await foreach (var e in System.Net.ServerSentEvents.SseParser.Create(s, static (_, data) => int.Parse(data)).EnumerateAsync())
+            if (e.Data == n) n++;
         return Count(n);
     }
 
@@ -179,11 +190,34 @@ public class ComparisonBenchmarks
     {
         using var r = await _aspnetSlimClient.GetAsync($"/range/{Items}", HttpCompletionOption.ResponseHeadersRead);
         await using var s = await r.Content.ReadAsStreamAsync();
-        var buf = new byte[4096];
-        long bytes = 0;
-        int read;
-        while ((read = await s.ReadAsync(buf)) > 0) bytes += read;
-        return Count((int)(bytes / 4));
+        var reader = System.IO.Pipelines.PipeReader.Create(s);
+        int n = 0;
+        while (true)
+        {
+            var res = await reader.ReadAsync();
+            n = ParseSse(res.Buffer, n, out var consumed);
+            reader.AdvanceTo(consumed, res.Buffer.End);
+            if (res.IsCompleted) break;
+        }
+        await reader.CompleteAsync();
+        return Count(n);
+    }
+
+    /// <summary>Decodifica cada evento "data: i\n\n" y comprueba que llega en orden.</summary>
+    private static int ParseSse(System.Buffers.ReadOnlySequence<byte> buffer, int n, out SequencePosition consumed)
+    {
+        var sr = new System.Buffers.SequenceReader<byte>(buffer);
+        while (sr.TryReadTo(out System.Buffers.ReadOnlySequence<byte> ev, "\n\n"u8))
+        {
+            Span<byte> tmp = stackalloc byte[16];
+            var line = ev.Slice(6);
+            System.Buffers.BuffersExtensions.CopyTo(line, tmp);
+            System.Buffers.Text.Utf8Parser.TryParse(tmp[..(int)line.Length], out int v, out _);
+            if (v != n) throw new InvalidOperationException($"{v} != {n}");
+            n++;
+        }
+        consumed = sr.Position;
+        return n;
     }
 
     [Benchmark, BenchmarkCategory("Stream")]
@@ -202,6 +236,12 @@ public class ComparisonBenchmarks
         int n = 0;
         while (await call.ResponseStream.MoveNext(CancellationToken.None)) n++;
         return Count(n);
+    }
+
+    private static async IAsyncEnumerable<int> RangeAsync(int n)
+    {
+        for (int i = 0; i < n; i++) yield return i;
+        await Task.CompletedTask;
     }
 
     private static int Sum(int v) => v == 3 ? v : throw new InvalidOperationException($"sum {v}");
