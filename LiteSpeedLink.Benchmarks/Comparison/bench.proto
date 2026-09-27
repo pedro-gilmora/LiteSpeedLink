@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+option csharp_namespace = "LiteSpeedLink.Benchmarks.Comparison.Grpc";
+
+service Bench {
+  rpc Add (AddRequest) returns (AddReply);
+  rpc Range (RangeRequest) returns (stream Item);
+}
+
+message AddRequest { int32 a = 1; int32 b = 2; }
+message AddReply { int32 sum = 1; }
+message RangeRequest { int32 count = 1; }
+message Item { int32 value = 1; }

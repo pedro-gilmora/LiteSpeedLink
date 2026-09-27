@@ -32,6 +32,9 @@ public enum Suite
     /// <summary>6.1: N llamadas concurrentes sobre una MemoryConnection (UDS de referencia).</summary>
     MemoryConcurrency = 1 << 6,
 
+    /// <summary>Plana: LiteSpeedLink TCP vs ASP.NET Core (full/slim) vs gRPC (full/slim), misma operacion.</summary>
+    Comparison = 1 << 7,
+
     /// <summary>La ruta de request/response completa, sin red.</summary>
     Wire = RequestBuilding | ServerParsing | ResponseStatus,
 
@@ -49,6 +52,7 @@ public static class SuiteMap
         (Suite.TcpConcurrency, typeof(TcpConcurrencyBenchmarks)),
         (Suite.Streaming, typeof(StreamingBenchmarks)),
         (Suite.MemoryConcurrency, typeof(MemoryConcurrencyBenchmarks)),
+        (Suite.Comparison, typeof(Comparison.ComparisonBenchmarks)),
     ];
 
     public static Type[] Resolve(Suite suite) =>

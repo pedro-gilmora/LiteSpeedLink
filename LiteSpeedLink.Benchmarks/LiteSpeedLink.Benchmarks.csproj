@@ -14,6 +14,15 @@
 	<ItemGroup>
 		<PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
 		<PackageReference Include="MemoryPack" Version="1.21.4" />
+		<PackageReference Include="Grpc.AspNetCore.Server" Version="2.71.0" />
+		<PackageReference Include="Grpc.Net.Client" Version="2.71.0" />
+		<PackageReference Include="Google.Protobuf" Version="3.31.1" />
+		<PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="All" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+		<Protobuf Include="Comparison\bench.proto" GrpcServices="Both" />
 	</ItemGroup>
 
 	<ItemGroup>

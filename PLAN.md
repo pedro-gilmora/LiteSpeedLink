@@ -596,6 +596,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - **Memory, petición de stream**: `RpcBuffer.RemoteStreamAsync<TState>` (fork) escribe directo en el nodo; fuera `ToArray()`. 1,9 → 0,6 B/item.
   - **Arnés completo (publicable), 1000 items**: Memory 108 µs / 10,9 KB, UDS 293 µs / 9 KB, TCP 479 µs / 26 KB, QUIC 440 µs / 11,5 KB. 10 items: Memory 33, UDS 39, TCP 69, QUIC 208 µs. TCP/1000 con 26 KB es la anomalía a investigar.
   - El `ArgumentNullException ('array')` del arranque viene de `SemanticCheck` (clientes POC rotos a propósito).
+  - **Comparison (suite 128, `--fast`, TCP loopback, misma operacion)**: unaria (1,2)->3: LSL 40 us / 2,1 KB, ASP.NET slim 51 / 2,7, ASP.NET 66 / 5,5, gRPC slim 117 / 7, gRPC 146 / 7. Stream 1000 int: ASP.NET slim 73 us / 6,5 KB, ASP.NET 102 / 11,8, **LSL 307 / 8,7**, gRPC 417 / 70, gRPC slim 434 / 70. LSL gana en unaria; en stream pierde 3-4x con HTTP/1.1 porque envia una trama por item (5+4 bytes de cabecera + flush diferido) frente a un cuerpo continuo. Siguiente: agrupar items en TCP como en Memory.
   - **MemoryConcurrency** (N llamadas sobre una `MemoryConnection`, medición inicial): 64 → Memory 195 µs / 188 KB vs UDS 219 µs / 158 KB; sin respuestas cruzadas.
   - Escenarios: `Greet` (string→string), `TryAuthenticate` (record struct + `out`), streaming,
 	y concurrencia multihilo (alimenta PoC-A).
