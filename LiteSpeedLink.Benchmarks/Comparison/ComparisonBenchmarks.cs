@@ -51,7 +51,7 @@ public class ComparisonBenchmarks
         _lslServer = Server.StartTcpServer(0, static (op, ctx, _) => op == 0
             ? ctx.ReturnAsync(ctx.Get<(int, int)>().Item1 + ctx.Get<(int, int)>().Item2)
             : ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { });
-        _lsl = new TcpConnection(new DnsEndPoint("localhost", ((IPEndPoint)_lslServer.LocalEndpoint).Port));
+        _lsl = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslServer.LocalEndpoint).Port));
 
         // ASP.NET Core completo: CreateBuilder + minimal API + JSON source-gen, HTTP/1.1.
         int p = FreePort();
