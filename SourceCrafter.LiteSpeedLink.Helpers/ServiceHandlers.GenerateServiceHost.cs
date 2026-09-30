@@ -121,8 +121,8 @@ public partial class ").Append(typeName).Append(@"
 	{
         var provider = new ").Append(typeName).Append(@"();
 		return ").Append(awaitKeyword).Append(@"global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append(@"(
-            ").Append(connectionType is 0 ? "memoryRpcName" : "port").Append(certParam).Append(@", 
-            provider.HandleRequestsAsync, 
+            ").Append(connectionType is 0 ? "memoryRpcName" : "port").Append(@", 
+            ").Append(connectionType > 1 ? "new __Handler(provider)" : "provider.HandleRequestsAsync").Append(@", 
             ");
 
         var onFinalizePoint = hostCode.Length;
@@ -132,14 +132,24 @@ public partial class ").Append(typeName).Append(@"
             ").Append(1000);
 
         if (certArg != null)
-            hostCode.Append(@",
-            ").Append(certArg);
+            hostCode.Append(certArg);
 
-        hostCode.Append(@", 
-            cancelToken);
+		hostCode.Append(@", 
+			cancelToken);
 	}
-    	
-    private ");
+");
+
+		if (connectionType > 1)
+			hostCode.Append(@"
+	private readonly struct __Handler(").Append(typeName).Append(@" provider) : global::SourceCrafter.LiteSpeedLink.IRequestHandler
+	{
+		public global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleAsync(long id, global::SourceCrafter.LiteSpeedLink.RequestContext ctx, global::System.Threading.CancellationToken token)
+			=> provider.HandleRequestsAsync(id, ctx, token);
+	}
+");
+
+		hostCode.Append(@"    	
+	private ");
 
         int? handlerResultType = null;
         bool isMemoryAsync = false;
@@ -183,6 +193,9 @@ public partial class ").Append(typeName).Append(@"
         var containerDisposability = container.ContainerDisposability;
 
         var services = IndexServices(container);
+
+        StringBuilder policyTypes = new();
+        HashSet<string> emittedPolicies = [];
 
         foreach (var dependency in container.Services)
         {
@@ -290,6 +303,7 @@ public partial class ").Append(typeName).Append(@"
                     requestDeconstruct = null;
 
                 int requestParamsCount = 0, outCount = 0;
+                List<ITypeSymbol> requestWireTypes = [];
 
                 bool separateParams = false,
                     separateRequestParams = false,
@@ -379,6 +393,7 @@ public partial class ").Append(typeName).Append(@"
                         {
                             var wireName = serverPre.Count > 0 ? "__w_" + param.Name : param.Name;
                             var wireType = serverPre.Count > 0 ? serverPre[0].In.GlobalNamespaced : paramType;
+                            requestWireTypes.Add(serverPre.Count > 0 ? serverPre[0].In : param.Type);
 
                             if (serverPre.Count > 0)
                             {
@@ -402,8 +417,6 @@ public partial class ").Append(typeName).Append(@"
                         {
                             case RefKind.In:
 
-                                outCount++;
-
                                 invokeParams += () =>
                                     (Exchange(ref separateParams) ? hostCode.Append(", ") : hostCode)
                                         .Append("in ").Append(param.Name);
@@ -411,6 +424,8 @@ public partial class ").Append(typeName).Append(@"
                                 break;
 
                             case RefKind.Ref or RefKind.RefReadOnly or RefKind.RefReadOnlyParameter:
+
+                                outCount++;
 
                                 invokeParams += () =>
                                     (Exchange(ref separateParams) ? hostCode.Append(", ") : hostCode)
@@ -458,40 +473,23 @@ public partial class ").Append(typeName).Append(@"
                     }
                 }
 
-                if (requestParamsCount > 0)
+                if (requestParamsCount > 0 && requestTypes != null && requestDeconstruct != null)
                 {
-                    if (requestTypes != null)
-                    {
-                        hostCode.Append(@"var ");
+                    var readerName = "__Req" + (serviceId < 0 ? "M" + (-serviceId) : serviceId.ToString());
 
-                        if (requestParamsCount > 1)
-                        {
-                            hostCode.Append('(');
+                    EmitReader(policyTypes, readerName, requestWireTypes, "    ");
 
-                            requestDeconstruct!.Invoke();
+                    hostCode.Append("var ");
 
-                            hostCode.Append(") = __context.Get<(");
+                    if (requestParamsCount > 1) hostCode.Append('(');
 
-                            requestTypes!.Invoke();
+                    requestDeconstruct();
 
-                            hostCode.Append(@")>();
+                    if (requestParamsCount > 1) hostCode.Append(')');
+
+                    hostCode.Append(" = ").Append(readerName).Append(@"(__context.Body.Span);
 
             ");
-                        }
-                        else if (requestDeconstruct != null)
-                        {
-                            requestDeconstruct();
-
-                            hostCode
-                                .Append(" = __context.Get<");
-
-                            requestTypes!.Invoke();
-
-                            hostCode.Append(@">();
-
-            ");
-                        }
-                    }
                 }
 
                 applyPreStages?.Invoke();
@@ -522,9 +520,42 @@ public partial class ").Append(typeName).Append(@"
                 if (returnsType && serverPost.Count > 0)
                     hostCode.Append(ApplyStages("___result", serverPost, connectionType > 0, provider, "            "));
 
-                hostCode.Append("return ").Append(connectionType == 0 ? "__context.Return(" : "await __context.ReturnAsync(");
+                bool isStream = connectionType > 1 && returnsType
+                    && method.ReturnType is INamedTypeSymbol { IsGenericType: true } rt
+                    && rt.ConstructedFrom.ToDisplayString() is "System.Collections.Generic.IAsyncEnumerable<T>" or "System.Collections.Generic.IEnumerable<T>";
 
-                if (outCount > 0)
+                hostCode.Append("return ").Append(connectionType == 0 ? "__context.Return(" : isStream ? "await __context.EnumerateAsync(" : "await __context.ReturnAsync(");
+
+                if (isStream)
+                {
+                    if (method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "SourceCrafter.LiteSpeedLink.StreamAttribute") is { } streamAttr)
+                    {
+                        int batch = 0, delay = 0;
+                        foreach (var arg in streamAttr.NamedArguments)
+                        {
+                            if (arg.Key == "Batch") batch = (int)arg.Value.Value!;
+                            else if (arg.Key == "MaxDelayMs") delay = (int)arg.Value.Value!;
+                        }
+
+                        // Politica como tipo: el JIT pliega Items/MaxDelayTicks y elimina las ramas muertas.
+                        string policy = batch <= 0 ? "global::SourceCrafter.LiteSpeedLink.Unbatched" : "__Policy_B" + batch + "_D" + Math.Max(delay, 0);
+
+                        if (batch > 0 && emittedPolicies.Add(policy))
+                            policyTypes.Append(@"
+    private readonly struct ").Append(policy).Append(@" : global::SourceCrafter.LiteSpeedLink.IStreamPolicy
+    {
+        public static int Items => ").Append(batch).Append(@";
+        public static long MaxDelayTicks => ").Append(delay <= 0 ? "long.MaxValue" : "global::System.Diagnostics.Stopwatch.Frequency * " + delay + " / 1000").Append(@";
+    }
+");
+
+                        hostCode.Length -= 1;
+                        hostCode.Append('<').Append(((INamedTypeSymbol)method.ReturnType).TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)).Append(", ").Append(policy).Append(">(");
+                    }
+
+                    hostCode.Append("___result");
+                }
+                else if (outCount > 0)
                 {
                     if (outCount == 1)
                     {
@@ -573,6 +604,8 @@ public partial class ").Append(typeName).Append(@"
         }
     }
 }");
+        hostCode.Insert(hostCode.Length - 1, policyTypes.ToString());
+
         if (handlerResultType.HasValue)
         {
             hostCode.Insert(handlerResultType.Value, "byte[]");

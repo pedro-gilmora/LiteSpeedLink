@@ -171,13 +171,13 @@ namespace SourceCrafter.LiteSpeedLink.Helpers
                 {
                     case INamedTypeSymbol { Name: "Task" or "ValueTask", ContainingNamespace: { Name: "Tasks", ContainingNamespace: { Name: "Threading", ContainingNamespace.Name: "System" } }, TypeArguments: var typeArgs }:
 
+                        isValueTask = typeSymbol.Name == "ValueTask";
+
                         if (typeArgs is [{ } firstTypeArg])
                         {
                             hasReturnType = true;
                             factoryType = firstTypeArg;
                         }
-
-                        isValueTask = factoryType.Name == "ValueTask";
 
 
                         return true;

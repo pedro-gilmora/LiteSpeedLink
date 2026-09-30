@@ -1,5 +1,6 @@
 using MemoryPack;
 using SourceCrafter.LiteSpeedLink;
+using System.Reflection.Metadata;
 
 namespace Application.Contracts;
 
@@ -8,6 +9,7 @@ namespace Application.Contracts;
 public interface IAuth : IServiceUnit
 {
     bool TryAuthenticate(Credentials credentials, out string token);
+    bool TryAuth(string user, string password, out string token);
     [return: ClientPostProcessor<Exclaim>]
     string Greet([ServerPreProcessor<TrimName>] string name);
 

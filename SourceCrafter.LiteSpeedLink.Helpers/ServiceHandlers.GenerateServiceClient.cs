@@ -133,12 +133,16 @@ public partial class ").Append(typeShortName).Append(@"
     {");
 
             var membersStart = clientCode.Length;
+            var rawHelpers = new StringBuilder();
+            int rawIndex = 0;
 
             foreach (var member in iFace.GetMembers())
             {
                 if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                 {
                     if (TryGenerateProcessedClientMethod(clientCode, container, iFace, method, contribution)) continue;
+
+                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, method, ref rawIndex)) continue;
 
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
@@ -487,6 +491,8 @@ public partial class ").Append(typeShortName).Append(@"
                     }
                 }
             }
+
+            clientCode.Append(rawHelpers.Replace("\n", "\n    "));
 
             // Los miembros se emiten a 4 espacios; se anidan un nivel dentro de la clase cliente.
             clientCode.Replace("\n", "\n    ", membersStart, clientCode.Length - membersStart);

@@ -19,4 +19,4 @@ namespace SourceCrafter.LiteSpeedLink;
 #if !NETSTANDARD
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 #endif
-public partial class TextServiceClient;
+public sealed partial class TextServiceClient;

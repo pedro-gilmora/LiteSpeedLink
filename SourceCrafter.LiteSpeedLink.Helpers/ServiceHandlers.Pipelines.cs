@@ -161,10 +161,11 @@ public partial class ServiceHandlersGenerator
     private static string StageVar(string root, int n) => "__" + root.TrimStart('_') + "_" + n;
 
     /// <summary>
-    /// Una sentencia <c>if (etapa is not (Success, var x)) throw</c> por etapa, de dentro afuera.
+    /// Una sentencia <c>if (etapa is not (Success, TOut x)) throw</c> por etapa, de dentro afuera.
     /// La ultima variable se llama <paramref name="last"/> (o <c>StageVar(root, n)</c>).
     /// </summary>
-    // ponytail: 'var' y no el tipo declarado: un patron de tipo rechaza null aunque el pipeline devuelva Success.
+    // ponytail: patron con el tipo declarado: un TOut referencia null con Success tambien se rechaza.
+    // Nullable<T> no admite patron de tipo (CS8116): ahi se usa 'var'.
     private static string ApplyStages(string expr, List<Stage> stages, bool canAwait, string provider, string indent, string? last = null)
     {
         var code = new StringBuilder();
@@ -186,11 +187,12 @@ public partial class ServiceHandlersGenerator
 
             expr = n == stages.Count - 1 && last != null ? last : StageVar(root, n);
 
-            var status = StageVar(root, n) + "_s";
+            var type = s.Out.OriginalDefinition.SpecialType is SpecialType.System_Nullable_T
+                ? "var"
+                : s.Out.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
-            code.Append("var (").Append(status).Append(", ").Append(expr).Append(") = ").Append(call).Append(";\n")
-                .Append(indent).Append("if (").Append(status).Append(" is not global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success)\n")
-                .Append(indent).Append("    throw new global::SourceCrafter.LiteSpeedLink.PipelineRejectedException(").Append(status).Append(", \"")
+            code.Append("if (").Append(call).Append(" is not (global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success, ").Append(type).Append(' ').Append(expr).Append("))\n")
+                .Append(indent).Append("    throw new global::SourceCrafter.LiteSpeedLink.PipelineRejectedException(global::SourceCrafter.LiteSpeedLink.ResponseStatus.Failed, \"")
                 .Append(s.Pipeline.Name).Append("\");\n").Append(n == stages.Count - 1 ? "\n" : null).Append(indent);
         }
 

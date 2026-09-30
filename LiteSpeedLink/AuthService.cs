@@ -24,4 +24,15 @@ public partial class AuthService() : IAuth
         token = default!;
         return false;
     }
+
+    public bool TryAuth(string user, string password, out string token)
+    {
+        if (user == "pedro" && password == "test!123")
+        {
+            token = "Token";
+            return true;
+        }
+        token = default!;
+        return false;
+    }
 }

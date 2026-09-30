@@ -17,7 +17,7 @@ var timestamp = Stopwatch.GetTimestamp();
 try
 {
     //Debugger.Launch();
-    if (client.Auth.TryAuthenticate(new("pedro", "test!123"), out var token))
+    if (client.Auth.TryAuth("pedro", "test!123", out var token))
     {
         Console.WriteLine(token);
     }
@@ -38,5 +38,43 @@ finally
     Console.WriteLine($"Took: ${Stopwatch.GetElapsedTime(timestamp)}");
 }
 
+// Transportes de red: mismo contrato; los miembros sync son sync-over-async (solo Memory es sync nativo).
+using (UdpTextService.Start(5101))
+{
+    var udp = new UdpTextServiceClient("localhost", 5101).Auth;
+    await Exercise("Udp", udp, n => udp.GreetAsync(n));
+}
+
+var tcpHost = TcpTextService.Start(5102, null);
+try
+{
+    var tcp = new TcpTextServiceClient("localhost", 5102).Auth;
+    await Exercise("Tcp", tcp, n => tcp.GreetAsync(n));
+}
+finally { tcpHost.Stop(); }
+
+if (System.Net.Quic.QuicListener.IsSupported)
+{
+    await using var quicHost = await QuicTextService.StartAsync(5103, Constants.GetDevCert());
+    var quic = new QuicTextServiceClient("localhost", 5103).Auth;
+    await Exercise("Quic", quic, n => quic.GreetAsync(n));
+}
+
+static async Task Exercise(string transport, IAuth auth, Func<string, ValueTask<string>> greetAsync)
+{
+    var ts = Stopwatch.GetTimestamp();
+    try
+    {
+        Console.WriteLine($"[{transport}] TryAuth (sync): {auth.TryAuth("pedro", "test!123", out var token)} {token}");
+        Console.WriteLine($"[{transport}] Greet (async): {await greetAsync("  Pedro  ")}");
+        Console.WriteLine($"[{transport}] Echo (sync): {auth.Echo("  hi  ")}");
+        try { auth.Echo("   "); }
+        catch (PipelineRejectedException ex) { Console.WriteLine($"[{transport}] Rejected: {ex.Message}"); }
+    }
+    catch (Exception ex) { Console.WriteLine($"[{transport}] {ex}"); }
+    finally { Console.WriteLine($"[{transport}] Took: {Stopwatch.GetElapsedTime(ts)}"); }
+}
+
 [SupportedOSPlatform("windows")]
+[System.Runtime.Versioning.RequiresPreviewFeatures]
 partial class Program;
