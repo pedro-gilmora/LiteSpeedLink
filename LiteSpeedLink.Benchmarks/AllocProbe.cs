@@ -35,8 +35,7 @@ internal sealed class AllocProbe : EventListener
         await bench.Setup();
         const int calls = 5000;
 
-        var excs = new ConcurrentDictionary<string, int>();
-        AppDomain.CurrentDomain.FirstChanceException += (_, e) => excs.AddOrUpdate($"{e.Exception.GetType().Name}: {e.Exception.Message} @ {e.Exception.TargetSite?.DeclaringType?.Name}.{e.Exception.TargetSite?.Name}", 1, (_, v) => v + 1);
+        var excs = TraceExceptions();
         using var probe = new AllocProbe();
         long before = GC.GetTotalAllocatedBytes(true);
         for (int i = 0; i < calls; i++) await bench.Lsl();
@@ -51,8 +50,22 @@ internal sealed class AllocProbe : EventListener
         return 0;
     }
 
+    private static ConcurrentDictionary<string, int> TraceExceptions()
+    {
+        var excs = new ConcurrentDictionary<string, int>();
+        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+        {
+            var frames = new System.Diagnostics.StackTrace(1, false).GetFrames()
+                .Select(f => f.GetMethod()).Where(m => m?.DeclaringType is not null)
+                .Take(8).Select(m => $"{m!.DeclaringType!.Name}.{m.Name}");
+            excs.AddOrUpdate($"{e.Exception.GetType().Name}: {e.Exception.Message}\n      " + string.Join("\n      ", frames), 1, (_, v) => v + 1);
+        };
+        return excs;
+    }
+
     public static async Task<int> RunAsync(string transport = "memory")
     {
+        var excs = TraceExceptions();
         var bench = new StreamingBenchmarks { Items = 1 };
         await bench.Setup();
         Func<Task<int>> run = transport switch
@@ -75,6 +88,8 @@ internal sealed class AllocProbe : EventListener
             Console.WriteLine($"[{transport}] items={items}: {total / (double)reps:F0} B/llamada ({total / (double)(reps * items):F1} B/item)");
             foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(10))
                 Console.WriteLine($"{bytes * 100.0 / total,6:F1}%  {type}");
+            foreach (var (k, v) in excs) Console.WriteLine($"EXC x{v}: {k}");
+            excs.Clear();
         }
 
         await bench.Cleanup();

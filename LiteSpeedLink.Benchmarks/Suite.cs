@@ -35,6 +35,18 @@ public enum Suite
     /// <summary>Plana: LiteSpeedLink TCP vs ASP.NET Core (full/slim) vs gRPC (full/slim), misma operacion.</summary>
     Comparison = 1 << 7,
 
+    /// <summary>PoC aislado: stream por item vs agrupado en lector vs lotes en protocolo (TCP loopback).</summary>
+    StreamBatching = 1 << 8,
+
+    /// <summary>Desglose por causa: tamano de lote (servidor) x agrupado en lector (cliente), TCP y QUIC.</summary>
+    StreamBatchBreakdown = 1 << 9,
+
+    /// <summary>POC estudio source-gen: runtime vs forma generada (framing, dispatch, stream), sin red.</summary>
+    SourceGenPoc = 1 << 10,
+
+    /// <summary>Par de Comparison sobre QUIC: LiteSpeedLink QUIC vs ASP.NET Core slim HTTP/3.</summary>
+    QuicComparison = 1 << 11,
+
     /// <summary>La ruta de request/response completa, sin red.</summary>
     Wire = RequestBuilding | ServerParsing | ResponseStatus,
 
@@ -53,6 +65,10 @@ public static class SuiteMap
         (Suite.Streaming, typeof(StreamingBenchmarks)),
         (Suite.MemoryConcurrency, typeof(MemoryConcurrencyBenchmarks)),
         (Suite.Comparison, typeof(Comparison.ComparisonBenchmarks)),
+        (Suite.StreamBatching, typeof(StreamBatchingBenchmarks)),
+        (Suite.StreamBatchBreakdown, typeof(StreamBatchBreakdownBenchmarks)),
+        (Suite.SourceGenPoc, typeof(SourceGenPocBenchmarks)),
+        (Suite.QuicComparison, typeof(Comparison.QuicComparisonBenchmarks)),
     ];
 
     public static Type[] Resolve(Suite suite) =>

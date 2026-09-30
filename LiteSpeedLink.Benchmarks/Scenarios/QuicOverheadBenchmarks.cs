@@ -55,11 +55,33 @@ public class QuicOverheadBenchmarks
                 RemoteCertificateValidationCallback = (_, _, _, _) => true
             }
         });
+        _lslServer = await Server.StartQuicServerAsync(0, (op, ctx, _) => op == 1 ? ctx.ReturnAsync(7) : ctx.EnumerateAsync(() => Enumerable.Range(0, 1)), () => { }, cert);
 
-        _lslServer = await Server.StartQuicServerAsync(0, (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, 1)), () => { }, cert);
-        _lsl = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert);
+        _lsl = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert, unaryStreams: 0);
+        _lslPool = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert, unaryStreams: 4);
+        await RawStream(); await RawPipes(); await Lsl(); await LslUnary(); await LslUnaryPooled();
+        _reused = await _raw.OpenOutboundStreamAsync(QuicStreamType.Bidirectional);
+        await RawReused();
+    }
 
-        await RawStream(); await RawPipes(); await Lsl();
+    private QuicStream _reused = null!;
+    private SourceCrafter.LiteSpeedLink.Client.QuicConnection _lslPool = null!;
+
+    /// <summary>Unaria LSL: un stream por llamada.</summary>
+    [Benchmark]
+    public async Task<int> LslUnary() => await _lsl.GetAsync<int, int>(1, 1);
+
+    /// <summary>Unaria LSL: pool de 4 streams multiplexados.</summary>
+    [Benchmark]
+    public async Task<int> LslUnaryPooled() => await _lslPool.GetAsync<int, int>(1, 1);
+
+    /// <summary>POC: mismo intercambio de 1 byte sobre un stream abierto una sola vez (sin abrir/cerrar por llamada).</summary>
+    [Benchmark]
+    public async Task<int> RawReused()
+    {
+        await _reused.WriteAsync(_one);
+        int n = await _reused.ReadAsync(_buf);
+        return n == 1 ? n : throw new InvalidOperationException($"{n}");
     }
 
     private static async Task EchoLoop(QuicListener l)
@@ -81,9 +103,9 @@ public class QuicOverheadBenchmarks
                                 await using (s)
                                 {
                                     var b = new byte[16];
-                                    int n, total = 0;
-                                    while ((n = await s.ReadAsync(b.AsMemory(total))) > 0) total += n;
-                                    await s.WriteAsync(b.AsMemory(0, total), completeWrites: true);
+                                    int n;
+                                    while ((n = await s.ReadAsync(b)) > 0) await s.WriteAsync(b.AsMemory(0, n));
+                                    s.CompleteWrites();
                                 }
                             });
                         }
@@ -98,8 +120,9 @@ public class QuicOverheadBenchmarks
     [GlobalCleanup]
     public async Task Cleanup()
     {
+        await _reused.DisposeAsync();
         await _raw.DisposeAsync(); await _rawServer.DisposeAsync();
-        await _lsl.DisposeAsync(); await _lslServer.DisposeAsync();
+        await _lsl.DisposeAsync(); await _lslPool.DisposeAsync(); await _lslServer.DisposeAsync();
     }
 
     /// <summary>Suelo de msquic/.NET: abrir stream, 1 byte ida, 1 byte vuelta, cerrar.</summary>
