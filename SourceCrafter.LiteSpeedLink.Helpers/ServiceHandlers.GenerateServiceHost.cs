@@ -135,7 +135,7 @@ public partial class ").Append(typeName).Append(@"
             hostCode.Append(certArg);
 
 		hostCode.Append(@", 
-			cancelToken);
+			cancelToken)").Append(awaitKeyword != null ? ".ConfigureAwait(false)" : null).Append(@";
 	}
 ");
 
@@ -249,10 +249,6 @@ public partial class ").Append(typeName).Append(@"
                 bool isMethodAsync = (method.ReturnType.Name.EndsWith("Task")
                         && method.ReturnType.ToDisplayString().StartsWith("System.Threading.Tasks"))
                         || dependency.Lifetime is PartialLifetime.Scoped;
-
-                var (_async, _await) = isMethodAsync
-                        ? ("async ", "await ")
-                        : default;
 
                 var serviceId = GetServiceId(globalizedMethodName);
 
@@ -499,15 +495,11 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append(@"var ___result = ");
                 }
 
-                bool shouldParenthizeExpression = dependencyIsAsync;
-
-                if (dependencyIsAsync) hostCode.Append(_await);
-
-                if (shouldParenthizeExpression) hostCode.Append('(');
+                if (dependencyIsAsync) hostCode.Append("(await ");
 
                 AppendResolution(hostCode, dependency, provider);
 
-                if (shouldParenthizeExpression) hostCode.Append(')');
+                if (dependencyIsAsync) hostCode.Append(".ConfigureAwait(false))");
 
                 hostCode.Append('.').Append(methodName).Append('(');
 
@@ -575,7 +567,7 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append("false");
                 }
 
-                hostCode.Append(@");
+                hostCode.Append(connectionType > 0 ? ").ConfigureAwait(false);" : ");").Append(@"
         }
 ");
             }
@@ -583,7 +575,7 @@ public partial class ").Append(typeName).Append(@"
 
         hostCode.Append(@"
         default:
-            return ").Append(connectionType is 0 ? "__context.NotFound()" : "await __context.NotFoundAsync()").Append(@";");
+            return ").Append(connectionType is 0 ? "__context.NotFound()" : "await __context.NotFoundAsync().ConfigureAwait(false)").Append(@";");
 
         hostCode.Replace("\n        ", "\n            ", casesStart, hostCode.Length - casesStart);
 
@@ -600,7 +592,7 @@ public partial class ").Append(typeName).Append(@"
         }
         catch (global::System.Exception __ex)
         {
-            return ").Append(connectionType is 0 ? "__context.Fail(__ex)" : "await __context.FailAsync(__ex)").Append(@";
+            return ").Append(connectionType is 0 ? "__context.Fail(__ex)" : "await __context.FailAsync(__ex).ConfigureAwait(false)").Append(@";
         }
     }
 }");

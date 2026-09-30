@@ -177,12 +177,12 @@ public partial class ServiceHandlersGenerator
             var resolve = provider + s.Service.MemberName + (s.Service.MemberIsMethodShaped ? "()" : null);
 
             if (s.Service.AsyncKind is not PartialAsyncKind.None)
-                resolve = canAwait ? "(await " + resolve + ")" : resolve + ".GetAwaiter().GetResult()";
+                resolve = canAwait ? "(await " + resolve + ".ConfigureAwait(false))" : resolve + ".GetAwaiter().GetResult()";
 
             var call = s.Kind is PipeKind.Sync
                 ? resolve + ".Process(" + expr + ")"
                 : canAwait
-                    ? "await " + resolve + ".ProcessAsync(" + expr + ")"
+                    ? "await " + resolve + ".ProcessAsync(" + expr + ").ConfigureAwait(false)"
                     : resolve + ".ProcessAsync(" + expr + ").GetAwaiter().GetResult()";
 
             expr = n == stages.Count - 1 && last != null ? last : StageVar(root, n);
@@ -296,7 +296,7 @@ public partial class ServiceHandlersGenerator
 
             if (token != null) code.Append(", ").Append(token);
 
-            code.Append(')');
+            code.Append(isAsync ? ").ConfigureAwait(false)" : ")");
 
             if (hasRet)
                 code.Append(")!;\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        "))
