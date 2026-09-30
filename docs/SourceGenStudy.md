@@ -3,14 +3,21 @@
 Objetivo: todo lo que se conoce al compilar (contrato, transporte, forma del metodo, tipos) debe decidirlo el generador, no un `if` por llamada.
 
 **Premisa de red:** el objetivo es perder menos paquetes y que, si se pierden, sea un problema de la red y no de cliente/servidor. Los PoC entran primero como **opción** (opt-in), no como reemplazo; solo pasan a defecto si el benchmark lo justifica. Predecibilidad y rendimiento antes que adivinar en runtime.
-Evidencia: codigo en `SourceCrafter.LiteSpeedLink.Server/Client`, salida en `LiteSpeedLink/obj/Generated/.../*.host.g.cs` y `*.client.g.cs`, y los benchmarks de `PLAN.md`.
+Evidencia: codigo en `SourceCrafter.LiteSpeedLink.Server/Client`, salida en `LiteSpeedLink/obj/gen/SourceCrafter.DependencyInjection/ServiceProviders/*.host.g.cs` y `*.client.g.cs`, y los benchmarks de `PLAN.md`.
 
 ## Qué emite hoy el generador
 
-- **Host:** `HandleRequestsAsync(long id, ctx, token)` con `switch(id)` sobre el hash FNV-1a de la firma. Cada caso crea un scope, hace `ctx.Get<T>()`, llama al servicio y luego a `ctx.Return(...)` / `ReturnAsync` / `EnumerateAsync(() => ...)`. El transporte se pasa como delegado `RequestHandler` a `Server.StartXxx`.
-- **Cliente:** proxies que llaman a `__connection.GetAsync/EnumerateAsync/SendAsync<TIn,TOut>(opId, payload, token)`, conexión genérica por transporte.
+- **Host:** `HandleRequestsAsync(long id, ctx, token)` con `switch(id)` sobre el hash FNV-1a de la firma. Cada caso crea un scope, lee los argumentos y llama al servicio.
+  - **Argumentos:** en operaciones unarias los lee con un lector raw emitido (`__ReqM{id}(ctx.Body.Span)`); en las demás, con `ctx.Get<T>()`.
+  - **Respuesta:** `ctx.Return(...)`, `ReturnAsync`, o `EnumerateAsync<T, TPolicy>(___result)` con la política de lote como tipo (#1).
+  - **Transporte:** TCP, UDS y QUIC reciben `new __Handler(provider)`, un `readonly struct : IRequestHandler` (#3); Memory y UDP siguen con el delegado `RequestHandler`.
+- **Cliente:** clase por interfaz atada a la conexión concreta (`TcpConnection`, `QuicConnection`...).
+  - **Operaciones unarias y sin retorno** (void sync, con o sin `out`/`ref`): van por raw (#12), con `GetRaw`/`GetRawAsync(opId, __Req{n}(...), token).ConfigureAwait(false)` y el lector `__Res{n}`.
+  - **Streams, `Task` sin resultado y métodos con pipelines:** siguen por la API tipada (`GetAsync/EnumerateAsync/SendAsync<TIn,TOut>`).
+  - **Miembros sync en transportes de red:** son extensiones sync-over-async de `ClientExtensions`; solo Memory es sync nativo.
+- **Pipelines:** una etapa por sentencia, `if (etapa is not (Success, TOut x)) throw new PipelineRejectedException(...)`, de dentro afuera; `var` solo si `TOut` es `Nullable<T>` (CS8116).
 
-El generador ya decide la forma de cada operación (Get, Enumerate o Send), el transporte y los tipos. Sin embargo, el runtime vuelve a decidir varias de esas cosas en cada llamada.
+El generador decide la forma de cada operación (Get, Enumerate o Send), el transporte, los tipos, el lector y el escritor de parámetros, y la política de lote. Lo que aún se decide en runtime está en las filas pendientes o diferidas del inventario.
 
 ## Inventario (ordenado por valor esperado)
 
@@ -18,18 +25,21 @@ El generador ya decide la forma de cada operación (Get, Enumerate o Send), el t
 |---|---|---|---|---|---|---|
 | 1 | Stream: `Func` + clausura y política de lote leída en runtime | `Server.Pipes.EnumerateAsync` | Forma del stream (`IEnumerable`/`IAsyncEnumerable`) y `[Stream(Batch, MaxDelayMs)]` | `EnumerateAsync<T, TPolicy>(___result)` con `struct __Policy_B{n}_D{ms}` (uno por configuración) o `Unbatched` | Medio | **Hecho**. POC stream −44 %, 232 B → 0; política como tipo 15,1 → 3,0 µs sin plazo (con plazo, igual: manda el reloj). Contrato `IStreams` (8 combinaciones); test `StreamPolicyTypeTest` |
 | 2 | `GetAwaiter().GetResult()` en pipelines | `ServiceHandlers.Pipelines.cs` | Si el contexto es async | Proponía `await` también en ámbitos síncronos: **incorrecto** (no cabe `await`) | — | **Descartado como propuesta**: `await` ya se emitía donde el contexto es async (`canAwait`); en contextos síncronos se mantiene `GetAwaiter().GetResult()` |
-| 3 | Dispatch por delegado `RequestHandler` | `Server.StartXxx` | El host concreto | `struct __Handler : IRequestHandler`; servidores genéricos | Medio-bajo: 1 llamada indirecta menos por petición
-| Bytes: -6 por petición, en línea con "economía de datos"; CPU: marginal | **Descartado** por POC (`DenseDispatchPoc`, 1000 llamadas aleatorias): denso 3,94 vs FNV 2,26 µs (N=10, +74 %) y 3,88 vs 3,11 µs (N=100, +25 %); el `switch` FNV (búsqueda binaria) predice mejor que la tabla de saltos indirecta. Memoria: 0 B en ambos (el id va en un buffer ya reservado); solo ahorra 7 B de cable |
-facilita el recorte de código no usado | **Diferido**: sin ganancia medible |
-el JIT especializa y elimina la rama | Bajo; se ejecuta en cada trama | **Diferido**: POC −22 % (1,35 → 1,05 µs / 1000 tramas), irrelevante frente a red; solo si un perfil lo señala |
-en contratos solo unarios, menos código | **Diferido**: solo si un perfil lo señala |
-| **Hecho**: `UnarySink` (`ManualResetValueTaskSourceCore`) en pool por conexión; streams siguen con canal. `Lsl_Unary` 41 µs / 2,07 KB → 39 µs / 903 B (−56 % asignado) |
-limpieza de API | **Descartado**: sin coste en runtime |
-| Ninguno | **Descartado**: no tocar |
-| 11 | `EnumerateAsync` abre un stream QUIC por llamada | `Client.QuicConnection` | Operación de stream y su perfil | Opción por operación para reutilizar stream (pool, como unarias) sin fijarlo por defecto | Pendiente de PoC: solo si mejora el tiempo sin perder aislamiento | **Pendiente** |
-| Menos genéricos, menos copias, binario exacto | **Validado** por PoC (`ParamEncodingPoc`), pendiente de generar: con métodos específicos (`WriteUnmanaged`/`WriteString`, `ReadUnmanaged`/`ReadString`) y estado reutilizado, escritura 14,4 vs 36,8 ns (−61 %) y lectura 19,7 vs 23,7 ns (−17 %), mismo formato en el cable. La primera medición (bloques ≈ tupla al escribir, 37 vs 24 ns al leer) se debía a `WriteValue<T>`/`ReadValue<T>` y a alquilar el estado del pool por llamada; el alquiler pesaba más (lectura genérica con estado cacheado: 21,3 ns).
-| Menos reservas y ramas | **Descartado** por PoC (`FixedSizeResponsePoc`): 8,37 vs 8,86 ns (−0,5 ns, 0 B ambos); por debajo del ruido de cualquier transporte, no justifica atributo ni rama generada |
+| 3 | Dispatch por delegado `RequestHandler` | `Server.StartXxx` | El host concreto | `readonly struct __Handler : IRequestHandler`; servidores genéricos `where THandler : struct` | Medio-bajo: 1 llamada indirecta menos por petición | **Hecho** en TCP, UDS y QUIC (`DelegateRequestHandler` adapta el delegado para llamadas manuales). Memory y UDP siguen con delegado. Test `UdsTest` (struct `Doubler`) |
+| 4 | `switch` FNV sobre `long` | Host generado | Conjunto finito de operaciones | Índice denso 0..N-1 en lugar del hash | Bytes: −6 por petición (economía de datos); CPU: marginal | **Descartado** por POC (`DenseDispatchPoc`, 1000 llamadas aleatorias): denso 3,94 vs FNV 2,26 µs (N=10, +74 %) y 3,88 vs 3,11 µs (N=100, +25 %). El `switch` FNV (búsqueda binaria) predice mejor que la tabla de saltos indirecta. Memoria: 0 B en ambos; solo ahorra 7 B de cable |
+| 5 | Opciones del servidor leídas en runtime (TLS, lote por defecto) aunque el host no las use | `Server.StartXxx` | Transporte y opciones del host | Sobrecargas emitidas por combinación | Bajo; facilita el recorte de código no usado | **Diferido**: sin ganancia medible |
+| 6 | Framing: `bool correlated` por trama | `Internals/Framing.cs` | Transporte (con o sin corrId) | Estrategia estática (`Framing<Correlated>`); el JIT especializa y elimina la rama | Bajo; se ejecuta en cada trama | **Diferido**: POC `SourceGenPocBenchmarks.Framing_*` −22 % (1,35 → 1,05 µs / 1000 tramas), irrelevante frente a la red; solo si un perfil lo señala |
+| 7 | Canal del cliente preparado para streams aunque el contrato sea solo unario | `MultiplexedChannel` | Contrato sin `Enumerate*` | Canal solo unario | Bajo; en contratos solo unarios, menos código | **Diferido**: #8 ya quitó el `Channel` de las unarias; solo si un perfil lo señala |
+| 8 | Unaria entregada por `Channel` | `MultiplexedChannel` | Forma unaria | `IValueTaskSource` reutilizable | Alto en asignación | **Hecho**: `UnarySink` (`ManualResetValueTaskSourceCore`) en pool por conexión; streams siguen con canal. `Lsl_Unary` 41 µs / 2,07 KB → 39 µs / 903 B (−56 % asignado) |
+| 9 | `[CallerMemberName] name` en `IConnection`/`IAsyncConnection` | Client | Nombre del método | Quitar el parámetro | Limpieza de API | **Descartado**: constante de compilación, sin coste en runtime |
+| 10 | `DynamicallyAccessedMembers` en genéricos | Client | — | Quitarlo | Ninguno | **Descartado**: lo impone MemoryPack (trimming, PLAN 1.2); no tocar |
+| 11 | `EnumerateAsync` abre un stream QUIC por llamada | `Client.QuicConnection` | Operación de stream | Reutilizar stream (pool, como unarias) | Menos coste fijo por stream (suelo medido: stream crudo 86 µs frente a RPC 110 µs tras el arreglo del FIN) | **Descartado como defecto**: se mantiene stream propio por `EnumerateAsync` para aislar el bloqueo de cabeza de línea. El lote por política (#1) ya aplica en QUIC (−35 %). Reabrir solo si QUIC pasa a transporte principal |
+| 12 | Parámetros serializados como tupla con `WriteValue<T>`/`ReadValue<T>` y estado alquilado por llamada | Cliente y host | Tipos de cada parámetro | Bloques contiguos con métodos específicos (`WriteUnmanaged`/`WriteString`/`WritePackable`) y estado reutilizado | Menos genéricos, menos copias, binario exacto | **Hecho** (`ServiceHandlers.Raw.cs`): unarias y sin retorno por `GetRaw`/`GetRawAsync`; host con lector espejo `__ReqM{id}`. Capacidad del escritor exacta si todo es primitivo/enum; si no, 64 y crece. POC `ParamEncodingPoc`: escritura 14,4 vs 36,8 ns (−61 %), lectura 19,7 vs 23,7 ns (−17 %), mismo cable. Test `UdsTest.TestRawRoundtrip`. Pendiente: streams, `Task` sin resultado y métodos con pipelines |
+| 13 | Buffer de respuesta de tamaño variable | Host | Respuesta de tamaño fijo | Buffer exacto | Menos reservas y ramas | **Descartado** por POC (`FixedSizeResponsePoc`): 8,37 vs 8,86 ns (−0,5 ns, 0 B ambos); por debajo del ruido de cualquier transporte |
 | 14 | Pool QUIC elige stream por turno | `Client.QuicConnection.GetMuxAsync` | Forma y tamaño esperado por operación | Ruta emitida por operación: pool o stream propio (grandes/lentas) | Menos bloqueo de cabeza de línea entre unarias | **Pendiente** de PoC |
+| 15 | Coalescing de streams en el cliente | `StreamConnection`/`MultiplexedChannel` | — | No aplica: depende de lo que traiga cada `ReadAsync` | — | **Hecho como defecto** (`coalesceStreams = true` en TCP/UDS), sin cambio de cable. `Lsl_Stream` 274 → 196 µs (AspNetSlim 229 µs). Tests `StreamBatchingTest`, `StreamBatchConcurrencyTest` |
+
+Las columnas 2 a 5 de las filas 5, 7, 9 y 10 se perdieron en una edición anterior y aquí están **inferidas** del código y de las conclusiones que sí quedaron (beneficio y estado). Las filas 4, 6, 8, 12 y 13 se reconstruyeron a partir de sus POCs. Revisar las inferidas si se retoman.
 
 ## Qué no conviene generar
 
@@ -39,11 +49,22 @@ limpieza de API | **Descartado**: sin coste en runtime |
 
 ## Plan de validación (cada punto con POC o test, según las directrices)
 
-1. **#8 unaria sin canal.** Medir `Lsl_Unary` (asignación y tiempo) antes y después. Es el cambio más pequeño y con más asignación que quitar.
-2. **#1 stream emitido.** Medir `Lsl_StreamBatched` frente a la versión emitida, con y sin atributo de lote.
-3. **#2** descartado como propuesta (ver inventario).
-4. **#3/#4 dispatch denso.** Micro-benchmark `switch` FNV frente a índice denso con N = 10/100 operaciones. Aplicar solo si la diferencia supera el ruido.
-5. **#6/#7** solo si un perfil muestra la rama en el camino caliente; si no, no merece la pena.
+| # | Estado | Evidencia |
+|---|---|---|
+| 8 | Hecho | `Lsl_Unary` 41 → 39 µs, 2,07 KB → 903 B |
+| 1 | Hecho | `SourceGenPocBenchmarks.Policy_*`, `StreamPolicyTypeTest` |
+| 3 | Hecho (TCP/UDS/QUIC) | `UdsTest` |
+| 4 | Descartado | `DenseDispatchPoc` |
+| 12 | Hecho (unarias) | `ParamEncodingPoc`, `UdsTest.TestRawRoundtrip` |
+| 15 | Hecho (defecto TCP/UDS) | `Comparison`: `Lsl_Stream` 196 µs vs `AspNetSlim_Stream` 229 µs |
+| 2, 9, 10, 13 | Descartados | Ver inventario |
+| 5, 6, 7 | Diferidos | Solo si un perfil muestra la rama en el camino caliente |
+| 14 | Pendiente | PoC: unaria grande/lenta en el pool vs stream propio, midiendo la latencia de las unarias pequeñas concurrentes |
+
+**Siguiente en el generador:**
+1. Raw (#12) para streams y `Task` sin resultado.
+2. Estimar la capacidad del escritor para `string` y packables.
+3. PoC de #14.
 
 ## ConfigureAwait(false) en cada await
 
@@ -54,7 +75,9 @@ Matiz práctico:
 - **Cliente:** puede llamarse desde WPF, WinForms o MAUI. Ahí sí evita volver al hilo de UI y los bloqueos mutuos con `.Result`. Es obligatorio.
 - **Alternativa:** en el código generado, el generador puede emitirlo siempre, así que no es carga manual.
 
+**Estado:** emitido en host, etapas de pipeline, cliente tipado y cliente raw (paso 5).
+
 ## Principio
 
-Todo lo que evite adivinar en runtime se precompila: #1-#7 pasan de 'segun perfil' a obligatorios. Orden de ejecucion: #2 (correccion), #5/#6/#7 (flags -> tipos/sobrecargas emitidas), #1 (stream emitido), #3/#4 (dispatch denso). #8 no es de generador pero va en paralelo.
+Pendientes: #14 y completar #12.
 
