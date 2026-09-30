@@ -205,7 +205,7 @@ public partial class ServiceHandlersGenerator
     /// explicita lanzando <c>InvalidOperationException</c>.
     /// </summary>
     private static bool TryGenerateProcessedClientMethod(
-        StringBuilder code, ServiceProviderInfo container, INamedTypeSymbol iFace, IMethodSymbol method, PartialContribution contribution)
+        StringBuilder code, StringBuilder helpers, ServiceProviderInfo container, INamedTypeSymbol iFace, IMethodSymbol method, PartialContribution contribution, ref int rawIndex)
     {
         if (!HasProcessors(method.GetReturnTypeAttributes()) && !method.Parameters.Any(p => HasProcessors(p.GetAttributes())))
             return false;
@@ -267,11 +267,14 @@ public partial class ServiceHandlersGenerator
         var serviceId = GetServiceId(method.GlobalNamespaced);
         var clientParams = string.Join(", ", method.Parameters.Select(p =>
             (inputs.FirstOrDefault(i => SymbolEqualityComparer.Default.Equals(i.Param, p)).ClientType ?? p.Type).GlobalNamespaced + " " + p.Name));
-        string?
-            finalType = hasRet ? finalRet.GlobalNamespaced : null,
-            inTypes = inputs.Count switch { 0 => null, 1 => inputs[0].Wire.GlobalNamespaced, _ => "(" + string.Join(", ", inputs.Select(i => i.Wire.GlobalNamespaced)) + ")" },
-            payload = inputs.Count switch { 0 => null, 1 => Wire(inputs[0]), _ => "(" + string.Join(", ", inputs.Select(Wire)) + ")" },
-            generic = string.Join(", ", new[] { inTypes, hasRet ? wireRet.GlobalNamespaced : null }.Where(t => t != null));
+        int n = rawIndex++;
+        string? finalType = hasRet ? finalRet.GlobalNamespaced : null;
+        string
+            resName = "__Res" + n,
+            reqArgs = inputs.Count > 0 ? "__Req" + n + "(" + string.Join(", ", inputs.Select(Wire)) + ")" : "default";
+
+        if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], "");
+        if (hasRet) EmitReader(helpers, resName, [wireRet], "");
 
         static string Wire((IParameterSymbol Param, ITypeSymbol ClientType, ITypeSymbol Wire, List<Stage> Stages) i) => i.Stages.Count > 0 ? StageVar(i.Param.Name, i.Stages.Count - 1) : i.Param.Name;
 
@@ -282,24 +285,18 @@ public partial class ServiceHandlersGenerator
             foreach (var i in inputs.Where(i => i.Stages.Count > 0))
                 code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        "));
 
-            if (hasRet) code.Append("var __r = (");
+            if (hasRet) code.Append("var __r = ").Append(resName).Append("((");
 
             if (isAsync) code.Append("await ");
 
-            code.Append("__connection.").Append(hasRet ? "Get" : "Send").Append(isAsync ? "Async" : null);
-
-            if (generic.Length > 0) code.Append('<').Append(generic).Append('>');
-
-            code.Append('(').Append(serviceId);
-
-            if (payload != null) code.Append(", ").Append(payload);
+            code.Append("__connection.GetRaw").Append(isAsync ? "Async" : null).Append('(').Append(serviceId).Append(", ").Append(reqArgs);
 
             if (token != null) code.Append(", ").Append(token);
 
             code.Append(isAsync ? ").ConfigureAwait(false)" : ")");
 
             if (hasRet)
-                code.Append(")!;\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        "))
+                code.Append(").Span);\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        "))
                     .Append("return ").Append(clientPost.Count > 0 ? StageVar("__r", clientPost.Count - 1) : "__r");
 
             code.Append(";\n    }");

@@ -50,9 +50,9 @@ public static partial class Server
 
                     // El lector avanza antes de que el handler termine: el cuerpo se copia a un
                     // buffer alquilado que vive lo que dura la peticion.
-                    long op = Framing.ReadOpId(content);
+                    var op = Framing.ReadOpId(content);
                     int length = (int)content.Length - Framing.OpIdSize;
-                    byte[] body = ArrayPool<byte>.Shared.Rent(length);
+                    var body = ArrayPool<byte>.Shared.Rent(length);
                     content.Slice(Framing.OpIdSize).CopyTo(body);
 
                     await slots.WaitAsync(token).ConfigureAwait(false);

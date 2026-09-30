@@ -58,6 +58,15 @@ public partial class ServiceHandlersGenerator
     private static string TupleOf(IReadOnlyList<ITypeSymbol> types) =>
         types.Count == 1 ? types[0].GlobalNamespaced : "(" + string.Join(", ", types.Select(t => t.GlobalNamespaced)) + ")";
 
+    /// <summary>Capacidad inicial del escritor: constante plegada + termino por cada string.</summary>
+    private static string CapacityOf(IReadOnlyList<ITypeSymbol> types)
+    {
+        int constant = types.Sum(t => FixedSize(t) ?? (GetWireKind(t) is WireKind.String ? 8 : 64));
+        var strings = types.Select((t, i) => (t, i)).Where(x => GetWireKind(x.t) is WireKind.String).Select(x => $"(__p{x.i}?.Length ?? 0) * 3");
+
+        return string.Join(" + ", new[] { constant.ToString() }.Concat(strings));
+    }
+
     /// <summary>Lector estatico: <c>ReadOnlySpan&lt;byte&gt;</c> -> valor o tupla, con los metodos especificos de cada tipo.</summary>
     private static void EmitReader(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent)
     {
@@ -78,9 +87,9 @@ public partial class ServiceHandlersGenerator
             .Append(string.Join(", ", types.Select((t, i) => t.GlobalNamespaced + " __p" + i))).Append(")\n")
             .Append(indent).Append("{\n")
             // ponytail: un ArrayBufferWriter por llamada; el cuerpo debe sobrevivir a los await del transporte. Upgrade: buffer del pool devuelto por el transporte.
-            // Tamano exacto si todos los tipos son de tamano fijo; si no, capacidad inicial (crece sola). Pendiente: estimar strings/packables.
+            // Primitivos exactos; strings con cota UTF-8 (cabecera 8 + 3/char, sin recorrer el string: nunca crece); packables/valores parten de 64 y crecen.
             .Append(indent).Append("    var __buf = new global::System.Buffers.ArrayBufferWriter<byte>(")
-            .Append(types.All(t => FixedSize(t) is not null) ? types.Sum(t => FixedSize(t)!.Value) : 64).Append(");\n")
+            .Append(CapacityOf(types)).Append(");\n")
             .Append(indent).Append("    using (var __s = global::MemoryPack.MemoryPackWriterOptionalStatePool.Rent(null))\n")
             .Append(indent).Append("    {\n")
             .Append(indent).Append("        var __w = new global::MemoryPack.MemoryPackWriter<global::System.Buffers.ArrayBufferWriter<byte>>(ref __buf, __s);\n");
@@ -100,12 +109,12 @@ public partial class ServiceHandlersGenerator
     /// sin retorno se envian igual; el cuerpo de respuesta se ignora salvo out/ref. Streams y Task sin
     /// resultado siguen por la API tipada.
     /// </summary>
-    private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, IMethodSymbol method, ref int rawIndex)
+    private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, INamedTypeSymbol iFace, IMethodSymbol method, ref int rawIndex)
     {
         bool isTask = method.ReturnType.TryGetAsyncType(out var retType, out var hasRet, out var isValueTask);
         hasRet = isTask ? hasRet : !method.ReturnsVoid;
 
-        if ((isTask && !hasRet) || (hasRet && retType.GlobalNonGenericNamespace is "global::System.Collections.Generic.IAsyncEnumerable" or "global::System.Collections.Generic.IEnumerable"))
+        if (hasRet && retType.GlobalNonGenericNamespace is "global::System.Collections.Generic.IAsyncEnumerable" or "global::System.Collections.Generic.IEnumerable")
             return false;
 
         string? tokenName = null;
@@ -146,6 +155,12 @@ public partial class ServiceHandlersGenerator
         if (readsResponse) code.Append("\n\n        return ").Append(resName).Append("(__res.Span);");
 
         code.Append("\n    }");
+
+        // Contrato async sin token: la sobrecarga publica anade uno opcional y no lo implementa.
+        if (isTask && tokenName is null)
+            code.Append("\n\n    ").Append(method.ReturnType.GlobalNamespaced).Append(' ').Append(iFace.GlobalNamespaced).Append('.').Append(method.Name)
+                .Append('(').Append(asyncParams).Append(") => ").Append(name).Append('(')
+                .Append(string.Join(", ", method.Parameters.Select(p => p.Name))).Append(");");
 
         if (!isTask)
         {

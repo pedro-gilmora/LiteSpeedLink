@@ -67,7 +67,7 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 3. [x] **`MultiplexedChannel.DisposeAsync`**: `CancelPendingRead()` antes de esperar el bucle de lectura; ya no depende de cerrar el socket antes. Test `DisposeTest` (TCP/UDS, ≤ 2 s).
 4. [x] **`ToListAsync()` sobre `EnumerateAsync` en Memory**: ya no se reproduce (10/10); lo resolvió `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (5.2). Regresión: `TestMemoryStreamsRoutedPerClient`.
 5. [x] **`ConfigureAwait(false)`** en todos los `await` emitidos: host (`Start` QUIC, resolución async, `ReturnAsync`/`EnumerateAsync`/`NotFoundAsync`/`FailAsync`), etapas de pipeline (`ProcessAsync` y resolución async) y cliente tipado (`GetAsync`/`SendAsync`). Verificación: 0 `await` sin `ConfigureAwait` en `obj/gen` + POC (Memory/UDP/TCP/QUIC) y suite 71/71 en verde.
-6. [ ] **Raw (#12) completo**: `Task` sin resultado → `Enumerate*` → métodos con pipelines; capacidad del escritor para `string`/packables (hoy 64 y crece).
+6. [x] **Raw (#12) completo** salvo streams: `Task` sin resultado (cliente + host esperan el `Task`), métodos con pipelines por `GetRaw*`, capacidad del escritor con cota UTF-8 para `string`. `Enumerate*` raw queda a lo que diga su POC (6d).
 7. [ ] **Timeouts de Memory** (5.5): `MemoryConnection` 5000 ms, `AsMemoryConnection` 100000 ms, `StartMemoryServer*` 1000 ms; unificar o justificar.
 8. [ ] **Sesiones Memory de clientes caídos** (`MemoryLobby`).
 9. [ ] **Resto de 5.2**: early-return sin excepción, `ref`/`out`/`in` y streams con procesadores (hoy SCLSL012), test de SCLSL014 (arnés Roslyn).
@@ -593,7 +593,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ## PoCs (antes de comprometer diseño)
 
-(`ServiceHandlers.Raw.cs`, test `UdsTest.TestRawRoundtrip`); faltan streams, `Task` sin resultado y pipelines.
+(`ServiceHandlers.Raw.cs`, test `UdsTest.TestRawRoundtrip`) para unarias, `Task` sin resultado y pipelines; faltan streams (POC).
 
 - [x] **PoC-A · Multiplexación y concurrencia del cliente** — TCP/UDP ya multiplexados (3.6/3.7, tests `Test{Tcp,Udp}ConcurrentRoundtrips`). Memory: `RpcBuffer` ya empareja y es seguro con N en vuelo; fallaba por **inanición del thread pool** (bucle lector bloqueante en `Task.Run`; cuello a partir de ~64 llamadas con `Get` sync). Fix en el fork: lector con `TaskCreationOptions.LongRunning`. Test `TestMemoryConcurrentRoundtrips` (200 llamadas mixtas sync/async/stream/NotFound, una instancia).
   - Escenario: N hilos (1, 2, 8, 32) llamando a `Greet` sobre **una misma instancia** de cliente.
@@ -617,11 +617,15 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   (`ServiceHandlers.Raw.cs`) emite por operación unaria un escritor/lector estático con llamadas MemoryPack
   específicas por tipo (`WriteUnmanaged`/`WriteString`/`WritePackable`, `WriteValue` solo como fallback);
   el host lee `ctx.Body` con el lector espejo. Bloques secuenciales = mismos bytes que la tupla (verificado).
-  Operaciones sin retorno (void sincrono, con o sin out/ref) tambien van por raw; streams y `Task` sin resultado
-  siguen por la API tipada. Host: `ref` ahora viaja de vuelta (antes se contaba `in`). Capacidad del escritor:
+  Operaciones sin retorno (void sincrono, con o sin out/ref) tambien van por raw; streams siguen por la API
+  tipada. Host: `ref` ahora viaja de vuelta (antes se contaba `in`). Capacidad del escritor:
   exacta en compilacion si todos los parametros son primitivos/enum; si no, 64 y crece.
-  - [ ] Pendiente: estimar capacidad para strings/packables (hoy fallback 64); raw para `Enumerate*` y `Task` sin resultado.
-  Test: `UdsTest.TestRawRoundtrip` + suite completa (71/71).
+  - [x] `Task`/`ValueTask` sin resultado por raw; si el contrato no trae token se emite la implementación explícita. El host
+    espera el `Task` (`await` en red, `GetAwaiter().GetResult()` en Memory) en vez de intentar serializarlo.
+  - [x] Métodos con pipelines por `GetRaw*` con `__Req{n}`/`__Res{n}` sobre los tipos de wire.
+  - [x] Capacidad: strings con cota `8 + 3·Length` (MemoryPack escribe UTF-8 con cabecera 8; nunca crece); packables 64.
+  - [ ] `Enumerate*` raw: pendiente de POC (6d).
+  Test: `UdsTest.TestRawRoundtrip`, `RawCapacityTest`, POC `IAuth.TouchAsync` en `LiteSpeedLink/Program.cs` (4 transportes) + suite (75/75).
 
 - [x] **QUIC intermitente en suite** — `StreamBatchPolicyTest.QuicStreamsMatchBatched(0)` y
   `QuicPoolCancellationTest` usaban el mismo puerto 5030 en paralelo (xUnit) ⇒ `QuicException` al enlazar.

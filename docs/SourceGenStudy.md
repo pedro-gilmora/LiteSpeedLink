@@ -12,8 +12,8 @@ Evidencia: codigo en `SourceCrafter.LiteSpeedLink.Server/Client`, salida en `Lit
   - **Respuesta:** `ctx.Return(...)`, `ReturnAsync`, o `EnumerateAsync<T, TPolicy>(___result)` con la política de lote como tipo (#1).
   - **Transporte:** TCP, UDS y QUIC reciben `new __Handler(provider)`, un `readonly struct : IRequestHandler` (#3); Memory y UDP siguen con el delegado `RequestHandler`.
 - **Cliente:** clase por interfaz atada a la conexión concreta (`TcpConnection`, `QuicConnection`...).
-  - **Operaciones unarias y sin retorno** (void sync, con o sin `out`/`ref`): van por raw (#12), con `GetRaw`/`GetRawAsync(opId, __Req{n}(...), token).ConfigureAwait(false)` y el lector `__Res{n}`.
-  - **Streams, `Task` sin resultado y métodos con pipelines:** siguen por la API tipada (`GetAsync/EnumerateAsync/SendAsync<TIn,TOut>`).
+  - **Operaciones unarias, sin retorno (void o `Task`) y con pipelines:** van por raw (#12), con `GetRaw`/`GetRawAsync(opId, __Req{n}(...), token).ConfigureAwait(false)` y el lector `__Res{n}`.
+  - **Streams:** siguen por la API tipada (`EnumerateAsync<TIn,TOut>`) hasta que su POC diga lo contrario.
   - **Miembros sync en transportes de red:** son extensiones sync-over-async de `ClientExtensions`; solo Memory es sync nativo.
 - **Pipelines:** una etapa por sentencia, `if (etapa is not (Success, TOut x)) throw new PipelineRejectedException(...)`, de dentro afuera; `var` solo si `TOut` es `Nullable<T>` (CS8116).
 
@@ -34,7 +34,7 @@ El generador decide la forma de cada operación (Get, Enumerate o Send), el tran
 | 9 | `[CallerMemberName] name` en `IConnection`/`IAsyncConnection` | Client | Nombre del método | Quitar el parámetro | Limpieza de API | **Descartado**: constante de compilación, sin coste en runtime |
 | 10 | `DynamicallyAccessedMembers` en genéricos | Client | — | Quitarlo | Ninguno | **Descartado**: lo impone MemoryPack (trimming, PLAN 1.2); no tocar |
 | 11 | `EnumerateAsync` abre un stream QUIC por llamada | `Client.QuicConnection` | Operación de stream | Reutilizar stream (pool, como unarias) | Menos coste fijo por stream (suelo medido: stream crudo 86 µs frente a RPC 110 µs tras el arreglo del FIN) | **Descartado como defecto**: se mantiene stream propio por `EnumerateAsync` para aislar el bloqueo de cabeza de línea. El lote por política (#1) ya aplica en QUIC (−35 %). Reabrir solo si QUIC pasa a transporte principal |
-| 12 | Parámetros serializados como tupla con `WriteValue<T>`/`ReadValue<T>` y estado alquilado por llamada | Cliente y host | Tipos de cada parámetro | Bloques contiguos con métodos específicos (`WriteUnmanaged`/`WriteString`/`WritePackable`) y estado reutilizado | Menos genéricos, menos copias, binario exacto | **Hecho** (`ServiceHandlers.Raw.cs`): unarias y sin retorno por `GetRaw`/`GetRawAsync`; host con lector espejo `__ReqM{id}`. Capacidad del escritor exacta si todo es primitivo/enum; si no, 64 y crece. POC `ParamEncodingPoc`: escritura 14,4 vs 36,8 ns (−61 %), lectura 19,7 vs 23,7 ns (−17 %), mismo cable. Test `UdsTest.TestRawRoundtrip`. Pendiente: streams, `Task` sin resultado y métodos con pipelines |
+| 12 | Parámetros serializados como tupla con `WriteValue<T>`/`ReadValue<T>` y estado alquilado por llamada | Cliente y host | Tipos de cada parámetro | Bloques contiguos con métodos específicos (`WriteUnmanaged`/`WriteString`/`WritePackable`) y estado reutilizado | Menos genéricos, menos copias, binario exacto | **Hecho** (`ServiceHandlers.Raw.cs`): unarias, sin retorno (void/`Task`) y con pipelines por `GetRaw`/`GetRawAsync`; host con lector espejo `__ReqM{id}` y espera del `Task`. Capacidad del escritor: primitivos exactos, strings con cota UTF-8 `8 + 3·Length` (`RawCapacityTest`), packables 64 y crece. POC `ParamEncodingPoc`: escritura 14,4 vs 36,8 ns (−61 %), lectura 19,7 vs 23,7 ns (−17 %), mismo cable. Test `UdsTest.TestRawRoundtrip`. Pendiente: streams (POC) |
 | 13 | Buffer de respuesta de tamaño variable | Host | Respuesta de tamaño fijo | Buffer exacto | Menos reservas y ramas | **Descartado** por POC (`FixedSizeResponsePoc`): 8,37 vs 8,86 ns (−0,5 ns, 0 B ambos); por debajo del ruido de cualquier transporte |
 | 14 | Pool QUIC elige stream por turno | `Client.QuicConnection.GetMuxAsync` | Forma y tamaño esperado por operación | Ruta emitida por operación: pool o stream propio (grandes/lentas) | Menos bloqueo de cabeza de línea entre unarias | **Pendiente** de PoC |
 | 15 | Coalescing de streams en el cliente | `StreamConnection`/`MultiplexedChannel` | — | No aplica: depende de lo que traiga cada `ReadAsync` | — | **Hecho como defecto** (`coalesceStreams = true` en TCP/UDS), sin cambio de cable. `Lsl_Stream` 274 → 196 µs (AspNetSlim 229 µs). Tests `StreamBatchingTest`, `StreamBatchConcurrencyTest` |
@@ -55,15 +55,14 @@ Las columnas 2 a 5 de las filas 5, 7, 9 y 10 se perdieron en una edición anteri
 | 1 | Hecho | `SourceGenPocBenchmarks.Policy_*`, `StreamPolicyTypeTest` |
 | 3 | Hecho (TCP/UDS/QUIC) | `UdsTest` |
 | 4 | Descartado | `DenseDispatchPoc` |
-| 12 | Hecho (unarias) | `ParamEncodingPoc`, `UdsTest.TestRawRoundtrip` |
+| 12 | Hecho (salvo streams) | `ParamEncodingPoc`, `UdsTest.TestRawRoundtrip`, `RawCapacityTest`, POC `IAuth.TouchAsync` |
 | 15 | Hecho (defecto TCP/UDS) | `Comparison`: `Lsl_Stream` 196 µs vs `AspNetSlim_Stream` 229 µs |
 | 2, 9, 10, 13 | Descartados | Ver inventario |
 | 5, 6, 7 | Diferidos | Solo si un perfil muestra la rama en el camino caliente |
 | 14 | Pendiente | PoC: unaria grande/lenta en el pool vs stream propio, midiendo la latencia de las unarias pequeñas concurrentes |
 
 **Siguiente en el generador:**
-1. Raw (#12) para streams y `Task` sin resultado.
-2. Estimar la capacidad del escritor para `string` y packables.
+1. POC de raw (#12) para streams: decide si `Enumerate*` pasa a raw.
 3. PoC de #14.
 
 ## ConfigureAwait(false) en cada await
@@ -79,5 +78,5 @@ Matiz práctico:
 
 ## Principio
 
-Pendientes: #14 y completar #12.
+Pendientes: #14 y el POC de streams raw (#12).
 

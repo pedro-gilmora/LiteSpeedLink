@@ -140,9 +140,9 @@ public partial class ").Append(typeShortName).Append(@"
             {
                 if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                 {
-                    if (TryGenerateProcessedClientMethod(clientCode, container, iFace, method, contribution)) continue;
+                    if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, ref rawIndex)) continue;
 
-                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, method, ref rawIndex)) continue;
+                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, ref rawIndex)) continue;
 
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,

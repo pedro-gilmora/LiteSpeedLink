@@ -287,9 +287,11 @@ public partial class ").Append(typeName).Append(@"
                     }
                 }
 
+                bool isAwaitable = method.ReturnType.TryGetAsyncType(out var awaitedType, out var awaitedHasRet, out _);
+
                 bool
                     hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
-                    returnsType = !method.ReturnsVoid,
+                    returnsType = isAwaitable ? awaitedHasRet : !method.ReturnsVoid,
                     useMetadata = returnsType || !hasEmptyParams;
 
                 Action?
@@ -313,7 +315,7 @@ public partial class ").Append(typeName).Append(@"
 
                 if (returnsType)
                 {
-                    ValidateChain(compilation, method.ReturnType, serverPost, null, methodName + " server response", contribution, methodLocation);
+                    ValidateChain(compilation, awaitedType, serverPost, null, methodName + " server response", contribution, methodLocation);
 
                     outCount++;
                     resultExpression += () =>
@@ -495,6 +497,10 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append(@"var ___result = ");
                 }
 
+                bool awaitCall = isAwaitable && connectionType > 0;
+
+                if (awaitCall) hostCode.Append("await ");
+
                 if (dependencyIsAsync) hostCode.Append("(await ");
 
                 AppendResolution(hostCode, dependency, provider);
@@ -505,7 +511,8 @@ public partial class ").Append(typeName).Append(@"
 
                 invokeParams?.Invoke();
 
-                hostCode.Append(@");
+                // Memory es sync: el host no puede await; se bloquea como hacen las etapas async ahi.
+                hostCode.Append(awaitCall ? ").ConfigureAwait(false);" : isAwaitable ? ").GetAwaiter().GetResult();" : ");").Append(@"
 
             ");
 

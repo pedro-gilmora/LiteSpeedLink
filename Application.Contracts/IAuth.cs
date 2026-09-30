@@ -25,6 +25,9 @@ public interface IAuth : IServiceUnit
     // Cliente cambia tipos: int -> IntToString -> red string -> string Twice(string) -> red string -> ParseInt -> int. Cliente: int Twice(int)
     [return: ClientPostProcessor<ParseInt>]
     string Twice([ClientPreProcessor<IntToString>] string value);
+
+    // Task sin resultado: raw (#12), el cuerpo de respuesta se ignora.
+    Task TouchAsync(string user);
 }
 
 public sealed class ParseInt : IPipeline<string, int>

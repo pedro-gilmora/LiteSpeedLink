@@ -26,6 +26,8 @@ try
     Console.WriteLine($"Echo (sync): {client.Auth.Echo("  hi  ")}");
     Console.WriteLine($"Square (server TOut): {await client.Auth.SquareAsync("7")}");
     Console.WriteLine($"Twice (client TOut): {client.Auth.Twice(21) + 1}");
+    await client.Auth.TouchAsync("pedro");
+    Console.WriteLine("Touch (raw Task): ok");
     try { client.Auth.Echo("   "); }
     catch (PipelineRejectedException ex) { Console.WriteLine($"Rejected: {ex.Message}"); }
 }
@@ -68,6 +70,8 @@ static async Task Exercise(string transport, IAuth auth, Func<string, ValueTask<
         Console.WriteLine($"[{transport}] TryAuth (sync): {auth.TryAuth("pedro", "test!123", out var token)} {token}");
         Console.WriteLine($"[{transport}] Greet (async): {await greetAsync("  Pedro  ")}");
         Console.WriteLine($"[{transport}] Echo (sync): {auth.Echo("  hi  ")}");
+        await auth.TouchAsync("pedro");
+        Console.WriteLine($"[{transport}] Touch (raw Task): ok");
         try { auth.Echo("   "); }
         catch (PipelineRejectedException ex) { Console.WriteLine($"[{transport}] Rejected: {ex.Message}"); }
     }

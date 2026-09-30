@@ -14,6 +14,15 @@ public partial class AuthService() : IAuth
 
     public string Twice(string value) => value + value;
 
+    public int Touched;
+
+    public Task TouchAsync(string user)
+    {
+        if (user != "pedro") throw new ArgumentException(user);
+        Interlocked.Increment(ref Touched);
+        return Task.CompletedTask;
+    }
+
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
         if (credentials is ("pedro", "test!123"))
