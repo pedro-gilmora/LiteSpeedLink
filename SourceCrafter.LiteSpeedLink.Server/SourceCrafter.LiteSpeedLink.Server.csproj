@@ -26,6 +26,9 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" PrivateAssets="all" />
+		<Compile Include="..\Internals\*.cs">
+			<Link>InternalsShared\%(Filename)%(Extension)</Link>
+		</Compile>
 	</ItemGroup>
 
 </Project>

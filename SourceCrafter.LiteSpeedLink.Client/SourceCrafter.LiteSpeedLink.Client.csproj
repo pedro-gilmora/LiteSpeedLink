@@ -18,6 +18,9 @@
 		<PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
 		<PackageReference Include="MemoryPack" Version="1.21.4" PrivateAssets="all" />
 		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" PrivateAssets="all" />
+		<Compile Include="..\Internals\*.cs">
+			<Link>InternalsShared\%(Filename)%(Extension)</Link>
+		</Compile>
 	</ItemGroup>
 
 </Project>

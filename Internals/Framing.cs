@@ -7,7 +7,7 @@ namespace SourceCrafter.LiteSpeedLink;
 /// <summary>
 /// Lectura y escritura de la cabecera de operación, con endianness explícita y sin asignaciones.
 /// </summary>
-public static class Framing
+static class Framing
 {
     public const int OpIdSize = sizeof(long);
 
