@@ -1,4 +1,4 @@
-using System.IO.Pipelines;
+﻿using System.IO.Pipelines;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -14,33 +14,48 @@ public static partial class Server
         Action onFinalize,
         X509Certificate2? cert = default,
         CancellationToken token = default,
-        int maxInFlightPerConnection = MaxInFlightPerConnection)
+        int maxInFlightPerConnection = MaxInFlightPerConnection,
+        int streamBatch = 0,
+        TimeSpan streamBatchMaxDelay = default)
+        => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, streamBatch, streamBatchMaxDelay);
+
+    public static TcpListener StartTcpServer<THandler>(
+        int port,
+        THandler handlers,
+        Action onFinalize,
+        X509Certificate2? cert = default,
+        CancellationToken token = default,
+        int maxInFlightPerConnection = MaxInFlightPerConnection,
+        int streamBatch = 0,
+        TimeSpan streamBatchMaxDelay = default)
+        where THandler : struct, IRequestHandler
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlightPerConnection, 1);
+        var batch = BatchPolicy.Create(streamBatch, streamBatchMaxDelay);
 
         var tcpServer = TcpListener.Create(port);
-
         tcpServer.Server.NoDelay = true;
 
         tcpServer.Start();
 
-        ListenClientsAsync(tcpServer, handlers, onFinalize, cert, maxInFlightPerConnection, token);
+        ListenClientsAsync(tcpServer, handlers, onFinalize, cert, maxInFlightPerConnection, batch, token);
 
         return tcpServer;
 
         static async void ListenClientsAsync(
             TcpListener tcpServer,
-            RequestHandler handlers,
+            THandler handlers,
             Action onFinalize,
             X509Certificate2? cert,
             int limit,
+            BatchPolicy batch,
             CancellationToken token)
         {
             try
             {
                 while (true)
                 {
-                    _ = HandleConnectionAsync(await tcpServer.AcceptTcpClientAsync(token).ConfigureAwait(false), handlers, cert, limit, token);
+                    _ = HandleConnectionAsync(await tcpServer.AcceptTcpClientAsync(token).ConfigureAwait(false), handlers, cert, limit, batch, token);
                 }
             }
             catch (Exception ex)
@@ -56,9 +71,10 @@ public static partial class Server
 
         static async Task HandleConnectionAsync(
             TcpClient tcpClient,
-            RequestHandler handlers,
+            THandler handlers,
             X509Certificate2? cert,
             int limit,
+            BatchPolicy batch,
             CancellationToken token)
         {
             using var client = tcpClient;
@@ -90,7 +106,7 @@ public static partial class Server
 
                 await using (stream.ConfigureAwait(false))
                 {
-                    await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit).ConfigureAwait(false);
+                    await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit, batch).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is OperationCanceledException or IOException or AuthenticationException)

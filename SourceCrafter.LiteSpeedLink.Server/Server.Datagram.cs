@@ -127,6 +127,8 @@ public sealed class UdpRequestContext
 
     internal bool IsCompleted => Volatile.Read(ref _completed) == 1;
 
+    public ReadOnlyMemory<byte> Body => _body;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(_body.Span);
 

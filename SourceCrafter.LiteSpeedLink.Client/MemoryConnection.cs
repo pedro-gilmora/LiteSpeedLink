@@ -15,7 +15,7 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 
 
 [SupportedOSPlatform("windows")]
-public sealed class MemoryConnection(string contextId, int timeout = 5000, System.Text.Encoding? encoding = null) : IConnectionAsync, IConnection, IDisposable
+public sealed class MemoryConnection(string contextId, int timeout = 5000, System.Text.Encoding? encoding = null) : IAsyncConnection, IConnection, IDisposable
 {
     private readonly string _contextId = contextId;
     private readonly int _timeout = timeout;
@@ -65,6 +65,30 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
     {
         ReadResponse<byte>(MemoryRpc.Send((op, payload), WriteRequest, _timeout, token));
         return true;
+    }
+
+    public ReadOnlyMemory<byte> GetRaw(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
+        ReadRawResponse(MemoryRpc.Send((op, request), WriteRawRequest, _timeout, token));
+
+    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
+        ReadRawResponse(await MemoryRpc.SendAsync((op, request), WriteRawRequest, _timeout, token).ConfigureAwait(false));
+
+    private static void WriteRawRequest(IBufferWriter<byte> writer, (long op, ReadOnlyMemory<byte> request) state)
+    {
+        Framing.WriteOpId(writer.GetSpan(Framing.OpIdSize), state.op);
+        writer.Advance(Framing.OpIdSize);
+        writer.Write(state.request.Span);
+    }
+
+    private ReadOnlyMemory<byte> ReadRawResponse(RpcResponse response)
+    {
+        if (!response.Success) throw new TimeoutException($"No response from memory server '{_contextId}'.");
+
+        if (response.Data is not { Length: > 0 } data) throw new InvalidDataException("Empty response.");
+
+        return (ResponseStatus)data[0] is ResponseStatus.Success
+            ? data.AsMemory(Framing.StatusSize)
+            : throw ResponseError.Create((ResponseStatus)data[0], $"'{_contextId}'", data.AsSpan(Framing.StatusSize));
     }
 
     public bool Send(

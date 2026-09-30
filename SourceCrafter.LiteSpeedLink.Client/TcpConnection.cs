@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -6,7 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
-public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default) : StreamConnection
+public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default, bool coalesceStreams = true) : StreamConnection(coalesceStreams)
 {
     private TcpClient? _client;
 

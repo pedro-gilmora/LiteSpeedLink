@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 
@@ -8,14 +8,17 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 /// Base comun de los transportes de flujo (TCP, UDS) sobre <see cref="MultiplexedChannel"/>: conexion diferida unica y
 /// reenvio de llamadas. No extensible fuera del ensamblado (constructor <c>private protected</c>).
 /// </summary>
-public abstract class StreamConnection : IConnectionAsync, IAsyncDisposable
+public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
 {
     private readonly Lock _gate = new();
     private Task<MultiplexedChannel>? _connecting;
     private MultiplexedChannel? _channel;
     private Stream? _stream;
 
-    private protected StreamConnection() { }
+    private readonly bool _coalesce;
+
+    /// <param name="coalesceStreams">Por defecto: el lector agrupa los items de stream de cada lectura en una sola entrega (sin espera ni cambio de cable).</param>
+    private protected StreamConnection(bool coalesceStreams = true) => _coalesce = coalesceStreams;
 
     /// <summary>Abre el flujo ya conectado (y autenticado, si aplica). <c>name</c> identifica al remoto en errores.</summary>
     private protected abstract Task<(Stream Stream, string Name)> OpenAsync();
@@ -46,7 +49,7 @@ public abstract class StreamConnection : IConnectionAsync, IAsyncDisposable
     {
         var (stream, name) = await OpenAsync().ConfigureAwait(false);
         _stream = stream;
-        var channel = new MultiplexedChannel(PipeReader.Create(stream), PipeWriter.Create(stream), name);
+        var channel = new MultiplexedChannel(PipeReader.Create(stream), PipeWriter.Create(stream), name, _coalesce);
         Volatile.Write(ref _channel, channel);
         return channel;
     }
@@ -58,6 +61,9 @@ public abstract class StreamConnection : IConnectionAsync, IAsyncDisposable
     public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
         await (await GetChannelAsync(token).ConfigureAwait(false)).GetAsync<byte, TOut>(op, default, false, token).ConfigureAwait(false);
+
+    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
+        await (await GetChannelAsync(token).ConfigureAwait(false)).GetRawAsync(op, request, token).ConfigureAwait(false);
 
     public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>

@@ -110,6 +110,8 @@ public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer r
     /// <summary>Cuerpo de la peticion, sin la cabecera de operacion. No copia el array original.</summary>
     private readonly ReadOnlyMemory<byte> _body = payload.AsMemory(offset);
 
+    public ReadOnlyMemory<byte> Body => _body;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(_body.Span);
 

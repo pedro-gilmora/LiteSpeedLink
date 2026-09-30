@@ -40,4 +40,12 @@ namespace SourceCrafter.LiteSpeedLink
     public sealed class ServerPostProcessorAttribute<T> : Attribute;
     [AttributeUsage(AttributeTargets.ReturnValue, AllowMultiple = true, Inherited = false)]
     public sealed class ClientPostProcessorAttribute<T> : Attribute;
+
+    /// <summary>Politica de lote del stream fijada en el contrato; el host generado la emite como constantes (sin mirar la config del servidor).</summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class StreamAttribute : Attribute
+    {
+        public int Batch { get; set; }
+        public int MaxDelayMs { get; set; }
+    }
 }

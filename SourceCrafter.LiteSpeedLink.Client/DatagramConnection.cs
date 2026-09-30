@@ -14,7 +14,7 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 /// empareja la respuesta. Peticion <c>[corrId][opId][cuerpo]</c>, respuesta <c>[corrId][estado][cuerpo]</c>.
 /// </summary>
 /// <remarks>ponytail: sin reintentos ni fragmentacion; un datagrama perdido deja la llamada esperando hasta que se cancele su token.</remarks>
-public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnectionAsync
+public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IAsyncConnection
 {
     private const int RequestHeaderSize = Framing.CorrelationIdSize + Framing.OpIdSize;
     private const int ResponseHeaderSize = Framing.CorrelationIdSize + Framing.StatusSize;
@@ -110,6 +110,18 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnectionA
         finally { _pending.TryRemove(id, out _); }
     }
 
+    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default)
+    {
+        var (id, responses) = await SendRequestAsync(op, new RawBody(request), true, token).ConfigureAwait(false);
+        try
+        {
+            var response = await responses.Reader.ReadAsync(token).ConfigureAwait(false);
+            EnsureSuccess(response);
+            return response.AsMemory(ResponseHeaderSize);
+        }
+        finally { _pending.TryRemove(id, out _); }
+    }
+
     public async ValueTask SendAsync(long op, CancellationToken token = default, [CallerMemberName] string name = "")
     {
         var (id, responses) = await SendRequestAsync<byte>(op, default, false, token).ConfigureAwait(false);
@@ -188,7 +200,11 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IConnectionA
 
         if (hasPayload)
         {
-            try { Serialize(writer, payload); }
+            try
+            {
+                if (typeof(TIn) == typeof(RawBody)) writer.Write(Unsafe.As<TIn, RawBody>(ref payload!).Bytes.Span);
+                else Serialize(writer, payload);
+            }
             catch (Exception ex) { throw new ArgumentException("Invalid parameters", ex); }
         }
 

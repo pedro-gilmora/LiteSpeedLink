@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
@@ -7,6 +7,18 @@ using System.Runtime.CompilerServices;
 namespace SourceCrafter.LiteSpeedLink;
 
 public delegate ValueTask<ResponseStatus> RequestHandler(long id, RequestContext ctx, CancellationToken token);
+
+/// <summary>Dispatch sin indireccion: el host generado lo implementa en un struct y el JIT especializa el servidor para el.</summary>
+public interface IRequestHandler
+{
+    ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token);
+}
+
+/// <summary>Adaptador para handlers escritos a mano (lambdas); los hosts generados no pasan por aqui.</summary>
+public readonly struct DelegateRequestHandler(RequestHandler handler) : IRequestHandler
+{
+    public ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token) => handler(id, ctx, token);
+}
 
 public static partial class Server
 {
@@ -18,9 +30,10 @@ public static partial class Server
     /// <summary>Limite por defecto de peticiones concurrentes por conexion; al llegar se deja de leer el socket (back-pressure TCP).</summary>
     public const int MaxInFlightPerConnection = 256;
 
-    internal static async Task ServePipeAsync(PipeReader reader, PipeWriter writer, RequestHandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection)
+    internal static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection, BatchPolicy batch = default)
+        where THandler : struct, IRequestHandler
     {
-        var responses = new ResponseChannel(writer);
+        var responses = new ResponseChannel(writer, batch: batch);
         var inflight = new ConcurrentDictionary<Task, byte>();
         using var slots = new SemaphoreSlim(maxInFlight);
 
@@ -67,11 +80,12 @@ public static partial class Server
         }
     }
 
-    private static async Task DispatchAsync(RequestHandler handlers, long op, RequestContext ctx, byte[] body, SemaphoreSlim? slots, CancellationToken token)
+    private static async Task DispatchAsync<THandler>(THandler handlers, long op, RequestContext ctx, byte[] body, SemaphoreSlim? slots, CancellationToken token)
+        where THandler : struct, IRequestHandler
     {
         try
         {
-            await handlers(op, ctx, token).ConfigureAwait(false);
+            await handlers.HandleAsync(op, ctx, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -95,8 +109,40 @@ public static partial class Server
 /// Unico punto de escritura de una conexion: serializa el acceso al <see cref="PipeWriter"/> para
 /// que las tramas de respuestas concurrentes nunca se intercalen.
 /// </summary>
-internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
+/// <summary>Estudio #1: politica de lote como tipo; el host generado emite un struct por operacion y el JIT pliega los valores.</summary>
+public interface IStreamPolicy
 {
+    /// <summary>0 = sin lotes (item a item).</summary>
+    static abstract int Items { get; }
+    /// <summary><see cref="long.MaxValue"/> = sin plazo.</summary>
+    static abstract long MaxDelayTicks { get; }
+}
+
+/// <summary>Stream item a item, sin lotes.</summary>
+public readonly struct Unbatched : IStreamPolicy
+{
+    public static int Items => 0;
+    public static long MaxDelayTicks => long.MaxValue;
+}
+
+/// <summary>
+/// Lotes de stream opt-in: se envia al llegar a <see cref="Items"/>, a 32 KB, al pasar el plazo desde el
+/// primer item del lote, o en cuanto el productor asincrono va a esperar. <c>Items = 0</c> = sin lotes.
+/// </summary>
+internal readonly record struct BatchPolicy(int Items, long MaxDelayTicks)
+{
+    public static BatchPolicy Create(int items, TimeSpan maxDelay)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(items);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDelay, TimeSpan.Zero);
+        return new(items, maxDelay == TimeSpan.Zero ? long.MaxValue : (long)(maxDelay.TotalSeconds * System.Diagnostics.Stopwatch.Frequency));
+    }
+}
+
+internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true, BatchPolicy batch = default)
+{
+    public BatchPolicy Batch => batch;
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly FrameWriter _frames = new(writer, correlated);
     private int _flushScheduled;
@@ -214,6 +260,33 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         }
     }
 
+    /// <summary>Trama con cuerpo ya codificado (lotes); flush diferido como los items sueltos.</summary>
+    public async ValueTask<ResponseStatus> WriteRawAsync(int correlationId, ResponseStatus status, ReadOnlyMemory<byte> body, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
+            body.Span.CopyTo(_frames.GetSpan(body.Length));
+            _frames.Advance(body.Length);
+            _frames.EndFrame();
+
+            if (writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
+            {
+                if (Interlocked.Exchange(ref _flushScheduled, 1) == 0) _ = FlushLaterAsync();
+                return status;
+            }
+
+            await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        return status;
+    }
+
     public async ValueTask<ResponseStatus> WriteStatusAsync(int correlationId, ResponseStatus status, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
@@ -256,6 +329,9 @@ public sealed class RequestContext
     /// <summary>Ya se envio la respuesta final (valor, fin de stream o error).</summary>
     internal bool IsCompleted => Volatile.Read(ref _completed) == 1;
 
+    /// <summary>Bytes de la peticion (sin cabecera): el host generado los lee con lectores tipados.</summary>
+    public ReadOnlyMemory<byte> Body => _body;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(_body.Span);
 
@@ -291,21 +367,174 @@ public sealed class RequestContext
         return _responses.WriteAsync(_correlationId, ResponseStatus.Failed, exception.Message, _token);
     }
 
-    public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value)
+    public ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value) => EnumerateAsync(value());
+
+    public ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IEnumerable<TData>> value) => EnumerateAsync(value());
+
+    /// <summary>Estudio #1: lo que emite el host generado; la secuencia llega directa, sin clausura.</summary>
+    public ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IAsyncEnumerable<TData> value)
+        => EnumerateAsync(value, _responses.Batch);
+
+    /// <summary>Politica fijada en el contrato (<c>[Stream(Batch, MaxDelayMs)]</c>): el host generado emite <typeparamref name="TPolicy"/> y el JIT la pliega.</summary>
+    public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData, TPolicy>(IAsyncEnumerable<TData> value)
+        where TPolicy : struct, IStreamPolicy
     {
-        await foreach (var item in value().WithCancellation(_token).ConfigureAwait(false))
-            await YieldAsync(item).ConfigureAwait(false);
+        if (TPolicy.Items == 0)
+        {
+            await foreach (var item in value.WithCancellation(_token).ConfigureAwait(false))
+                await YieldAsync(item).ConfigureAwait(false);
+
+            return await EndStreamingAsync().ConfigureAwait(false);
+        }
+
+        await using var e = value.GetAsyncEnumerator(_token);
+
+        while (true)
+        {
+            var next = e.MoveNextAsync();
+
+            if (!next.IsCompleted) await FlushBatchAsync().ConfigureAwait(false);
+
+            if (!await next.ConfigureAwait(false)) break;
+
+            await AddToBatchAsync<TData, TPolicy>(e.Current).ConfigureAwait(false);
+        }
+
+        await FlushBatchAsync().ConfigureAwait(false);
 
         return await EndStreamingAsync().ConfigureAwait(false);
     }
 
-    public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IEnumerable<TData>> value)
+    public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData, TPolicy>(IEnumerable<TData> value)
+        where TPolicy : struct, IStreamPolicy
     {
-        foreach (var item in value())
-            await YieldAsync(item).ConfigureAwait(false);
+        if (TPolicy.Items == 0)
+        {
+            foreach (var item in value) await YieldAsync(item).ConfigureAwait(false);
+        }
+        else
+        {
+            foreach (var item in value) await AddToBatchAsync<TData, TPolicy>(item).ConfigureAwait(false);
+            await FlushBatchAsync().ConfigureAwait(false);
+        }
 
         return await EndStreamingAsync().ConfigureAwait(false);
     }
 
-    private void Complete() => Volatile.Write(ref _completed, 1);
+    private ValueTask<ResponseStatus> AddToBatchAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData, TPolicy>(TData item)
+        where TPolicy : struct, IStreamPolicy
+    {
+        var w = _batch ??= _batches.TryTake(out var pooled) ? pooled : new(BatchFlushBytes);
+
+        // Sin plazo (MaxDelayTicks == MaxValue) el JIT elimina la lectura del reloj.
+        if (TPolicy.MaxDelayTicks != long.MaxValue && _batched == 0) _batchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        Serialize(w, item);
+
+        return ++_batched >= TPolicy.Items || w.WrittenCount >= BatchFlushBytes
+            || (TPolicy.MaxDelayTicks != long.MaxValue && System.Diagnostics.Stopwatch.GetTimestamp() - _batchStarted >= TPolicy.MaxDelayTicks)
+            ? FlushBatchAsync()
+            : new(ResponseStatus.Success);
+    }
+
+    private async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IAsyncEnumerable<TData> value, BatchPolicy policy)
+    {
+        _policy = policy;
+
+        if (policy.Items == 0)
+        {
+            await foreach (var item in value.WithCancellation(_token).ConfigureAwait(false))
+                await YieldAsync(item).ConfigureAwait(false);
+
+            return await EndStreamingAsync().ConfigureAwait(false);
+        }
+
+        await using var e = value.GetAsyncEnumerator(_token);
+
+        while (true)
+        {
+            var next = e.MoveNextAsync();
+
+            // El productor va a esperar: lo acumulado sale ya, no espera a llenar el lote.
+            if (!next.IsCompleted) await FlushBatchAsync().ConfigureAwait(false);
+
+            if (!await next.ConfigureAwait(false)) break;
+
+            await AddToBatchAsync(e.Current).ConfigureAwait(false);
+        }
+
+        await FlushBatchAsync().ConfigureAwait(false);
+
+        return await EndStreamingAsync().ConfigureAwait(false);
+    }
+
+    public ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IEnumerable<TData> value)
+        => EnumerateAsync(value, _responses.Batch);
+
+    private async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IEnumerable<TData> value, BatchPolicy policy)
+    {
+        _policy = policy;
+
+        if (policy.Items == 0)
+        {
+            foreach (var item in value) await YieldAsync(item).ConfigureAwait(false);
+        }
+        else
+        {
+            foreach (var item in value) await AddToBatchAsync(item).ConfigureAwait(false);
+            await FlushBatchAsync().ConfigureAwait(false);
+        }
+
+        return await EndStreamingAsync().ConfigureAwait(false);
+    }
+
+    // ponytail: buffer reutilizado entre streams (mismo patron que Server.Memory); pool sin limite = streams concurrentes.
+    private static readonly System.Collections.Concurrent.ConcurrentBag<ArrayBufferWriter<byte>> _batches = [];
+    private ArrayBufferWriter<byte>? _batch;
+    private BatchPolicy _policy;
+    private int _batched;
+    private long _batchStarted;
+
+    private const int BatchFlushBytes = 32 * 1024;
+
+    private ValueTask<ResponseStatus> AddToBatchAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(TData item)
+    {
+        var w = _batch ??= _batches.TryTake(out var pooled) ? pooled : new(BatchFlushBytes);
+
+        if (_batched == 0) _batchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        // MemoryPack delimita cada valor: el lote es la concatenacion, sin prefijo de longitud por item.
+        Serialize(w, item);
+
+        var policy = _policy;
+
+        // ponytail: el plazo se comprueba al llegar cada item; un productor que bloquea sin await no se corta (sin timer).
+        return ++_batched >= policy.Items || w.WrittenCount >= BatchFlushBytes
+            || System.Diagnostics.Stopwatch.GetTimestamp() - _batchStarted >= policy.MaxDelayTicks
+            ? FlushBatchAsync()
+            : new(ResponseStatus.Success);
+    }
+
+    private async ValueTask<ResponseStatus> FlushBatchAsync()
+    {
+        if (_batched == 0) return ResponseStatus.Success;
+
+        await _responses.WriteRawAsync(_correlationId, ResponseStatus.Batch, _batch!.WrittenMemory, _token).ConfigureAwait(false);
+        _batch.ResetWrittenCount();
+        _batched = 0;
+
+        return ResponseStatus.Success;
+    }
+
+    private void Complete()
+    {
+        Volatile.Write(ref _completed, 1);
+
+        if (_batch is { } b)
+        {
+            _batch = null;
+            b.ResetWrittenCount();
+            _batches.Add(b);
+        }
+    }
 }

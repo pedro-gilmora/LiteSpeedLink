@@ -1,9 +1,9 @@
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
 /// <summary>Cliente sobre Unix Domain Socket. Mismo canal multiplexado que TCP.</summary>
-public sealed class UdsConnection(string path) : StreamConnection
+public sealed class UdsConnection(string path, bool coalesceStreams = true) : StreamConnection(coalesceStreams)
 {
     private Socket? _socket;
 
