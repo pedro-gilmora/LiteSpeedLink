@@ -22,7 +22,7 @@ añadir lo aprendido en *Trampas conocidas* y actualizar *Siguiente paso*.
 
 ```powershell
 dotnet build-server shutdown; dotnet build LiteSpeedLink.slnx --no-incremental -nodeReuse:false
-dotnet test LiteSpeedLink.Tests --no-build     # esperado: 11/11
+dotnet test LiteSpeedLink.Tests --no-build     # esperado: 68/68
 dotnet run --project LiteSpeedLink --no-build   # esperado: saludo, Echo procesado y "Rejected: Pipeline 'TrimName'..."
 ```
 
@@ -68,6 +68,8 @@ sus tipos y los transportes disponibles son **conocidos y finitos** en build-tim
 reflexión en runtime, metadata de tipos en el canal de error, `ITransport` como punto de extensión
 público para terceros.
 
+**No es handshake**: el marcador `opId = long.MinValue` al abrir un stream QUIC reutilizable es una etiqueta fija del tipo de stream, conocida en compile-time, sin ida y vuelta.
+
 ### P2 · Emparejamiento de extremos: responsabilidad del desarrollador *(acordado)*
 
 No hay forma unificada de garantizar que ambos binarios salieron de la misma fuente, y **no se va a
@@ -102,6 +104,15 @@ Una instancia de cliente generado **puede usarse concurrentemente desde varios h
 - Se necesita **correlación de mensajes** y un **read-loop único** por conexión (ver 3.6 / PoC-A).
 - El **framing** (3.3) pasa de "conveniente" a **prerrequisito**: sin delimitación de mensajes no se
   puede demultiplexar.
+- La correlación (corrId) la usan TCP, UDS y el **pool QUIC de unarias**; los streams QUIC de `EnumerateAsync` siguen sin corrId (el stream empareja).
+
+### P5 · Red antes que implementación *(decidido)*
+
+El objetivo es perder menos paquetes; si se pierden, que sea un problema de la red y no de cliente/servidor. Lo decidible en compile-time no se adivina en runtime.
+
+### P6 · Opcionalidad primero *(decidido)*
+
+Una mejora probada por PoC entra primero como **opción** (opt-in); pasa a defecto solo si el benchmark lo justifica sin cerrar escenarios más complejos. Rendimiento y menos memoria sin perder flexibilidad.
 
 ### P4 · Regla transversal
 
@@ -558,6 +569,8 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ## PoCs (antes de comprometer diseño)
 
+`ParamEncodingPoc` y `FixedSizeResponsePoc`. #12 (bloques contiguos con métodos específicos y estado reutilizado) gana: escritura −61 %, lectura −17 %, formato idéntico ⇒ pendiente de generar en cliente y host. Buffer segmentado y buffer exacto no ganan (detalle en `docs/SourceGenStudy.md`); no se añade API ni atributo para ellos.
+
 - [x] **PoC-A · Multiplexación y concurrencia del cliente** — TCP/UDP ya multiplexados (3.6/3.7, tests `Test{Tcp,Udp}ConcurrentRoundtrips`). Memory: `RpcBuffer` ya empareja y es seguro con N en vuelo; fallaba por **inanición del thread pool** (bucle lector bloqueante en `Task.Run`; cuello a partir de ~64 llamadas con `Get` sync). Fix en el fork: lector con `TaskCreationOptions.LongRunning`. Test `TestMemoryConcurrentRoundtrips` (200 llamadas mixtas sync/async/stream/NotFound, una instancia).
   - Escenario: N hilos (1, 2, 8, 32) llamando a `Greet` sobre **una misma instancia** de cliente.
   - Medir, por transporte (Memory y TCP): corrección (¿respuestas cruzadas o corruptas?),
@@ -575,9 +588,44 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 	en lugar de una interfaz con despacho virtual.
   - **Criterio de decisión**: si no elimina duplicación significativa o cuesta rendimiento, no se hace.
 
+- [x] **API raw de petición/respuesta** — `IConnection.GetRaw` / `IAsyncConnection.GetRawAsync` (antes
+  `IConnectionAsync`) reciben el cuerpo ya construido y devuelven el cuerpo de la respuesta. El generador
+  (`ServiceHandlers.Raw.cs`) emite por operación unaria un escritor/lector estático con llamadas MemoryPack
+  específicas por tipo (`WriteUnmanaged`/`WriteString`/`WritePackable`, `WriteValue` solo como fallback);
+  el host lee `ctx.Body` con el lector espejo. Bloques secuenciales = mismos bytes que la tupla (verificado).
+  Operaciones sin retorno (void sincrono, con o sin out/ref) tambien van por raw; streams y `Task` sin resultado
+  siguen por la API tipada. Host: `ref` ahora viaja de vuelta (antes se contaba `in`). Capacidad del escritor:
+  exacta en compilacion si todos los parametros son primitivos/enum; si no, 64 y crece.
+  - [ ] Pendiente: estimar capacidad para strings/packables (hoy fallback 64); raw para `Enumerate*` y `Task` sin resultado.
+  Test: `UdsTest.TestRawRoundtrip` + suite completa (69/69).
+
+- [x] **QUIC intermitente en suite** — `StreamBatchPolicyTest.QuicStreamsMatchBatched(0)` y
+  `QuicPoolCancellationTest` usaban el mismo puerto 5030 en paralelo (xUnit) ⇒ `QuicException` al enlazar.
+  Fallo del test, no del transporte. Movido a 5040+.
+- [x] **Ejemplos por transporte** —
+  `ServiceConnectionType` (Memory, Udp, Tcp, Quic) y ejercitarlos desde `Program.cs`.
+  - [x] `TransportSamples.cs`: `Udp/Tcp/QuicTextService(Client)` compilan con el mismo contrato `IAuth`.
+  - Sync: solo Memory es síncrono nativo (`IConnection` sobre `RpcBuffer`). Tcp/Udp/Quic comparten socket con read
+    loop async + corrId ⇒ sin ruta sync real; los miembros sync del contrato se resuelven por extensiones
+    sync-over-async sobre `IAsyncConnection` (`ClientExtensions`), bloquean un hilo por llamada.
+  - [x] `Program.cs` ejercita Memory/Udp/Tcp/Quic (sync + async + rechazo de pipeline); los 4 responden igual.
+- [x] **Benchmark par vs ASP.NET Core slim** — mismo contrato mímico en TCP (HTTP/1.1) y QUIC (HTTP/3).
+  - TCP: `ComparisonBenchmarks` (ya existía). QUIC: `QuicComparisonBenchmarks` (suite `QuicComparison` = 2048),
+    reutiliza `MapSlim`/`SlimUnary`/`SlimStream` de la tabla TCP. Arnés `--fast` (tiempos orientativos):
+
+    | Op | TCP LSL | TCP slim h1 | QUIC LSL | QUIC slim h3 |
+    |---|---:|---:|---:|---:|
+    | Unaria | 42 µs / 903 B | 50 µs / 2.8 KB | 75 µs / 2.1 KB | 184 µs / 22.7 KB |
+    | Stream 1000 | 324 µs | 202 µs | 316 µs | 600 µs |
+    | Stream por lotes (256) | 94 µs | 94 µs | 166 µs | 226 µs |
+
+  - Lectura: unaria gana LSL en ambos. En TCP, stream por item pierde contra SSE (un frame+flush por item frente
+    a bytes en la tubería de Kestrel); con lotes empata. En QUIC, LSL gana en todo.
+  - Trampa HTTP/3: `https://localhost` resuelve a `::1` y Kestrel escucha solo en 127.0.0.1 ⇒ error ALPN. Usar IP.
+
 ---
 
-## Fase 6 — Línea base medible *(movida al final)*
+## Fase 6
 
 - [x] **6.1 Proyecto `LiteSpeedLink.Benchmarks` (BenchmarkDotNet)** — escenarios `Control`, `RequestBuilding`, `ResponseStatus`, `ServerParsing`, `TcpConcurrency`, `Streaming` (suite 32), `MemoryConcurrency` (suite 64); `--alloc` muestrea asignaciones por tipo.
   - **Streaming, 1000 items (`--fast`)** — inicial → actual:
@@ -617,3 +665,108 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 - [-] `MemoryRequestContext` como `readonly ref struct` — incompatible con `async` (2.3).
 
 **Ya no descartado**: multiplexación del cliente → PoC-A (P3 la reabre).
+
+## PoC stream batching (Suite 256, aislado)
+- PerItem (actual) vs Coalesced (lector agrupa por ReadAsync, mismo cable) vs Batched (opt-in [len][n][items]).
+- 100k ints TCP loopback: 27.6 ms / 2.6 ms / 1.6 ms. Coste = Channel+alquiler por item, no red.
+- Siguiente: Coalesced en MultiplexedChannel (sin cambio de cable) + Batched opt-in; benchmarks nuevos en Comparison.
+
+
+## Stream opt-in (TCP/UDS) - implementado
+- Cliente: coalesceStreams (TcpConnection/UdsConnection) agrupa items de cada ReadAsync; cable intacto.
+- Servidor: streamBatch (StartTcpServer/StartUdsServer) emite ResponseStatus.Batch [len][item]...; el cliente lo decodifica siempre.
+- Test: StreamBatchingTest (4 combinaciones). Comparison 1000 ints: Lsl 292us, Coalesced 199us, Batched 95us, AspNetSlim 203us, AspNetSlim batched 91us, gRPC 440-506us.
+- Pendiente: QUIC y Memory no usan estas opciones.
+
+
+## Desglose de lotes de stream (StreamBatchBreakdown, 1000 int, --fast)
+
+| Caso | TCP | QUIC |
+|---|---|---|
+| Base (Batch=0) | 281 us / 8.7 KB | 308 us / 11.7 KB |
+| Solo coalesce cliente | 166 us / 4.7 KB | n/a |
+| Batch=8 | 138 us | 276 us |
+| Batch=64 | 115 us / 5.2 KB | 202 us |
+| Batch=256 | 109 us | 195 us |
+
+- Handoff por item en el lector: ~41% (coalesce solo). Framing/escrituras por item: ~60% (Batch=64). Se solapan: con lotes, coalesce ya no suma.
+- El tamano de lote configurable si influye; rendimientos decrecientes a partir de ~64. QUIC gana ~35% (sin lector multiplexado, solo aplica el lote).
+- streamBatchMaxDelay + flush al esperar el productor acotan la latencia (test SlowProducerIsNotHeldByBatch).
+
+
+## Comparacion tras BatchPolicy (Comparison, --fast)
+
+- Stream: Lsl 324 us, Coalesced 179 us, Batched 109 us; AspNetSlim 195 us, AspNetSlim batched 89 us; gRPC 412 us.
+- Unary: Lsl 41 us, AspNetSlim 48 us, gRPC 133 us.
+- Hueco restante vs AspNetSlim batched (~20 us): bytes por item (8 KB vs 3 KB, prefijo de longitud por item + corrId).
+
+
+## Lote compacto (sin prefijo de longitud por item)
+
+- Batch = items MemoryPack concatenados; el cliente avanza con Deserialize(span, ref value). Aplica a servidor (TCP/UDS/QUIC) y al agrupado del cliente.
+- Lsl_StreamBatched: 109 -> 101 us, 7.99 -> 5.81 KB. AspNetSlim batched: 92 us / 2.99 KB.
+- Resto de asignacion: ArrayBufferWriter por stream (ponytail en Server.Pipes); siguiente paso = buffer del pool.
+
+
+## Buffer de lote en pool (Server.Pipes)
+
+- ArrayBufferWriter reutilizado entre streams (ConcurrentBag, como Server.Memory); se devuelve en Complete().
+- Lsl_StreamBatched: 101 us / 5.81 KB -> 99 us / 3.67 KB; AspNetSlim batched 105 us / 2.99 KB (ruido --fast).
+- MemoryPack SerializeAsync/DeserializeAsync: descartado; son wrappers sobre Stream con buffer propio, anaden copia y estado async frente a IBufferWriter/span sincrono.
+
+
+## Politica de stream como tipo (SourceGen #1b) - implementado
+
+- [Stream(Batch, MaxDelayMs)] -> el host emite EnumerateAsync<T, TPolicy> con struct __Policy_B{n}_D{ms} (uno por configuracion) o Unbatched; sin atributo, politica del servidor.
+- POC SourceGenPocBenchmarks.Policy_* (1000 int): campo runtime 15.1 us -> tipo 3.0 us (sin plazo, el JIT elimina Stopwatch); con plazo 14.2 -> 13.9 us (manda el reloj). 0 B ambos.
+- Cobertura: IStreams/StreamService (8 formas sync/async x default/unbatched/batched/timed) + StreamPolicyTypeTest.
+- Cliente: sin cambios; solo decodifica Batch, no decide politica.
+
+## Unaria sin canal (SourceGen #8) - implementado
+
+- MultiplexedChannel: UnarySink (IValueTaskSource reutilizable, pool por conexion) para Get/Send; streams mantienen Channel. Id 0 reservado como desarmado; entrega tardia descartada por CAS de id.
+- Lsl_Unary (--fast): 41 us / 2.07 KB -> 39 us / 903 B.
+
+## Indice denso de operacion (SourceGen #4) - descartado
+
+- DenseDispatchPoc: denso mas lento (N=10 +74 %, N=100 +25 %); 0 B en ambos. Solo ahorraria 7 B de cable; no compensa.
+
+## Comparacion tras #8 (Comparison, --fast)
+
+- Unary: Lsl 42 us / 904 B; AspNetSlim 53 us / 2.8 KB; AspNet 66 us / 5.6 KB; gRPC 82 us / 7.1 KB.
+- Stream 1000 int: Lsl 336 us / 8.9 KB, Coalesced 206 / 5.0 KB, Batched 103 / 4.0 KB; AspNetSlim 205 / 4.5 KB, AspNetSlim batched 94 / 3.1 KB; gRPC 417-425 / 71 KB.
+
+### POC QUIC: stream reutilizado vs stream por llamada (QuicOverheadBenchmarks, --fast)
+| Method | Mean | Allocated |
+|---|---|---|
+| RawReused | 90.5 us | 498 B |
+| RawStream | 164.3 us | 3234 B |
+| RawPipes | 178.7 us | 4452 B |
+| Lsl | 118.1 us | 7537 B |
+
+Ganancia real (~45% latencia, ~85% memoria en crudo). Pendiente de decision: multiplexar sobre un stream (como TCP) pierde el aislamiento head-of-line entre llamadas propio de QUIC; alternativa: pool de N streams multiplexados.
+
+
+### QUIC opcion 2: pool de streams multiplexados para unarias (por defecto, DefaultUnaryStreams=4)
+| Method | Mean | Allocated |
+|---|---|---|
+| LslUnary (stream por llamada) | 108.1 us | 6774 B |
+| LslUnaryPooled (4 streams) | 69.9 us | 2133 B |
+| RawReused (suelo) | 66.8 us | 496 B |
+
+Unarias: -35% latencia, -69% memoria. EnumerateAsync sigue con stream propio (aislamiento HOL). Marcador opId=long.MinValue abre el stream como canal multiplexado (8 B una vez). unaryStreams: 0 restaura el modo anterior. Test: TestQuicUnaryStreams(0|4).
+
+
+### TCP: tecnicas de Kestrel (Transport.Sockets) probadas contra LSL
+Kestrel: Pipe entre app y socket con bucles DoSend/DoReceive, BufferList multi-segmento, SocketAwaitableEventArgs reutilizable, SocketSenderPool, IOQueue, PinnedBlockMemoryPool, AggressiveOptimization, UnsafePreferInlineScheduling.
+Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simple):
+- [x] Consumidor de stream inline en el cliente (Channel AllowSynchronousContinuations, analogo a UnsafePreferInlineScheduling): Lsl_Stream 336 -> 227-270 us, 8.9 -> 2.5-5.3 KB. Techo marcado ponytail: sync-over-async dentro del await foreach interbloquea al lector.
+- [ ] Pipe de salida desacoplado (DoSend) en servidor/cliente: sin ganancia medible (servidor 252 vs 227-270 us, dentro del ruido); descartado. LSL ya agrupa con flush diferido.
+- [ ] Bucle de envio con PipeScheduler.Inline: unaria 43 us pero stream 8.8 ms (pierde agrupacion); descartado.
+- [ ] Unaria inline (UnarySink RunContinuationsAsynchronously=false): sin cambio medible (50 us); descartado.
+- Final: Unary Lsl 47 us / 0.9 KB vs slim 58 us / 2.8 KB; Stream Lsl 227-270 us vs slim 200-223 us. Hueco residual en stream simple: 1 trama con corrId por item frente a SSE con flush agrupado de Kestrel; con Coalesced/Batched LSL ya empata o gana.
+
+### TCP/UDS: coalesceStreams por defecto
+- [x] El hueco del stream simple era el handoff por item en el lector del cliente (Coalesced = mismo servidor y mismo cable, ~80 us menos). TcpConnection/UdsConnection pasan a coalesceStreams = true: agrupa solo lo ya leido en cada ReadAsync, sin espera ni cambio de cable; unarias intactas (grupo de 1 = Success).
+- Arnes completo: Lsl_Stream 196 us / 5.0 KB vs AspNetSlim_Stream 229 us / 4.6 KB; Lsl_StreamPerItem (coalesceStreams:false) 274 us; Lsl_Unary 47 us vs slim 57 us.
+- Prueba: StreamBatchingTest/StreamBatchConcurrencyTest cubren coalesce true/false. Descartado sink sin Channel para streams: ya no hace falta (YAGNI).
