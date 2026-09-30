@@ -67,8 +67,8 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 3. [x] **`MultiplexedChannel.DisposeAsync`**: `CancelPendingRead()` antes de esperar el bucle de lectura; ya no depende de cerrar el socket antes. Test `DisposeTest` (TCP/UDS, ≤ 2 s).
 4. [x] **`ToListAsync()` sobre `EnumerateAsync` en Memory**: ya no se reproduce (10/10); lo resolvió `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (5.2). Regresión: `TestMemoryStreamsRoutedPerClient`.
 5. [x] **`ConfigureAwait(false)`** en todos los `await` emitidos: host (`Start` QUIC, resolución async, `ReturnAsync`/`EnumerateAsync`/`NotFoundAsync`/`FailAsync`), etapas de pipeline (`ProcessAsync` y resolución async) y cliente tipado (`GetAsync`/`SendAsync`). Verificación: 0 `await` sin `ConfigureAwait` en `obj/gen` + POC (Memory/UDP/TCP/QUIC) y suite 71/71 en verde.
-6. [x] **Raw (#12) completo** salvo streams: `Task` sin resultado (cliente + host esperan el `Task`), métodos con pipelines por `GetRaw*`, capacidad del escritor con cota UTF-8 para `string`. `Enumerate*` raw queda a lo que diga su POC (6d).
-7. [ ] **Timeouts de Memory** (5.5): `MemoryConnection` 5000 ms, `AsMemoryConnection` 100000 ms, `StartMemoryServer*` 1000 ms; unificar o justificar.
+`Enumerate*` raw diferido por POC (6d, `StreamRawDecodePoc`); después, lectores de respuesta con la firma del contrato (6e).
+7. [ ]
 8. [ ] **Sesiones Memory de clientes caídos** (`MemoryLobby`).
 9. [ ] **Resto de 5.2**: early-return sin excepción, `ref`/`out`/`in` y streams con procesadores (hoy SCLSL012), test de SCLSL014 (arnés Roslyn).
 10. [ ] **PoC #14**: pool QUIC vs stream propio para unarias grandes/lentas; generar la ruta por operación solo si gana.
@@ -624,7 +624,13 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
     espera el `Task` (`await` en red, `GetAwaiter().GetResult()` en Memory) en vez de intentar serializarlo.
   - [x] Métodos con pipelines por `GetRaw*` con `__Req{n}`/`__Res{n}` sobre los tipos de wire.
   - [x] Capacidad: strings con cota `8 + 3·Length` (MemoryPack escribe UTF-8 con cabecera 8; nunca crece); packables 64.
-  - [ ] `Enumerate*` raw: pendiente de POC (6d).
+  - [x] `Enumerate*` raw (6d): **diferido** por POC `StreamRawDecodePoc` (lector específico vs `Deserialize(span, ref item)`):
+    1 item +125 % (alquiler del estado), 64 items −29 % strings / −17 % packables (~3,6 ns/item ≈ 2 % de `Lsl_Stream`).
+    No compensa una API `EnumerateRawAsync` en 5 transportes; reabrir si un perfil de stream señala la decodificación.
+  - [ ] Lectores de respuesta con la firma del contrato (6e): `__Res{n}(span, out …)` devuelve el retorno y escribe
+    los out/ref (`ref` se pasa como `out`), en vez de tupla + copias `.ItemN`. Sync: `return __Res{n}(…, out token);`;
+    async: `(__Res{n}(span, out var __o0), __o0)`. Sin coste en rendimiento; menos código emitido y ramas en el generador.
+    Test: `UdsTest.TestRawRoundtrip` + POC `TryAuth`.
   Test: `UdsTest.TestRawRoundtrip`, `RawCapacityTest`, POC `IAuth.TouchAsync` en `LiteSpeedLink/Program.cs` (4 transportes) + suite (75/75).
 
 - [x] **QUIC intermitente en suite** — `StreamBatchPolicyTest.QuicStreamsMatchBatched(0)` y
