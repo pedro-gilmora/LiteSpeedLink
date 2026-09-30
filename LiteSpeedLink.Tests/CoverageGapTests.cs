@@ -123,7 +123,7 @@ public partial class ServersTest
         var cert = Constants.GetDevCert();
 
         await using var server = await Server.StartQuicServerAsync(serverPort, HandleRequestAsync, () => { }, cert, default);
-        await using var connection = new DnsEndPoint("localhost", serverPort).AsQuicConnection(cert);
+        await using var connection = new DnsEndPoint("localhost", serverPort).AsQuicConnection(cert, unaryStreams: 0);
         await connection.GetAsync<(int, int, bool), int>(0, (1, 1, false));
 
         int quicExceptions = 0;
@@ -135,7 +135,25 @@ public partial class ServersTest
         }
         finally { AppDomain.CurrentDomain.FirstChanceException -= h; }
 
-        quicExceptions.Should().BeLessThan(5);
+        quicExceptions.Should().Be(0);
+    }
+
+    /// <summary>Pool QUIC: unarias concurrentes multiplexadas en streams reutilizables; modo por-stream (0) sigue valido.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [RequiresPreviewFeatures]
+    [SupportedOSPlatform("windows")]
+    public async Task TestQuicUnaryStreams(int unaryStreams)
+    {
+        int serverPort = 5020 + unaryStreams;
+        var cert = Constants.GetDevCert();
+
+        await using var server = await Server.StartQuicServerAsync(serverPort, HandleRequestAsync, () => { }, cert, default);
+        await using var connection = new DnsEndPoint("localhost", serverPort).AsQuicConnection(cert, unaryStreams);
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 200).Select(i => connection.GetAsync<(int, int, bool), int>(0, (i, i, false)).AsTask()));
+        results.Should().Equal(Enumerable.Range(0, 200).Select(i => i * 2));
     }
 
     /// <summary>5.4: certificado autofirmado utilizable para TLS y estable entre llamadas.</summary>
