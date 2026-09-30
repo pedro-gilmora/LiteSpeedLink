@@ -23,7 +23,7 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
     /// <summary>Abre el flujo ya conectado (y autenticado, si aplica). <c>name</c> identifica al remoto en errores.</summary>
     private protected abstract Task<(Stream Stream, string Name)> OpenAsync();
 
-    /// <summary>Cierra el recurso de transporte. Se llama antes de liberar el canal: su bucle de lectura no se desbloquea con <c>CompleteAsync</c>.</summary>
+    /// <summary>Cierra el recurso de transporte antes de liberar el canal.</summary>
     private protected abstract void Close();
 
     public async ValueTask DisposeAsync()

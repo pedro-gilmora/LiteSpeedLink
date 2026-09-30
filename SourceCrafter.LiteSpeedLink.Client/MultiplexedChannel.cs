@@ -340,8 +340,11 @@ internal sealed class MultiplexedChannel
     public async ValueTask DisposeAsync()
     {
         await _writer.CompleteAsync().ConfigureAwait(false);
-        await _reader.CompleteAsync().ConfigureAwait(false);
 
+        // Desbloquea el ReadAsync pendiente aunque el socket siga abierto; el lector se completa cuando el bucle ha salido.
+        _reader.CancelPendingRead();
         try { await _readLoop.ConfigureAwait(false); } catch { }
+
+        await _reader.CompleteAsync().ConfigureAwait(false);
     }
 }
