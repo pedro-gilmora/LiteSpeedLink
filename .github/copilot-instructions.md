@@ -3,10 +3,12 @@
 ## General Guidelines
 - Responder de forma lacónica, directa y concisa; no repetir información ya dicha (principios ponytail).
 - Compilar siempre por separado (nunca encadenado con tests/benchmarks) y esperar procesos con carrera fin-del-proceso vs timeout (p.ej. Start-Job + Wait-Job -Timeout), lo primero que ocurra.
+- Nunca encadenar diferentes operaciones en un solo comando de terminal (p.ej., escribir un archivo y compilar); ejecutar cada operación como un comando separado.
 
 ## Directrices del proyecto
-- En LiteSpeedLink, los clientes y servidores generados están pensados para usarse en contextos predecibles y typesafe, donde cliente y host se generan a partir de los mismos contratos en tiempo de compilación. NO deben diseñarse como clientes/servidores genéricos agnósticos del runtime: hay que evitar proponer negociación de protocolo, handshakes de versión, descubrimiento dinámico o robustez para usos arbitrarios fuera del flujo generado.
+- En LiteSpeedLink, los clientes y servidores generados están pensados para usarse en contextos predecibles y typesafe, donde cliente y host se generan a partir de los mismos contratos en tiempo de compilación. NO deben diseñarse como clientes/servidores genéricos agnósticos del runtime: hay que evitar proponer negociación de protocolo, handshakes de versión, descubrimiento dinámica o robustez para usos arbitrarios fuera del flujo generado.
 - LiteSpeedLink: data-exchange economics first — add framing/correlation bytes only where the transport needs them; keep PLAN.md updated as work progresses.
+- LiteSpeedLink: everything known at compile time (contract, transport, operation shape, types, batch/coalesce/correlation choices) must be decided by the source generator; avoid runtime branching/guessing in hot paths.
 - LiteSpeedLink: every plan item implemented must ship with a test or a POC demonstrating its purpose.
 
 # Ponytail, lazy senior dev mode
