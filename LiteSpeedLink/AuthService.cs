@@ -23,6 +23,8 @@ public partial class AuthService() : IAuth
         return Task.CompletedTask;
     }
 
+    public void Bump(ref int counter, out string label) => label = $"#{++counter}";
+
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
         if (credentials is ("pedro", "test!123"))

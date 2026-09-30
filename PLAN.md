@@ -67,7 +67,7 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 3. [x] **`MultiplexedChannel.DisposeAsync`**: `CancelPendingRead()` antes de esperar el bucle de lectura; ya no depende de cerrar el socket antes. Test `DisposeTest` (TCP/UDS, ≤ 2 s).
 4. [x] **`ToListAsync()` sobre `EnumerateAsync` en Memory**: ya no se reproduce (10/10); lo resolvió `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (5.2). Regresión: `TestMemoryStreamsRoutedPerClient`.
 5. [x] **`ConfigureAwait(false)`** en todos los `await` emitidos: host (`Start` QUIC, resolución async, `ReturnAsync`/`EnumerateAsync`/`NotFoundAsync`/`FailAsync`), etapas de pipeline (`ProcessAsync` y resolución async) y cliente tipado (`GetAsync`/`SendAsync`). Verificación: 0 `await` sin `ConfigureAwait` en `obj/gen` + POC (Memory/UDP/TCP/QUIC) y suite 71/71 en verde.
-`Enumerate*` raw diferido por POC (6d, `StreamRawDecodePoc`); después, lectores de respuesta con la firma del contrato (6e).
+`Enumerate*` raw diferido por POC (6d, `StreamRawDecodePoc`); lectores de respuesta con la firma del contrato (6e).
 7. [ ]
 8. [ ] **Sesiones Memory de clientes caídos** (`MemoryLobby`).
 9. [ ] **Resto de 5.2**: early-return sin excepción, `ref`/`out`/`in` y streams con procesadores (hoy SCLSL012), test de SCLSL014 (arnés Roslyn).
@@ -627,10 +627,11 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] `Enumerate*` raw (6d): **diferido** por POC `StreamRawDecodePoc` (lector específico vs `Deserialize(span, ref item)`):
     1 item +125 % (alquiler del estado), 64 items −29 % strings / −17 % packables (~3,6 ns/item ≈ 2 % de `Lsl_Stream`).
     No compensa una API `EnumerateRawAsync` en 5 transportes; reabrir si un perfil de stream señala la decodificación.
-  - [ ] Lectores de respuesta con la firma del contrato (6e): `__Res{n}(span, out …)` devuelve el retorno y escribe
-    los out/ref (`ref` se pasa como `out`), en vez de tupla + copias `.ItemN`. Sync: `return __Res{n}(…, out token);`;
-    async: `(__Res{n}(span, out var __o0), __o0)`. Sin coste en rendimiento; menos código emitido y ramas en el generador.
-    Test: `UdsTest.TestRawRoundtrip` + POC `TryAuth`.
+  - [x] Lectores de respuesta con la firma del contrato (6e): `__Res{n}(span, out …)` devuelve el retorno y escribe
+    los out/ref (`ref` se pasa como `out`), en vez de tupla + copias `.ItemN`. Sync: `return __Res{n}(…, out token);`
+    (4 ramas → 1); async: `return (__Res{n}(span, out var __o0), __o0);`. `void` con out/ref: lector `void`.
+    Los lectores de petición del host (`__ReqM`) y de pipelines siguen devolviendo valor/tupla.
+    POC: `TryAuth`/`TryAuthAsync` y `IAuth.Bump(ref int, out string)` en `LiteSpeedLink/Program.cs` (4 transportes).
   Test: `UdsTest.TestRawRoundtrip`, `RawCapacityTest`, POC `IAuth.TouchAsync` en `LiteSpeedLink/Program.cs` (4 transportes) + suite (75/75).
 
 - [x] **QUIC intermitente en suite** — `StreamBatchPolicyTest.QuicStreamsMatchBatched(0)` y

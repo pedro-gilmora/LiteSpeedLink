@@ -67,17 +67,43 @@ public partial class ServiceHandlersGenerator
         return string.Join(" + ", new[] { constant.ToString() }.Concat(strings));
     }
 
-    /// <summary>Lector estatico: <c>ReadOnlySpan&lt;byte&gt;</c> -> valor o tupla, con los metodos especificos de cada tipo.</summary>
-    private static void EmitReader(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent)
+    /// <summary>
+    /// Lector estatico: <c>ReadOnlySpan&lt;byte&gt;</c> -> valor o tupla, con los metodos especificos de cada tipo.
+    /// Con <paramref name="outFrom"/> (0 o 1) tiene la firma del contrato: los tipos desde ese indice salen por <c>out __o{k}</c>.
+    /// </summary>
+    private static void EmitReader(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent, int outFrom = -1)
     {
-        code.Append("\n\n").Append(indent).Append("private static ").Append(TupleOf(types)).Append(' ').Append(name).Append("(global::System.ReadOnlySpan<byte> __b)\n")
+        bool outs = outFrom >= 0 && outFrom < types.Count;
+
+        code.Append("\n\n").Append(indent).Append("private static ").Append(!outs ? TupleOf(types) : outFrom == 0 ? "void" : types[0].GlobalNamespaced)
+            .Append(' ').Append(name).Append("(global::System.ReadOnlySpan<byte> __b");
+
+        for (int i = outs ? outFrom : types.Count; i < types.Count; i++)
+            code.Append(", out ").Append(types[i].GlobalNamespaced).Append(" __o").Append(i - outFrom);
+
+        code.Append(")\n")
             .Append(indent).Append("{\n")
             .Append(indent).Append("    using var __s = global::MemoryPack.MemoryPackReaderOptionalStatePool.Rent(null);\n")
-            .Append(indent).Append("    var __r = new global::MemoryPack.MemoryPackReader(__b, __s);\n")
-            .Append(indent).Append("    return ")
-            .Append(types.Count == 1 ? ReadCall(types[0]) : "(" + string.Join(", ", types.Select(ReadCall)) + ")")
-            .Append(";\n")
-            .Append(indent).Append('}');
+            .Append(indent).Append("    var __r = new global::MemoryPack.MemoryPackReader(__b, __s);\n");
+
+        if (!outs)
+        {
+            code.Append(indent).Append("    return ")
+                .Append(types.Count == 1 ? ReadCall(types[0]) : "(" + string.Join(", ", types.Select(ReadCall)) + ")")
+                .Append(";\n");
+        }
+        else
+        {
+            // Orden del cable: retorno primero, luego out/ref.
+            if (outFrom == 1) code.Append(indent).Append("    var __v = ").Append(ReadCall(types[0])).Append(";\n");
+
+            for (int i = outFrom; i < types.Count; i++)
+                code.Append(indent).Append("    __o").Append(i - outFrom).Append(" = ").Append(ReadCall(types[i])).Append(";\n");
+
+            if (outFrom == 1) code.Append(indent).Append("    return __v;\n");
+        }
+
+        code.Append(indent).Append('}');
     }
 
     /// <summary>Escritor estatico: argumentos -> bytes de la peticion (cuerpo sin cabecera).</summary>
@@ -135,9 +161,12 @@ public partial class ServiceHandlersGenerator
         string reqName = $"__Req{n}", resName = $"__Res{n}", serviceId = GetServiceId(method.GlobalNamespaced).ToString();
 
         if (request.Count > 0) EmitWriter(helpers, reqName, [.. request.Select(p => p.Type)], "");
-        if (readsResponse) EmitReader(helpers, resName, responseTypes, "");
+        // Firma del contrato: retorno por valor y out/ref por out (un ref se puede pasar como out).
+        if (readsResponse) EmitReader(helpers, resName, responseTypes, "", hasRet ? 1 : 0);
 
         string reqArgs = request.Count > 0 ? $"{reqName}({string.Join(", ", request.Select(p => p.Name))})" : "default";
+        string outVars = string.Concat(response.Select((_, i) => $", out var __o{i}"));
+        string outNames = string.Join(", ", response.Select((_, i) => $"__o{i}"));
 
         // Async: los out/ref viajan en la tupla de retorno (misma forma que la API tipada).
         string name = method.Name.EndsWith("Async") ? method.Name : method.Name + "Async";
@@ -152,7 +181,14 @@ public partial class ServiceHandlersGenerator
         code.Append(")\n    {\n        ").Append(readsResponse ? "var __res = " : null).Append("await __connection.GetRawAsync(").Append(serviceId).Append(", ").Append(reqArgs).Append(", ").Append(tokenName ?? "@__token")
             .Append(").ConfigureAwait(false);");
 
-        if (readsResponse) code.Append("\n\n        return ").Append(resName).Append("(__res.Span);");
+        if (!readsResponse) { }
+        else if (response.Count == 0)
+            code.Append("\n\n        return ").Append(resName).Append("(__res.Span);");
+        else if (hasRet)
+            code.Append("\n\n        return (").Append(resName).Append("(__res.Span").Append(outVars).Append("), ").Append(outNames).Append(");");
+        else
+            code.Append("\n\n        ").Append(resName).Append("(__res.Span").Append(outVars).Append(");\n\n        return ")
+                .Append(response.Count == 1 ? outNames : "(" + outNames + ")").Append(';');
 
         code.Append("\n    }");
 
@@ -164,40 +200,12 @@ public partial class ServiceHandlersGenerator
 
         if (!isTask)
         {
-            code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ");
-
             string raw = $"__connection.GetRaw({serviceId}, {reqArgs}" + (tokenName is null ? "" : $", {tokenName}") + ")";
-            string call = $"{resName}({raw}.Span)";
 
-            if (!readsResponse)
-            {
-                code.Append(raw).Append(";\n    }");
-            }
-            else if (!hasRet)
-            {
-                code.Append("var __res = ").Append(call).Append(";\n");
-
-                if (response.Count == 1)
-                    code.Append("\n        ").Append(response[0].Name).Append(" = __res;");
-                else
-                    for (int i = 0; i < response.Count; i++)
-                        code.Append("\n        ").Append(response[i].Name).Append(" = __res.Item").Append(i + 1).Append(';');
-
-                code.Append("\n    }");
-            }
-            else if (response.Count == 0)
-            {
-                code.Append("return ").Append(call).Append(";\n    }");
-            }
-            else
-            {
-                code.Append("var __res = ").Append(call).Append(";\n");
-
-                for (int i = 0; i < response.Count; i++)
-                    code.Append("\n        ").Append(response[i].Name).Append(" = __res.Item").Append(i + 2).Append(';');
-
-                code.Append("\n\n        return __res.Item1;\n    }");
-            }
+            code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ")
+                .Append(hasRet ? "return " : null)
+                .Append(readsResponse ? $"{resName}({raw}.Span{string.Concat(response.Select(p => ", out " + p.Name))})" : raw)
+                .Append(";\n    }");
         }
 
         return true;

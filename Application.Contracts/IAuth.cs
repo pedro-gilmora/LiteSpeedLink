@@ -28,6 +28,9 @@ public interface IAuth : IServiceUnit
 
     // Task sin resultado: raw (#12), el cuerpo de respuesta se ignora.
     Task TouchAsync(string user);
+
+    // void con ref + out: el lector de respuesta escribe ambos (6e).
+    void Bump(ref int counter, out string label);
 }
 
 public sealed class ParseInt : IPipeline<string, int>

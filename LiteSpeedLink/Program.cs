@@ -21,6 +21,10 @@ try
     {
         Console.WriteLine(token);
     }
+    Console.WriteLine($"TryAuth (async): {await client.Auth.TryAuthAsync("pedro", "test!123")}");
+    int memCounter = 41;
+    client.Auth.Bump(ref memCounter, out var memLabel);
+    Console.WriteLine($"Bump (ref+out): {memCounter} {memLabel}");
     Console.WriteLine($"Sent a greeting: {await client.Auth.GreetAsync("  Pedro  ")}");
     Console.WriteLine($"Echo (all processors): {await client.Auth.EchoAsync("  hi  ")}");
     Console.WriteLine($"Echo (sync): {client.Auth.Echo("  hi  ")}");
@@ -72,6 +76,9 @@ static async Task Exercise(string transport, IAuth auth, Func<string, ValueTask<
         Console.WriteLine($"[{transport}] Echo (sync): {auth.Echo("  hi  ")}");
         await auth.TouchAsync("pedro");
         Console.WriteLine($"[{transport}] Touch (raw Task): ok");
+        int counter = 41;
+        auth.Bump(ref counter, out var label);
+        Console.WriteLine($"[{transport}] Bump (ref+out): {counter} {label}");
         try { auth.Echo("   "); }
         catch (PipelineRejectedException ex) { Console.WriteLine($"[{transport}] Rejected: {ex.Message}"); }
     }
