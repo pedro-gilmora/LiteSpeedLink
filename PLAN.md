@@ -62,8 +62,8 @@ Código generado: `LiteSpeedLink\obj\gen\SourceCrafter.DependencyInjection\Servi
 ### Siguiente paso
 
 0. Regla: cada item hecho lleva test o PoC. `CoverageGapTests.cs` cubre 2.4, 3.1, 3.3 (trama incompleta),
-   3.4 (TCP y memoria), 3.7 (QUIC concurrente) y 5.4. Sin test automático (requieren arnés Roslyn):
-   1.3, 3.2, 5.2, 5.3 → hoy su PoC es `LiteSpeedLink/Program.cs` (compila el código generado y lo ejecuta).
+   3.4 (TCP y memoria), 3.7 (QUIC concurrente) y 5.4. Diagnósticos del generador: `GeneratorHarness.cs` +
+   `PipelineDiagnosticsTest` (5.2). Resto (1.3, 3.2, 5.3) → PoC en `LiteSpeedLink/Program.cs`; nuevos casos de generador van al arnés.
 
 Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguiente):
 
@@ -77,7 +77,7 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 PoC `MemorySessionLeakPoc.DisposedClientsReleaseServerSessions`: 0 sesiones vivas y los hilos lectores se recuperan en <1 s.
    Mismo PoC: 0 clientes vivos en el host.
       Bench (antes lobby → ahora multicliente): MemoryConcurrency c=1 35.7 → 21.5 µs (3.22 → 2.88 KB), c=8 37.8 → 37.7 µs (23.85 → 21.35 KB), c=64 195 → 166 µs (188 → 168 KB); Streaming 10 items 32.6 → 29.7 µs (4.13 KB igual), 1000 items 108 → 88 µs (10.86 → 7.77 KB).
-9. [~] **Resto de 5.2**: [x] early-return sin excepción en host (`return __context.Fail[Async]("Pipeline 'X' returned Failed.")`; cliente sigue lanzando `PipelineRejectedException` al llamador), PoC `Greet("   ")` en Memory/UDP/TCP/QUIC. [x] `in` con procesadores (async omite `in`, CS1988), PoC `IAuth.Shout`. [ ] `ref`/`out` y streams con procesadores (siguen SCLSL012, diferido: sin caso de uso). [ ] test de SCLSL014 (arnés Roslyn con el generador de DI publicado como paquete).
+[ ] `ref`/`out` y streams con procesadores (siguen SCLSL012, diferido: sin caso de uso). [x] Arnés Roslyn `LiteSpeedLink.Tests/GeneratorHarness.cs` (carga el parcial de `Helpers` y el generador DI del paquete por `AssemblyMetadata`; ejecuta en memoria) + `PipelineDiagnosticsTest` (SCLSL010-014 y caso válido que exige `.host` generado).
 10. [ ] **PoC #14**: pool QUIC vs stream propio para unarias grandes/lentas; generar la ruta por operación solo si gana.
 11. [ ] **`LocalConnection` seleccionada por el generador** (5.6): RpcBuffer en Windows, UDS en el resto; quitar los `[SupportedOSPlatform("windows")]` propagados.
 12. [ ] **5.7 + 2.1**: `SharedMemory` interno y APIs `Span`/`IBufferWriter` en `RpcBuffer`.
@@ -468,7 +468,8 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] **Rechazo = `Failed`**: un pipeline solo corta (`Failed`) o sigue (`Success`); no se propaga otro estado. Emitido como `if (etapa is not (Success, TOut x)) throw new PipelineRejectedException(Failed, ...)`.
   - [x] **Early-return**: el host ya no lanza al rechazar; emite `return __context.Fail[Async](string)` (sobrecargas nuevas en los 4 contextos). El cliente lanza (no hay respuesta que devolver).
   - [x] **`in` con procesadores** (cliente y host). `IAuth.Shout`.
-  - [ ] Pendiente: ref/out y streams con procesadores (hoy SCLSL012), test de SCLSL014 (requiere arnés Roslyn con el generador de DI; los tests no referencian `Helpers`).
+  - [x] **Arnés Roslyn** (`GeneratorHarness.cs`) y `PipelineDiagnosticsTest`: SCLSL010-014.
+  - [ ] Pendiente: ref/out y streams con procesadores (hoy SCLSL012).
 
   `Pipeline.cs` actual: 4 interfaces sin uso, y `IPipelineAsync.ProcessAsync` devuelve `TOut` en vez
   de `Task<TOut>`. Se reemplaza entero.

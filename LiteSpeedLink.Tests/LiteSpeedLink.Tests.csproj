@@ -36,6 +36,34 @@
 		</Compile>
 	</ItemGroup>
 
+	<!--
+		Arnes Roslyn (GeneratorHarness.cs): el generador de DI (paquete) y el parcial de LiteSpeedLink
+		(Helpers) no se cablean como analizadores de este proyecto; solo se fijan sus rutas para
+		cargarlos por reflexion y ejecutarlos en memoria.
+	-->
+	<PropertyGroup>
+		<RestoreAdditionalProjectSources>D:\Code\SourceCrafter.DependencyInjection\publish</RestoreAdditionalProjectSources>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="10.1.2" GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="10.1.0" />
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Helpers\SourceCrafter.LiteSpeedLink.Helpers.csproj" ReferenceOutputAssembly="false" />
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>DiGenerator</_Parameter1>
+			<_Parameter2>$(PkgSourceCrafter_DependencyInjection)\analyzers\dotnet\cs\SourceCrafter.DependencyInjection.dll</_Parameter2>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>LslPartial</_Parameter1>
+			<_Parameter2>$(MSBuildThisFileDirectory)..\SourceCrafter.LiteSpeedLink.Helpers\bin\$(Configuration)\net10.0\SourceCrafter.DependencyInjection.Partial.LiteSpeedLink.dll</_Parameter2>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>InternalAttributes</_Parameter1>
+			<_Parameter2>$(MSBuildThisFileDirectory)..\LiteSpeedLink.Abstractions\Internals\Attributes.cs</_Parameter2>
+		</AssemblyAttribute>
+	</ItemGroup>
+
 	<ItemGroup>
 		<Using Include="Xunit" />
 	</ItemGroup>
