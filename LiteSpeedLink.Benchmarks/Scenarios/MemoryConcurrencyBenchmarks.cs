@@ -26,7 +26,7 @@ public class MemoryConcurrencyBenchmarks
     public async Task Setup()
     {
         string name = $"BenchC-{Guid.CreateVersion7():N}";
-        _memServer = Server.StartMemoryServerAsync(name, (op, ctx, _) => Task.FromResult(ctx.Return(ctx.Get<int>() + 1)), () => { }, 5000);
+        _memServer = Server.StartMemoryServerAsync(name, (op, ctx, _) => Task.FromResult(ctx.Return(ctx.Get<int>() + 1)), () => { });
         _memory = new MemoryConnection(name, 5000);
 
         string path = Path.Combine(Path.GetTempPath(), name + ".sock");

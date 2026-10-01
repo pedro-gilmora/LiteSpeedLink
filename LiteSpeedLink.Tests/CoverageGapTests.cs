@@ -47,7 +47,7 @@ public partial class ServersTest
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
 
-        using var server = Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }, 5000);
+        using var server = Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { });
         var connection = new MemoryConnection(MmfName, 5000);
         var field = typeof(MemoryConnection).GetField("_rpc", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
@@ -89,11 +89,23 @@ public partial class ServersTest
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
 
-        using var server = Server.StartMemoryServer(MmfName, (op, ctx, token) => op == 0 ? throw new ArgumentException("boom") : MemoryResponse.NotFound, () => { }, 5000);
+        using var server = Server.StartMemoryServer(MmfName, (op, ctx, token) => op == 0 ? throw new ArgumentException("boom") : MemoryResponse.NotFound, () => { });
         using var connection = new MemoryConnection(MmfName, 5000);
 
         connection.Invoking(c => c.Get<int, int>(0, 1)).Should().Throw<InvalidOperationException>().WithMessage("*boom*");
         connection.Invoking(c => c.Get<int, int>(1, 1)).Should().Throw<NotImplementedException>();
+    }
+
+    /// <summary>5.5: el servidor Memory ya no recibe un timeout muerto; onFinalize se invoca al liberarlo.</summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void TestMemoryServerDisposeRunsOnFinalize()
+    {
+        int finalized = 0;
+        var server = Server.StartMemoryServer($"Test-{Guid.CreateVersion7()}", (op, ctx, token) => MemoryResponse.NotFound, () => finalized++);
+
+        server.Dispose();
+        finalized.Should().Be(1);
     }
 
     /// <summary>3.7: QUIC con un stream por RPC, muchas llamadas en vuelo sobre una conexion.</summary>

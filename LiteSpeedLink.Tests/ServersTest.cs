@@ -26,7 +26,7 @@ public partial class ServersTest(ITestOutputHelper output)
     {
         const int timeout = 1000;
         string MmfName = $"Test-{Guid.CreateVersion7()}";
-        using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }, timeout))
+        using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }))
         {
             using var connection = new MemoryConnection(MmfName, timeout);
 
@@ -68,7 +68,7 @@ public partial class ServersTest(ITestOutputHelper output)
     {
         const int timeout = 1000;
         string MmfName = $"Test-{Guid.CreateVersion7()}";
-        using (Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }, timeout))
+        using (Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }))
         {
             using var connection = new MemoryConnection(MmfName, timeout);
 
@@ -109,7 +109,7 @@ public partial class ServersTest(ITestOutputHelper output)
     public void TestMemoryStreamFailureDoesNotHang()
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
-        using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }, 1000))
+        using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }))
         {
             using var connection = new MemoryConnection(MmfName, 1000);
 
@@ -126,7 +126,7 @@ public partial class ServersTest(ITestOutputHelper output)
     public async Task TestMemoryStreamsRoutedPerClient()
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
-        using (Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }, 5000))
+        using (Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }))
         {
             using var a = new MemoryConnection(MmfName, 5000);
 

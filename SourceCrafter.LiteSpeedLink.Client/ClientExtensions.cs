@@ -29,7 +29,7 @@ public static partial class ClientExtensions
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [SupportedOSPlatform("windows")]
-    public static MemoryConnection AsMemoryConnection(this string ctxName, int timeout = 100000, System.Text.Encoding? encoding = null) => new(ctxName, timeout, encoding);
+    public static MemoryConnection AsMemoryConnection(this string ctxName, int timeout = 5000, System.Text.Encoding? encoding = null) => new(ctxName, timeout, encoding);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static TcpConnection AsTcpConnection(this EndPoint ip, X509Certificate2? cert = null) => new(ip, cert);

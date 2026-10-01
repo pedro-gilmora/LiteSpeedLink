@@ -17,10 +17,9 @@ public static partial class Server
         string contextId,
         MemoryRequestHandler requestHandlers,
         Action? onFinalize = null,
-        int timeout = 1000,
         CancellationToken cancelToken = default)
     {
-        return new MemoryLobby(contextId, name =>
+        return new MemoryLobby(contextId, onFinalize, name =>
         {
         RpcBuffer rpc = null!;
         return rpc = new RpcBuffer(name, (msgId, payload) =>
@@ -44,10 +43,9 @@ public static partial class Server
         string contextId,
         MemoryAsyncRequestHandler requestHandlers,
         Action? onFinalize = null,
-        int timeout = 1000,
         CancellationToken cancelToken = default)
     {
-        return new MemoryLobby(contextId, name =>
+        return new MemoryLobby(contextId, onFinalize, name =>
         {
         RpcBuffer rpc = null!;
         return rpc = new RpcBuffer(name, async (msgId, payload) =>

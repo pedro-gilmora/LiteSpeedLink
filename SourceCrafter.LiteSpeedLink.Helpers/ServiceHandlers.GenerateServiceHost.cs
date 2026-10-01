@@ -127,10 +127,6 @@ public partial class ").Append(typeName).Append(@"
 
         var onFinalizePoint = hostCode.Length;
 
-        if (connectionType == 0)
-            hostCode.Append(@",
-            ").Append(1000);
-
         if (certArg != null)
             hostCode.Append(certArg);
 

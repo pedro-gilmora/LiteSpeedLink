@@ -28,7 +28,7 @@ public class StreamingBenchmarks
     public async Task Setup()
     {
         string name = $"Bench-{Guid.CreateVersion7():N}";
-        _memServer = Server.StartMemoryServerAsync(name, (op, ctx, _) => ctx.Yield(Range(ctx.Get<int>())), () => { }, 5000);
+        _memServer = Server.StartMemoryServerAsync(name, (op, ctx, _) => ctx.Yield(Range(ctx.Get<int>())), () => { });
         _memory = new MemoryConnection(name, 5000);
 
         string path = Path.Combine(Path.GetTempPath(), name + ".sock");

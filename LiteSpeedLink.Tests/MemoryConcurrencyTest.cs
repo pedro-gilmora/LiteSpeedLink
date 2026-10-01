@@ -16,7 +16,7 @@ public partial class ServersTest
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
 
-        using var server = Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }, 5000);
+        using var server = Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { });
         using var connection = new MemoryConnection(MmfName, 5000);
 
         var calls = Enumerable.Range(0, 200).Select(n => Task.Run(async () =>
@@ -56,7 +56,7 @@ public partial class ServersTest
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
 
-        using var server = Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { }, 5000);
+        using var server = Server.StartMemoryServerAsync(MmfName, HandleAsyncMemoryRequest, () => { });
         using var connection = new MemoryConnection(MmfName, 5000);
 
         var payload = string.Concat(Enumerable.Range(0, 50_000).Select(i => (char)('a' + i % 26)));

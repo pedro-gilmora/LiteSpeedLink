@@ -18,10 +18,12 @@ internal sealed class MemoryLobby : IDisposable
     private readonly MemoryMappedFile _mmf;
     private readonly EventWaitHandle _request, _ready, _stop = new ManualResetEvent(false);
     private readonly ConcurrentBag<RpcBuffer> _sessions = [];
+    private readonly Action? _onFinalize;
 
     // ponytail: las sesiones viven hasta que se libera el servidor; sin deteccion de cliente caido.
-    public MemoryLobby(string contextId, Func<string, RpcBuffer> open)
+    public MemoryLobby(string contextId, Action? onFinalize, Func<string, RpcBuffer> open)
     {
+        _onFinalize = onFinalize;
         _mmf = MemoryMappedFile.CreateNew(contextId + "_LSL_Lobby", Size);
         _request = new EventWaitHandle(false, EventResetMode.AutoReset, contextId + "_LSL_Req");
         _ready = new EventWaitHandle(false, EventResetMode.AutoReset, contextId + "_LSL_Ready");
@@ -47,5 +49,6 @@ internal sealed class MemoryLobby : IDisposable
         _mmf.Dispose();
         _request.Dispose();
         _ready.Dispose();
+        _onFinalize?.Invoke();
     }
 }

@@ -37,7 +37,7 @@ public class MemoryStreamBatchingTest
     static (IDisposable, MemoryConnection) Open(int timeout = 5000)
     {
         string name = $"Test-{Guid.CreateVersion7()}";
-        return (Server.StartMemoryServerAsync(name, Handle, () => { }, timeout), new MemoryConnection(name, timeout));
+        return (Server.StartMemoryServerAsync(name, Handle, () => { }), new MemoryConnection(name, timeout));
     }
 
     [Fact]

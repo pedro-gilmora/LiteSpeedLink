@@ -28,7 +28,7 @@ public class MemoryMultiClientTest
     public async Task TwoClientsRequests()
     {
         string name = $"Test-{Guid.CreateVersion7()}";
-        using var server = Server.StartMemoryServerAsync(name, Handle, () => { }, 2000);
+        using var server = Server.StartMemoryServerAsync(name, Handle, () => { });
         using var a = new MemoryConnection(name, 2000);
         using var b = new MemoryConnection(name, 2000);
 
@@ -40,7 +40,7 @@ public class MemoryMultiClientTest
     public async Task TwoClientsStreams()
     {
         string name = $"Test-{Guid.CreateVersion7()}";
-        using var server = Server.StartMemoryServerAsync(name, Handle, () => { }, 2000);
+        using var server = Server.StartMemoryServerAsync(name, Handle, () => { });
         using var a = new MemoryConnection(name, 2000);
         using var b = new MemoryConnection(name, 2000);
 

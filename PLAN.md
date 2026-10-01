@@ -67,8 +67,8 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 3. [x] **`MultiplexedChannel.DisposeAsync`**: `CancelPendingRead()` antes de esperar el bucle de lectura; ya no depende de cerrar el socket antes. Test `DisposeTest` (TCP/UDS, ≤ 2 s).
 4. [x] **`ToListAsync()` sobre `EnumerateAsync` en Memory**: ya no se reproduce (10/10); lo resolvió `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (5.2). Regresión: `TestMemoryStreamsRoutedPerClient`.
 5. [x] **`ConfigureAwait(false)`** en todos los `await` emitidos: host (`Start` QUIC, resolución async, `ReturnAsync`/`EnumerateAsync`/`NotFoundAsync`/`FailAsync`), etapas de pipeline (`ProcessAsync` y resolución async) y cliente tipado (`GetAsync`/`SendAsync`). Verificación: 0 `await` sin `ConfigureAwait` en `obj/gen` + POC (Memory/UDP/TCP/QUIC) y suite 71/71 en verde.
-`Enumerate*` raw diferido por POC (6d, `StreamRawDecodePoc`); lectores de respuesta con la firma del contrato (6e).
-7. [ ]
+6. [x] **Raw (#12) completo**: `Task` sin resultado, pipelines y cota UTF-8 de `string` (6a–c); `Enumerate*` raw diferido por POC (6d, `StreamRawDecodePoc`); lectores de respuesta con la firma del contrato (6e).
+7. [x] **Timeouts de Memory** (5.5): el `timeout` de `StartMemoryServer*` estaba muerto (nunca se usaba) → eliminado del API y del host generado; `onFinalize` también se ignoraba → ahora se invoca en `Dispose` (test `TestMemoryServerDisposeRunsOnFinalize`). Cliente unificado a 5000 ms (`AsMemoryConnection` tenía 100000). Streams sin timeout de petición, solo watchdog de inactividad (`_timeout`).
 8. [ ] **Sesiones Memory de clientes caídos** (`MemoryLobby`).
 9. [ ] **Resto de 5.2**: early-return sin excepción, `ref`/`out`/`in` y streams con procesadores (hoy SCLSL012), test de SCLSL014 (arnés Roslyn).
 10. [ ] **PoC #14**: pool QUIC vs stream propio para unarias grandes/lentas; generar la ruta por operación solo si gana.
@@ -555,11 +555,11 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - `Constants.cs:14-47`: lanza un proceso, requiere admin, contraseña hardcodeada.
   - → `CertificateRequest.CreateSelfSigned`, puro .NET y cross-platform.
 
-- [~] **5.5 Timeout y cancelación** *(acordado)* — timeout por defecto ya es 5000 ms; `Yield` usa el token del servidor por diseño (el generador no inyecta otro).
-  - `MemoryConnection`: `timeout = 100` ms por defecto, muy agresivo para handlers no triviales.
+- [x] **5.5 Timeout y cancelación** *(acordado)* — cliente 5000 ms (`MemoryConnection` y `AsMemoryConnection`); servidor Memory sin timeout (era un parámetro muerto); `Yield` usa el token del servidor por diseño (el generador no inyecta otro).
+  - ~~`MemoryConnection`: `timeout = 100` ms por defecto, muy agresivo para handlers no triviales.~~ Hoy 5000 ms.
   - ~~`Server.Memory.cs:67-88`: `Yield` recibe `token` como parámetro y **usa `cancelToken` del
 	contexto**, ignorando el argumento.~~ Resuelto: `Yield` ya no recibe token; usa el del contexto.
-  - Pendiente: timeouts por defecto divergentes (cliente 5000 ms, `AsMemoryConnection` 100000 ms, servidor 1000 ms).
+  - ~~Pendiente: timeouts por defecto divergentes (cliente 5000 ms, `AsMemoryConnection` 100000 ms, servidor 1000 ms).~~ Resuelto (paso 7).
 
 - [~] **5.6 Unix Domain Sockets como equivalente local de memoria compartida** *(acordado)* — Hecho: `Server.StartUdsServer` + `UdsConnection` reutilizando `ServePipeAsync`/`MultiplexedChannel` (framing 3.3). Test: `UdsTest.TestUdsRoundtrip`. `MultiplexedChannel.DisposeAsync` no cuelga aunque el socket siga abierto (`CancelPendingRead`, `DisposeTest`). Pendiente: selección automática `LocalConnection` (RpcBuffer/UDS) en el generador.
   - `MemoryConnection` es `[SupportedOSPlatform("windows")]` por `RpcBuffer`.
@@ -568,7 +568,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Reutiliza el framing de 3.3 — UDS es un stream, mismas reglas que TCP (P4).
   - Elimina los `#if`/`SupportedOSPlatform` que hoy se propagan hasta `Program.cs:37`.
 
-- [~] **5.7 `SharedMemory` como código interno, no como dependencia expuesta** *(decisión tuya)*
+- [~] **5.7
   - Hecho: `StartMemoryServer*` y el host generado devuelven `IDisposable`; `RpcBuffer` ya no aparece
 	Aplazado (no necesario para funcionar): hacer `internal` los tipos del fork
 	`InternalsVisibleTo`); los tests usan `RpcBuffer` directamente y habría que darles acceso.
