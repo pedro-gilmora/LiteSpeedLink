@@ -361,10 +361,14 @@ public sealed class RequestContext
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ValueTask<ResponseStatus> FailAsync(Exception exception)
+    public ValueTask<ResponseStatus> FailAsync(Exception exception) => FailAsync(exception.Message);
+
+    /// <summary>Rechazo sin excepcion (pipelines): mismo Failed en la red.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<ResponseStatus> FailAsync(string reason)
     {
         Complete();
-        return _responses.WriteAsync(_correlationId, ResponseStatus.Failed, exception.Message, _token);
+        return _responses.WriteAsync(_correlationId, ResponseStatus.Failed, reason, _token);
     }
 
     public ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value) => EnumerateAsync(value());

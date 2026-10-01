@@ -25,6 +25,7 @@ try
     int memCounter = 41;
     client.Auth.Bump(ref memCounter, out var memLabel);
     Console.WriteLine($"Bump (ref+out): {memCounter} {memLabel}");
+    Console.WriteLine($"Shout (in + processors): {client.Auth.Shout("  hey  ")} {await client.Auth.ShoutAsync("  hey  ")}");
     Console.WriteLine($"Sent a greeting: {await client.Auth.GreetAsync("  Pedro  ")}");
     Console.WriteLine($"Echo (all processors): {await client.Auth.EchoAsync("  hi  ")}");
     Console.WriteLine($"Echo (sync): {client.Auth.Echo("  hi  ")}");
@@ -34,6 +35,8 @@ try
     Console.WriteLine("Touch (raw Task): ok");
     try { client.Auth.Echo("   "); }
     catch (PipelineRejectedException ex) { Console.WriteLine($"Rejected: {ex.Message}"); }
+    try { await client.Auth.GreetAsync("   "); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Pipeline 'TrimName' returned Failed.")) { Console.WriteLine("Rejected (server, early-return): ok"); }
 }
 catch (System.Exception ex)
 {
@@ -79,8 +82,11 @@ static async Task Exercise(string transport, IAuth auth, Func<string, ValueTask<
         int counter = 41;
         auth.Bump(ref counter, out var label);
         Console.WriteLine($"[{transport}] Bump (ref+out): {counter} {label}");
+        Console.WriteLine($"[{transport}] Shout (in + processors): {auth.Shout("  hey  ")}");
         try { auth.Echo("   "); }
         catch (PipelineRejectedException ex) { Console.WriteLine($"[{transport}] Rejected: {ex.Message}"); }
+        try { await greetAsync("   "); }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Pipeline 'TrimName' returned Failed.")) { Console.WriteLine($"[{transport}] Rejected (server, early-return): ok"); }
     }
     catch (Exception ex) { Console.WriteLine($"[{transport}] {ex}"); }
     finally { Console.WriteLine($"[{transport}] Took: {Stopwatch.GetElapsedTime(ts)}"); }

@@ -153,10 +153,12 @@ public sealed class UdpRequestContext
         return SendAsync<byte>(ResponseStatus.NotFound, default, false);
     }
 
-    public ValueTask<ResponseStatus> FailAsync(Exception exception)
+    public ValueTask<ResponseStatus> FailAsync(Exception exception) => FailAsync(exception.Message);
+
+    public ValueTask<ResponseStatus> FailAsync(string reason)
     {
         Complete();
-        return SendAsync(ResponseStatus.Failed, exception.Message, true);
+        return SendAsync(ResponseStatus.Failed, reason, true);
     }
 
     public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value)

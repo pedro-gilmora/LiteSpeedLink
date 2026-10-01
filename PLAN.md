@@ -56,6 +56,8 @@ Código generado: `LiteSpeedLink\obj\gen\SourceCrafter.DependencyInjection\Servi
 - **HTTP/3 en benchmarks**: `https://localhost` resuelve a `::1` y Kestrel escucha en 127.0.0.1 ⇒ error ALPN. Usar IP.
 - **Consumidor de stream inline** (`AllowSynchronousContinuations`): sync-over-async dentro de un `await foreach` interbloquea al lector.
 - **Comandos git en paralelo** chocan con `index.lock`: una operación por comando.
+- **`MemoryOwnerClosePoc` intermitente en la suite completa**: mide hilos del proceso mientras otras colecciones corren en paralelo; aislado pasa. No es regresión.
+- **`replace_string_in_file` puede comerse el prefijo de la línea editada** en `Helpers` (p. ej. `code.Append(`): verificar con `Select-String` antes de compilar.
 
 ### Siguiente paso
 
@@ -75,7 +77,7 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 PoC `MemorySessionLeakPoc.DisposedClientsReleaseServerSessions`: 0 sesiones vivas y los hilos lectores se recuperan en <1 s.
    Mismo PoC: 0 clientes vivos en el host.
       Bench (antes lobby → ahora multicliente): MemoryConcurrency c=1 35.7 → 21.5 µs (3.22 → 2.88 KB), c=8 37.8 → 37.7 µs (23.85 → 21.35 KB), c=64 195 → 166 µs (188 → 168 KB); Streaming 10 items 32.6 → 29.7 µs (4.13 KB igual), 1000 items 108 → 88 µs (10.86 → 7.77 KB).
-9. [ ] **Resto de 5.2**: early-return sin excepción, `ref`/`out`/`in` y streams con procesadores (hoy SCLSL012), test de SCLSL014 (arnés Roslyn).
+9. [~] **Resto de 5.2**: [x] early-return sin excepción en host (`return __context.Fail[Async]("Pipeline 'X' returned Failed.")`; cliente sigue lanzando `PipelineRejectedException` al llamador), PoC `Greet("   ")` en Memory/UDP/TCP/QUIC. [x] `in` con procesadores (async omite `in`, CS1988), PoC `IAuth.Shout`. [ ] `ref`/`out` y streams con procesadores (siguen SCLSL012, diferido: sin caso de uso). [ ] test de SCLSL014 (arnés Roslyn con el generador de DI publicado como paquete).
 10. [ ] **PoC #14**: pool QUIC vs stream propio para unarias grandes/lentas; generar la ruta por operación solo si gana.
 11. [ ] **`LocalConnection` seleccionada por el generador** (5.6): RpcBuffer en Windows, UDS en el resto; quitar los `[SupportedOSPlatform("windows")]` propagados.
 12. [ ] **5.7 + 2.1**: `SharedMemory` interno y APIs `Span`/`IBufferWriter` en `RpcBuffer`.
@@ -464,7 +466,9 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] **5.2-D Ejemplo completo**: `IAuth.Echo` usa los 7 atributos (`TrimName`, `Upper`, `Bracket` Task, `Tag`, `Exclaim` ValueTask); `Program.cs` muestra async, sync y rechazo. Salida: `[[HI#]#]#!#`.
   - [x] **Fix transporte memoria**: `RpcBuffer.ResponseReady` con `TaskCreationOptions.RunContinuationsAsynchronously` (fork SharedMemory). Antes la continuación del `await` corría en el hilo lector y una llamada sync posterior lo bloqueaba (deadlock -> timeout 100 s).
   - [x] **Rechazo = `Failed`**: un pipeline solo corta (`Failed`) o sigue (`Success`); no se propaga otro estado. Emitido como `if (etapa is not (Success, TOut x)) throw new PipelineRejectedException(Failed, ...)`.
-  - [ ] Pendiente: ref/out/in y streams con procesadores (hoy SCLSL012), early-return sin excepción, test de SCLSL014 (requiere arnés Roslyn con el generador de DI; los tests no referencian `Helpers`).
+  - [x] **Early-return**: el host ya no lanza al rechazar; emite `return __context.Fail[Async](string)` (sobrecargas nuevas en los 4 contextos). El cliente lanza (no hay respuesta que devolver).
+  - [x] **`in` con procesadores** (cliente y host). `IAuth.Shout`.
+  - [ ] Pendiente: ref/out y streams con procesadores (hoy SCLSL012), test de SCLSL014 (requiere arnés Roslyn con el generador de DI; los tests no referencian `Helpers`).
 
   `Pipeline.cs` actual: 4 interfaces sin uso, y `IPipelineAsync.ProcessAsync` devuelve `TOut` en vez
   de `Task<TOut>`. Se reemplaza entero.

@@ -31,6 +31,9 @@ public interface IAuth : IServiceUnit
 
     // void con ref + out: el lector de respuesta escribe ambos (6e).
     void Bump(ref int counter, out string label);
+
+    // 'in' con procesadores en ambos lados: cliente TrimName, servidor Upper.
+    string Shout([ClientPreProcessor<TrimName>, ServerPreProcessor<Upper>] in string text);
 }
 
 public sealed class ParseInt : IPipeline<string, int>

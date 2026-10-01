@@ -25,6 +25,8 @@ public partial class AuthService() : IAuth
 
     public void Bump(ref int counter, out string label) => label = $"#{++counter}";
 
+    public string Shout(in string text) => text + "!";
+
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
         if (credentials is ("pedro", "test!123"))

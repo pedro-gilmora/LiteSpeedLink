@@ -152,21 +152,24 @@ public partial class ServiceHandlersGenerator
         }
     }
 
-    /// <summary>
-    /// Envuelve <paramref name="expr"/> con las etapas. Un estado distinto de Success lanza y lo
-    /// convierte en Failed el catch del handler (host) o llega al llamador (cliente).
-    /// </summary>
-    // ponytail: rechazo via excepcion (coste de throw en el camino de fallo); si pesa, emitir early-return con el estado.
-    // ponytail: un pipeline Scoped se resuelve desde el scope del handler solo si este ya abrio uno; si no, desde la raiz.
+    /// <summary>Rechazo en cliente: llega al llamador como excepcion ({0} = nombre del pipeline).</summary>
+    private const string ClientReject = "throw new global::SourceCrafter.LiteSpeedLink.PipelineRejectedException(global::SourceCrafter.LiteSpeedLink.ResponseStatus.Failed, \"{0}\");";
+
+    /// <summary>Rechazo en host: early-return con Failed, sin throw ({0} = nombre del pipeline).</summary>
+    private static string HostReject(bool canAwait) => canAwait
+        ? "return await __context.FailAsync(\"Pipeline '{0}' returned Failed.\").ConfigureAwait(false);"
+        : "return __context.Fail(\"Pipeline '{0}' returned Failed.\");";
+
+    // ponytail: un pipeline Scoped
     private static string StageVar(string root, int n) => "__" + root.TrimStart('_') + "_" + n;
 
     /// <summary>
-    /// Una sentencia <c>if (etapa is not (Success, TOut x)) throw</c> por etapa, de dentro afuera.
+    /// Una sentencia <c>if (etapa is not (Success, TOut x)) reject</c> por etapa, de dentro afuera.
     /// La ultima variable se llama <paramref name="last"/> (o <c>StageVar(root, n)</c>).
     /// </summary>
     // ponytail: patron con el tipo declarado: un TOut referencia null con Success tambien se rechaza.
     // Nullable<T> no admite patron de tipo (CS8116): ahi se usa 'var'.
-    private static string ApplyStages(string expr, List<Stage> stages, bool canAwait, string provider, string indent, string? last = null)
+    private static string ApplyStages(string expr, List<Stage> stages, bool canAwait, string provider, string indent, string reject, string? last = null)
     {
         var code = new StringBuilder();
         var root = expr;
@@ -192,8 +195,8 @@ public partial class ServiceHandlersGenerator
                 : s.Out.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
             code.Append("if (").Append(call).Append(" is not (global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success, ").Append(type).Append(' ').Append(expr).Append("))\n")
-                .Append(indent).Append("    throw new global::SourceCrafter.LiteSpeedLink.PipelineRejectedException(global::SourceCrafter.LiteSpeedLink.ResponseStatus.Failed, \"")
-                .Append(s.Pipeline.Name).Append("\");\n").Append(n == stages.Count - 1 ? "\n" : null).Append(indent);
+                .Append(indent).Append("    ").Append(string.Format(reject, s.Pipeline.Name))
+                .Append('\n').Append(n == stages.Count - 1 ? "\n" : null).Append(indent);
         }
 
         return code.ToString();
@@ -218,15 +221,16 @@ public partial class ServiceHandlersGenerator
         string
             name = method.Name,
             asyncName = name.EndsWith("Async") ? name : name + "Async",
-            contractParams = string.Join(", ", method.Parameters.Select(p => p.Type.GlobalNamespaced + " " + p.Name)),
+            contractParams = string.Join(", ", method.Parameters.Select(p => (p.RefKind is RefKind.In ? "in " : null) + p.Type.GlobalNamespaced + " " + p.Name)),
             contractArgs = string.Join(", ", method.Parameters.Select(p => p.Name)),
             explicitHead = "\n\n    " + method.ReturnType.GlobalNamespaced + " " + iFace.GlobalNamespaced + "." + name + "(" + contractParams + ")";
 
-        if (method.Parameters.Any(p => p.RefKind is not RefKind.None)
+        // ponytail: ref/out exigen leer la tupla de respuesta y los streams el Enumerate raw (6d): SCLSL012 hasta que haga falta.
+        if (method.Parameters.Any(p => p.RefKind is not (RefKind.None or RefKind.In))
             || (hasRet && retType.GlobalNonGenericNamespace is "global::System.Collections.Generic.IAsyncEnumerable" or "global::System.Collections.Generic.IEnumerable"))
         {
             contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, location,
-                $"{method.Name}: processors don't support ref/out/in parameters nor streamed results yet"));
+                $"{method.Name}: processors don't support ref/out parameters nor streamed results yet"));
 
             code.Append(explicitHead).Append(" => throw new global::System.InvalidOperationException(\"Processors not supported on ").Append(name).Append("\");");
             return true;
@@ -265,8 +269,10 @@ public partial class ServiceHandlersGenerator
             && (!hasRet || SymbolEqualityComparer.Default.Equals(finalRet, retType));
 
         var serviceId = GetServiceId(method.GlobalNamespaced);
-        var clientParams = string.Join(", ", method.Parameters.Select(p =>
+        // async no admite 'in' (CS1988): solo la sobrecarga sync lo conserva.
+        string ClientParams(bool sync) => string.Join(", ", method.Parameters.Select(p => (sync && p.RefKind is RefKind.In ? "in " : null) +
             (inputs.FirstOrDefault(i => SymbolEqualityComparer.Default.Equals(i.Param, p)).ClientType ?? p.Type).GlobalNamespaced + " " + p.Name));
+        var clientParams = ClientParams(false);
         int n = rawIndex++;
         string? finalType = hasRet ? finalRet.GlobalNamespaced : null;
         string
@@ -283,7 +289,7 @@ public partial class ServiceHandlersGenerator
             code.Append("\n        ");
 
             foreach (var i in inputs.Where(i => i.Stages.Count > 0))
-                code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        "));
+                code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        ", ClientReject));
 
             if (hasRet) code.Append("var __r = ").Append(resName).Append("((");
 
@@ -296,7 +302,7 @@ public partial class ServiceHandlersGenerator
             code.Append(isAsync ? ").ConfigureAwait(false)" : ")");
 
             if (hasRet)
-                code.Append(").Span);\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        "))
+                code.Append(").Span);\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        ", ClientReject))
                     .Append("return ").Append(clientPost.Count > 0 ? StageVar("__r", clientPost.Count - 1) : "__r");
 
             code.Append(";\n    }");
@@ -313,7 +319,7 @@ public partial class ServiceHandlersGenerator
 
         if (!isTask)
         {
-            code.Append("\n\n    public ").Append(finalType ?? "void").Append(' ').Append(name).Append('(').Append(clientParams).Append(")\n    {");
+            code.Append("\n\n    public ").Append(finalType ?? "void").Append(' ').Append(name).Append('(').Append(ClientParams(true)).Append(")\n    {");
             Body(false, tokenName);
         }
 

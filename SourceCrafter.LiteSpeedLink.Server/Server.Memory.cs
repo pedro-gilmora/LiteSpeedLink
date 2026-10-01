@@ -89,6 +89,8 @@ public static class MemoryResponse
 
     public static byte[] Failed(Exception exception) => Build(ResponseStatus.Failed, exception.ToString());
 
+    public static byte[] Failed(string reason) => Build(ResponseStatus.Failed, reason);
+
     private static byte[] Build<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(ResponseStatus status, T? value)
     {
         var writer = _writer ??= new(256);
@@ -125,6 +127,9 @@ public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer r
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte[] Fail(Exception exception) => MemoryResponse.Failed(exception);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public byte[] Fail(string reason) => MemoryResponse.Failed(reason);
 
     /// <summary>
     /// Envia cada elemento por el canal principal, dirigido a esta peticion (solo lo acepta el cliente que la hizo),

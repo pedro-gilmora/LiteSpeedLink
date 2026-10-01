@@ -377,9 +377,9 @@ public partial class ").Append(typeName).Append(@"
 
                         var serverPre = GetStages(param.GetAttributes(), true, container, contribution, methodLocation);
 
-                        if (serverPre.Count > 0 && param.RefKind is not RefKind.None)
+                        if (serverPre.Count > 0 && param.RefKind is not (RefKind.None or RefKind.In))
                         {
-                            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, methodLocation, methodName + ": processors don't support ref/out/in parameters yet"));
+                            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, methodLocation, methodName + ": processors don't support ref/out parameters yet"));
                             serverPre.Clear();
                         }
 
@@ -393,7 +393,7 @@ public partial class ").Append(typeName).Append(@"
                             {
                                 ValidateChain(compilation, null, serverPre, param.Type, methodName + "(" + param.Name + ") server request", contribution, methodLocation);
 
-                                applyPreStages += () => hostCode.Append(ApplyStages(wireName, serverPre, connectionType > 0, provider, "            ", param.Name));
+                                applyPreStages += () => hostCode.Append(ApplyStages(wireName, serverPre, connectionType > 0, provider, "            ", HostReject(connectionType > 0), param.Name));
                             }
 
                             //Register params to deconstruct request from deserialization
@@ -513,7 +513,7 @@ public partial class ").Append(typeName).Append(@"
             ");
 
                 if (returnsType && serverPost.Count > 0)
-                    hostCode.Append(ApplyStages("___result", serverPost, connectionType > 0, provider, "            "));
+                    hostCode.Append(ApplyStages("___result", serverPost, connectionType > 0, provider, "            ", HostReject(connectionType > 0)));
 
                 bool isStream = connectionType > 1 && returnsType
                     && method.ReturnType is INamedTypeSymbol { IsGenericType: true } rt
