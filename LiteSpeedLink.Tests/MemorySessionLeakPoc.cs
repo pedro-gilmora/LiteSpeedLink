@@ -13,20 +13,21 @@ using Xunit.Abstractions;
 namespace LiteSpeedLink.Tests;
 
 /// <summary>
-/// PoC del paso 8: el servidor Memory vive lo que su proceso, pero cada cliente que se va (aun con Dispose)
-/// deja su sesion (RpcBuffer: MMF + eventos + hilo lector) viva hasta que se libera el servidor.
-/// Si este test falla porque las sesiones bajan, el paso 8 esta resuelto: invertir el aserto.
+/// PoC del paso 8: el servidor Memory es un solo <c>RpcBuffer.Host</c> multicliente; cada cliente que hace Dispose
+/// envia Close y el host libera su anillo de respuestas (sin lobby, Bye ni hilo lector por cliente).
 /// </summary>
 [SupportedOSPlatform("windows")]
+[Collection(nameof(MemorySessionLeakPoc))]
 public class MemorySessionLeakPoc(ITestOutputHelper output)
 {
     [Fact]
-    public void DisposedClientsKeepServerSessionsAlive()
+    public void DisposedClientsReleaseServerSessions()
     {
         const int clients = 20;
         string name = $"Test-{Guid.CreateVersion7()}";
         var server = Server.StartMemoryServer(name, (op, ctx, token) => ctx.Return(ctx.Get<int>() + 1), () => { });
-        var sessions = (ICollection)server.GetType().GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(server)!;
+        var rpc = server.GetType().GetFields(BindingFlags.NonPublic | BindingFlags.Instance).Single(f => f.FieldType == typeof(SharedMemory.RpcBuffer)).GetValue(server)!;
+        var sessions = (ICollection)rpc.GetType().GetField("_clients", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(rpc)!;
         var (handles0, threads0) = Usage();
 
         for (int i = 0; i < clients; i++)
@@ -35,18 +36,14 @@ public class MemorySessionLeakPoc(ITestOutputHelper output)
             client.Get<int, int>(0, i).Should().Be(i + 1);
         }
 
-        Thread.Sleep(500); // margen para que el servidor reaccionara si detectara la salida
+        SpinWait.SpinUntil(() => sessions.Count == 0, 2000); // el Close lo atiende el lector del host
+        SpinWait.SpinUntil(() => Usage().Threads - threads0 < clients, 5000); // los lectores de cliente salen en su Dispose
         var (handles1, threads1) = Usage();
-        output.WriteLine($"{clients} clientes conectados y liberados -> sesiones vivas: {sessions.Count}, handles +{handles1 - handles0}, hilos +{threads1 - threads0}");
+        output.WriteLine($"{clients} clientes conectados y liberados -> clientes vivos en el host: {sessions.Count}, handles +{handles1 - handles0}, hilos +{threads1 - threads0}");
 
-        sessions.Count.Should().Be(clients, "ningun Dispose de cliente libera su sesion en el servidor");
-        (threads1 - threads0).Should().BeGreaterThanOrEqualTo(clients, "cada sesion retiene su hilo lector");
-
+        sessions.Count.Should().Be(0, "cada Dispose de cliente libera su anillo en el host");
+        (threads1 - threads0).Should().BeLessThan(clients, "los clientes liberados no retienen hilo lector");
         server.Dispose();
-        Thread.Sleep(500);
-        var (handles2, threads2) = Usage();
-        output.WriteLine($"Tras liberar el servidor -> handles +{handles2 - handles0}, hilos +{threads2 - threads0}");
-        (threads2 - threads0).Should().BeLessThan(clients, "solo liberar el servidor recupera los hilos");
     }
 
     static (int Handles, int Threads) Usage()
@@ -55,3 +52,7 @@ public class MemorySessionLeakPoc(ITestOutputHelper output)
         return (p.HandleCount, p.Threads.Count);
     }
 }
+
+/// <summary>Hilos y handles son globales al proceso: el PoC corre aislado del resto.</summary>
+[CollectionDefinition(nameof(MemorySessionLeakPoc), DisableParallelization = true)]
+public class MemorySessionLeakPocCollection;

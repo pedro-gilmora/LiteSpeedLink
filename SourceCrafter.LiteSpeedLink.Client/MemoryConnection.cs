@@ -5,7 +5,6 @@ using System.Buffers;
 using System.Collections;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -31,8 +30,10 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
             {
                 if (_rpc?.DisposeFinished is null or true)
                 {
-                    // Lobby: el servidor asigna un RpcBuffer dedicado a esta conexion (un cliente por par master/slave).
-                    _rpc = new RpcBuffer(Join(_contextId, _timeout) ?? throw new TimeoutException($"Memory server '{_contextId}' did not answer."));
+                    // Un solo RpcBuffer multicliente por contextId: el cliente crea su anillo de respuestas y se registra solo.
+                    _rpc?.Dispose();
+                    try { _rpc = RpcBuffer.Connect(_contextId); }
+                    catch (FileNotFoundException ex) { throw new TimeoutException($"Memory server '{_contextId}' did not answer.", ex); }
                 }
 
                 return _rpc;
@@ -277,35 +278,11 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         return request;
     }
 
-    /// <summary>Lobby del servidor (MemoryLobby): reserva una sesion y devuelve su nombre, o <c>null</c> si el servidor no responde.</summary>
-    private static string? Join(string contextId, int timeout)
-    {
-        using var gate = new Mutex(false, contextId + "_LSL_Gate");
-        try { if (!gate.WaitOne(timeout)) return null; } catch (AbandonedMutexException) { }
-        try
-        {
-            using var mmf = MemoryMappedFile.OpenExisting(contextId + "_LSL_Lobby");
-            using var view = mmf.CreateViewAccessor();
-            using var request = EventWaitHandle.OpenExisting(contextId + "_LSL_Req");
-            using var ready = EventWaitHandle.OpenExisting(contextId + "_LSL_Ready");
-
-            string name = $"{contextId}_{Guid.CreateVersion7():N}";
-            var bytes = Encoding.UTF8.GetBytes(name);
-            view.Write(0, bytes.Length);
-            view.WriteArray(4, bytes, 0, bytes.Length);
-            request.Set();
-            return ready.WaitOne(timeout) ? name : null;
-        }
-        catch (FileNotFoundException) { return null; }
-        catch (WaitHandleCannotBeOpenedException) { return null; }
-        finally { gate.ReleaseMutex(); }
-    }
-
     public void Dispose()
     {
         lock (_lock)
         {
-            _rpc?.Dispose();
+            _rpc?.Dispose(); // envia Close: el host libera el anillo de este cliente
             _rpc = null;
         }
     }

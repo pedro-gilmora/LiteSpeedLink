@@ -40,8 +40,11 @@ Código generado: `LiteSpeedLink\obj\gen\SourceCrafter.DependencyInjection\Servi
 - Mejoras probadas entran como opt-in (P6); pasan a defecto solo con benchmark (p. ej. `coalesceStreams`).
 - Comparativas: los peores casos son **unaria** y **stream simple**, no el stream por lotes.
 
-### Trampas conocidas
+### Trampas conocidas (known issues: ignorar, no investigar)
 
+- **`PSSecurityException` / `UnauthorizedAccess` en la salida de benchmarks**: no es red ni transporte. Un `powershell.exe` hijo (BenchmarkDotNet, info de hardware) no puede cargar el perfil del usuario (`ExecutionPolicy` indefinida ⇒ `Restricted`). Inocuo; la consulta funciona igual. El código de salida 1 de `dotnet run ... | Select-String` viene de ahí (stderr de proceso nativo), no de un fallo de medición.
+- **`ArgumentNullException` en `--check` (TCP, fila `A) sin proteccion`)**: carrera demostrada a propósito (`[INFO]`); la verificación termina en `TODO CORRECTO`.
+- **`PipelineExamplesTest.PostgresAuthorization` falla** sin Postgres en `127.0.0.1:5432`: dependencia externa, no regresión.
 - **Generador cacheado**: tras tocar `Helpers`, sin `build-server shutdown` + `--no-incremental` el `.g.cs` no cambia.
 - **Ediciones que no llegan a disco** (scripts PowerShell con caracteres no ASCII incluidos): verificar con `Select-String` antes de compilar.
 - **Deadlock sync tras async en Memory**: resuelto con `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (fork). Si reaparece un timeout en una llamada sync, mirar ahí.
@@ -69,7 +72,9 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 5. [x] **`ConfigureAwait(false)`** en todos los `await` emitidos: host (`Start` QUIC, resolución async, `ReturnAsync`/`EnumerateAsync`/`NotFoundAsync`/`FailAsync`), etapas de pipeline (`ProcessAsync` y resolución async) y cliente tipado (`GetAsync`/`SendAsync`). Verificación: 0 `await` sin `ConfigureAwait` en `obj/gen` + POC (Memory/UDP/TCP/QUIC) y suite 71/71 en verde.
 6. [x] **Raw (#12) completo**: `Task` sin resultado, pipelines y cota UTF-8 de `string` (6a–c); `Enumerate*` raw diferido por POC (6d, `StreamRawDecodePoc`); lectores de respuesta con la firma del contrato (6e).
 7. [x] **Timeouts de Memory** (5.5): el `timeout` de `StartMemoryServer*` estaba muerto (nunca se usaba) → eliminado del API y del host generado; `onFinalize` también se ignoraba → ahora se invoca en `Dispose` (test `TestMemoryServerDisposeRunsOnFinalize`). Cliente unificado a 5000 ms (`AsMemoryConnection` tenía 100000). Streams sin timeout de petición, solo watchdog de inactividad (`_timeout`).
-8. [ ] **Sesiones Memory de clientes caídos** (`MemoryLobby`). PoC `MemorySessionLeakPoc`: 20 clientes conectados y liberados con `Dispose` → 20 sesiones vivas, +21 hilos y +265 handles en el servidor; solo se recuperan al liberar el servidor. Fuga lineal por conexión en un servidor que vive lo que su proceso.
+PoC `MemorySessionLeakPoc.DisposedClientsReleaseServerSessions`: 0 sesiones vivas y los hilos lectores se recuperan en <1 s.
+   Mismo PoC: 0 clientes vivos en el host.
+      Bench (antes lobby → ahora multicliente): MemoryConcurrency c=1 35.7 → 21.5 µs (3.22 → 2.88 KB), c=8 37.8 → 37.7 µs (23.85 → 21.35 KB), c=64 195 → 166 µs (188 → 168 KB); Streaming 10 items 32.6 → 29.7 µs (4.13 KB igual), 1000 items 108 → 88 µs (10.86 → 7.77 KB).
 9. [ ] **Resto de 5.2**: early-return sin excepción, `ref`/`out`/`in` y streams con procesadores (hoy SCLSL012), test de SCLSL014 (arnés Roslyn).
 10. [ ] **PoC #14**: pool QUIC vs stream propio para unarias grandes/lentas; generar la ruta por operación solo si gana.
 11. [ ] **`LocalConnection` seleccionada por el generador** (5.6): RpcBuffer en Windows, UDS en el resto; quitar los `[SupportedOSPlatform("windows")]` propagados.
@@ -430,7 +435,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
         - [x] **Spin antes de `DataExists.WaitOne`** en `CircularBuffer.GetNodeForReading`: Memory 1000 items 1008 → 702 µs. Memory 1000 items 1008 → 702 µs.
   - [x] **POC A · lotes por nodo** (`MemoryRequestContext.Append/Flush`): el servidor agrupa `[int32 len][item]` en un solo `StreamItem` (lote 16 KB, buffer reutilizado; se vacía si el productor async va a esperar). Sin tipo de mensaje nuevo. Memory 1000 items: 702 → 109 µs.
   - [x] **POC B · drenado en lote en el cliente** (`WaitToReadAsync` + `TryRead` en `OpenStream`): 109 → ~100 µs, marginal pero gratis. Resultado: Memory 100 µs / 8 KB vs UDS 304 µs y TCP 344 µs (1000 items). Tests de streaming Memory cubren ambos.
-  - [x] **Varios clientes por `contextId`**: Hecho con `MemoryLobby` (servidor) + `MemoryConnection.Join`: mutex `_LSL_Gate` serializa, el cliente escribe su nombre de sesion en la MMF `_LSL_Lobby`, senala `_LSL_Req`, espera `_LSL_Ready`; el servidor abre un `RpcBuffer` dedicado. `MemoryMultiClientTest` activo y en verde. Pendiente: liberar sesiones de clientes caidos. Contexto previo: `RpcBuffer` es un par master/slave. Dos `MemoryConnection` al mismo nombre comparten el buffer circular de lectura (lectura destructiva) y sus `MsgId` colisionan => respuestas cruzadas (esperado 1, llega 4) y streams cancelados. Evidencia: `MemoryMultiClientTest`. Arreglo real = opcion 1 (canal por cliente: handshake en canal de control que asigna `contextId_n`); no es de streams, afecta a toda la RPC.
+  - [x] **Varios clientes por `contextId`**: Hoy con `RpcBuffer.Host`/`Connect` multicliente (ver paso 8); antes con `MemoryLobby` (eliminado). `MemoryMultiClientTest` activo y en verde. Historico: con `MemoryLobby` (servidor) + `MemoryConnection.Join`:
   - [x] **Investigar `ToListAsync()`** sobre `EnumerateAsync` (Memory): `TestMemoryStreamsRoutedPerClient` fallaba con `TaskCanceledException`. Causa: continuaciones síncronas en el hilo lector del `RpcBuffer`. Resuelto por `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady`; el test ya usa `ToListAsync()` y pasa 10/10.
 
 - [x] **4.3 Streaming UDP ordenado**

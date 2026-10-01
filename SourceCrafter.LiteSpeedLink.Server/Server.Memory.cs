@@ -19,10 +19,8 @@ public static partial class Server
         Action? onFinalize = null,
         CancellationToken cancelToken = default)
     {
-        return new MemoryLobby(contextId, onFinalize, name =>
-        {
         RpcBuffer rpc = null!;
-        return rpc = new RpcBuffer(name, (msgId, payload) =>
+        return new MemoryHost(rpc = RpcBuffer.Host(contextId, (msgId, payload) =>
         {
             try
             {
@@ -34,8 +32,7 @@ public static partial class Server
             {
                 return MemoryResponse.Failed(ex);
             }
-        });
-        });
+        }), onFinalize);
     }
 
     [SupportedOSPlatform("windows")]
@@ -45,10 +42,8 @@ public static partial class Server
         Action? onFinalize = null,
         CancellationToken cancelToken = default)
     {
-        return new MemoryLobby(contextId, onFinalize, name =>
-        {
         RpcBuffer rpc = null!;
-        return rpc = new RpcBuffer(name, async (msgId, payload) =>
+        return new MemoryHost(rpc = RpcBuffer.Host(contextId, async (msgId, payload) =>
         {
             try
             {
@@ -60,8 +55,17 @@ public static partial class Server
             {
                 return MemoryResponse.Failed(ex);
             }
-        });
-        });
+        }), onFinalize);
+    }
+
+    /// <summary>Un solo <see cref="RpcBuffer"/> multicliente: cada cliente se libera con su propio Close, sin lobby ni Bye.</summary>
+    private sealed class MemoryHost(RpcBuffer rpc, Action? onFinalize) : IDisposable
+    {
+        public void Dispose()
+        {
+            rpc.Dispose();
+            onFinalize?.Invoke();
+        }
     }
 }
 
