@@ -139,13 +139,14 @@ internal readonly record struct BatchPolicy(int Items, long MaxDelayTicks)
     }
 }
 
-internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true, BatchPolicy batch = default)
+internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true, BatchPolicy batch = default) : IThreadPoolWorkItem
 {
     public BatchPolicy Batch => batch;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly FrameWriter _frames = new(writer, correlated);
     private int _flushScheduled;
+    private int _flushWanted;
 
     // ponytail: umbral fijo; los items de stream se agrupan hasta 32 KB o hasta que corre el flush diferido.
     private const int EagerFlushBytes = 32 * 1024;
@@ -163,7 +164,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
 
                 if (writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
                 {
-                    if (Interlocked.Exchange(ref _flushScheduled, 1) == 0) _ = FlushLaterAsync();
+                    ScheduleFlush();
                     return new(status);
                 }
 
@@ -172,7 +173,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
             }
             finally
             {
-                if (release) _gate.Release();
+                if (release) Release();
             }
         }
 
@@ -188,7 +189,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         }
         finally
         {
-            _gate.Release();
+            Release();
         }
 
         return status;
@@ -225,7 +226,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
             if (deferFlush && writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
             {
                 // Items seguidos del mismo productor se acumulan; un unico flush en el pool los envia juntos.
-                if (Interlocked.Exchange(ref _flushScheduled, 1) == 0) _ = FlushLaterAsync();
+                ScheduleFlush();
                 return status;
             }
 
@@ -234,21 +235,39 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         }
         finally
         {
-            _gate.Release();
+            Release();
         }
 
         return status;
     }
 
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
-    private async ValueTask FlushLaterAsync()
+    /// <summary>El propio canal es el work item del flush diferido: encolarlo no asigna (antes: caja async + TaskNode por flush).</summary>
+    private void ScheduleFlush()
     {
-        await Task.Yield();
-        await _gate.WaitAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _flushScheduled, 1) == 0) ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
+    }
+
+    void IThreadPoolWorkItem.Execute()
+    {
+        if (!_gate.Wait(0))
+        {
+            // Candado ocupado: quien lo suelte reencola el flush (ver Release). Se reintenta tras marcar para no perder
+            // una liberacion ocurrida entre el primer intento y la marca.
+            Interlocked.Exchange(ref _flushWanted, 1);
+            if (!_gate.Wait(0)) return;
+            Volatile.Write(ref _flushWanted, 0);
+        }
+
+        bool release = true;
         try
         {
             Volatile.Write(ref _flushScheduled, 0);
-            if (writer.UnflushedBytes > 0) await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            if (writer.UnflushedBytes > 0)
+            {
+                var flush = writer.FlushAsync(CancellationToken.None);
+                if (flush.IsCompleted) flush.GetAwaiter().GetResult();
+                else { release = false; _ = ReleaseAfterAsync(flush); }
+            }
         }
         catch
         {
@@ -256,8 +275,22 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         }
         finally
         {
-            _gate.Release();
+            if (release) Release();
         }
+    }
+
+    private void Release()
+    {
+        _gate.Release();
+        if (Volatile.Read(ref _flushWanted) != 0 && Interlocked.Exchange(ref _flushWanted, 0) != 0)
+            ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
+    }
+
+    private async Task ReleaseAfterAsync(ValueTask<FlushResult> flush)
+    {
+        try { await flush.ConfigureAwait(false); }
+        catch { }
+        finally { Release(); }
     }
 
     /// <summary>Trama con cuerpo ya codificado (lotes); flush diferido como los items sueltos.</summary>
@@ -273,7 +306,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
 
             if (writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
             {
-                if (Interlocked.Exchange(ref _flushScheduled, 1) == 0) _ = FlushLaterAsync();
+                ScheduleFlush();
                 return status;
             }
 
@@ -281,7 +314,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         }
         finally
         {
-            _gate.Release();
+            Release();
         }
 
         return status;
@@ -299,7 +332,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         }
         finally
         {
-            _gate.Release();
+            Release();
         }
 
         return status;
