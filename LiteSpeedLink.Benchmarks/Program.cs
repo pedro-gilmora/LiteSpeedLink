@@ -27,9 +27,16 @@ public static class Program
         if (args.Contains("--alloc"))
         {
             var t = args.FirstOrDefault(a => a is "tcp" or "uds" or "memory" or "quicstream");
+            if (args.Contains("cmp") && OperatingSystem.IsWindows()) return AllocProbe.RunComparisonAsync().GetAwaiter().GetResult();
             return (args.Contains("quic") && OperatingSystem.IsWindows() ? AllocProbe.RunQuicAsync()
                 : t is null ? AllocProbe.RunStreamAsync()
                 : AllocProbe.RunAsync(t == "quicstream" ? "quic" : t)).GetAwaiter().GetResult();
+        }
+
+        if (args.Contains("--quicpool") && OperatingSystem.IsWindows())
+        {
+            var kb = args.Select(a => int.TryParse(a, out var v) ? v : 0).FirstOrDefault(v => v > 0, 1024);
+            return Scenarios.QuicPoolContentionPoc.RunAsync(kb).GetAwaiter().GetResult();
         }
 
         var fast = args.Contains("--fast");

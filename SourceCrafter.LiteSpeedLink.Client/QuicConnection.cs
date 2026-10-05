@@ -25,6 +25,17 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
 
     internal System.Net.Quic.QuicConnection? connection;
     private readonly SemaphoreSlim _init = new(1, 1);
+    private readonly QuicConnection? _parent;
+
+    private QuicConnection(QuicConnection parent) : this(parent.Options, 0) => _parent = parent;
+
+    private QuicClientConnectionOptions Options => options;
+
+    /// <summary>
+    /// Vista con un stream propio por unaria sobre la misma conexion fisica (#14): evita el bloqueo de cabeza
+    /// de linea del pool para respuestas grandes (PoC: gana desde ~1 MB). La emite el generador con [DedicatedStream].
+    /// </summary>
+    public QuicConnection Dedicated => field ??= _mux.Length == 0 ? this : new(this);
     // Unarias sobre N streams multiplexados; los streams del usuario siguen con stream propio (aislamiento QUIC).
     private readonly Task<MultiplexedChannel>?[] _mux = new Task<MultiplexedChannel>?[unaryStreams];
     private int _next;
@@ -63,6 +74,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
 
     internal async ValueTask<System.Net.Quic.QuicConnection> TryInitializeAsync(CancellationToken token)
     {
+        if (_parent is not null) return await _parent.TryInitializeAsync(token).ConfigureAwait(false);
         if (Volatile.Read(ref connection) is { } ready) return ready;
 
         await _init.WaitAsync(token).ConfigureAwait(false);

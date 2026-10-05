@@ -377,9 +377,9 @@ public partial class ").Append(typeName).Append(@"
 
                         var serverPre = GetStages(param.GetAttributes(), true, container, contribution, methodLocation);
 
-                        if (serverPre.Count > 0 && param.RefKind is not (RefKind.None or RefKind.In))
+                        if (!StagesFit(param, serverPre))
                         {
-                            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, methodLocation, methodName + ": processors don't support ref/out parameters yet"));
+                            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, methodLocation, RefStagesMessage(methodName, param)));
                             serverPre.Clear();
                         }
 

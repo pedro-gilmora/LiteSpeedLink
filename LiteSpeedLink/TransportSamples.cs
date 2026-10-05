@@ -22,7 +22,7 @@ namespace SourceCrafter.LiteSpeedLink;
 public partial class UdpTextService;
 
 [ServiceClient(ServiceConnectionType.Udp)]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]
@@ -44,7 +44,7 @@ public sealed partial class UdpTextServiceClient;
 public partial class TcpTextService;
 
 [ServiceClient(ServiceConnectionType.Tcp)]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]
@@ -68,7 +68,7 @@ public sealed partial class TcpTextServiceClient;
 public partial class QuicTextService;
 
 [ServiceClient(ServiceConnectionType.Quic)]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]

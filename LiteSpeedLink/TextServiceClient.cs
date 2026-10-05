@@ -8,7 +8,7 @@ using System.Runtime.Versioning;
 namespace SourceCrafter.LiteSpeedLink;
 
 [ServiceClient]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]

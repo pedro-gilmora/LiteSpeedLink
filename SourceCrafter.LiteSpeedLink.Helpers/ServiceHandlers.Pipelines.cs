@@ -128,6 +128,28 @@ public partial class ServiceHandlersGenerator
             stage.Pipeline.FindImplementationForInterfaceMember(m) is IMethodSymbol { DeclaredAccessibility: Accessibility.Public, ExplicitInterfaceImplementations.Length: 0 });
     }
 
+    /// <summary>
+    /// <c>out</c> no tiene entrada que procesar; <c>ref</c> vuelve por la misma variable, asi que sus etapas
+    /// (solo de ida) no pueden cambiar el tipo.
+    /// </summary>
+    private static bool StagesFit(IParameterSymbol p, List<Stage> stages) => stages.Count == 0 || p.RefKind switch
+    {
+        RefKind.None or RefKind.In => true,
+        RefKind.Out => false,
+        _ => stages.All(s => SymbolEqualityComparer.Default.Equals(s.In, p.Type) && SymbolEqualityComparer.Default.Equals(s.Out, p.Type))
+    };
+
+    private static string RefStagesMessage(string method, IParameterSymbol p) =>
+        method + "(" + p.Name + "): processors can't apply to 'out' and must preserve the type on 'ref'";
+
+    private static string? Modifier(IParameterSymbol p) => p.RefKind switch
+    {
+        RefKind.In => "in ",
+        RefKind.Ref => "ref ",
+        RefKind.Out => "out ",
+        _ => null
+    };
+
     /// <summary>Valida <c>start -> etapas -> end</c>
     private static bool ValidateChain(Compilation compilation, ITypeSymbol? start, List<Stage> stages, ITypeSymbol? end,
         string what, PartialContribution contribution, Location? location)
@@ -208,7 +230,7 @@ public partial class ServiceHandlersGenerator
     /// explicita lanzando <c>InvalidOperationException</c>.
     /// </summary>
     private static bool TryGenerateProcessedClientMethod(
-        StringBuilder code, StringBuilder helpers, ServiceProviderInfo container, INamedTypeSymbol iFace, IMethodSymbol method, PartialContribution contribution, ref int rawIndex)
+        StringBuilder code, StringBuilder helpers, ServiceProviderInfo container, INamedTypeSymbol iFace, IMethodSymbol method, PartialContribution contribution, string conn, ref int rawIndex)
     {
         if (!HasProcessors(method.GetReturnTypeAttributes()) && !method.Parameters.Any(p => HasProcessors(p.GetAttributes())))
             return false;
@@ -221,16 +243,15 @@ public partial class ServiceHandlersGenerator
         string
             name = method.Name,
             asyncName = name.EndsWith("Async") ? name : name + "Async",
-            contractParams = string.Join(", ", method.Parameters.Select(p => (p.RefKind is RefKind.In ? "in " : null) + p.Type.GlobalNamespaced + " " + p.Name)),
+            contractParams = string.Join(", ", method.Parameters.Select(p => Modifier(p) + p.Type.GlobalNamespaced + " " + p.Name)),
             contractArgs = string.Join(", ", method.Parameters.Select(p => p.Name)),
             explicitHead = "\n\n    " + method.ReturnType.GlobalNamespaced + " " + iFace.GlobalNamespaced + "." + name + "(" + contractParams + ")";
 
-        // ponytail: ref/out exigen leer la tupla de respuesta y los streams el Enumerate raw (6d): SCLSL012 hasta que haga falta.
-        if (method.Parameters.Any(p => p.RefKind is not (RefKind.None or RefKind.In))
-            || (hasRet && retType.GlobalNonGenericNamespace is "global::System.Collections.Generic.IAsyncEnumerable" or "global::System.Collections.Generic.IEnumerable"))
+        // ponytail: los streams exigen el Enumerate raw (6d): SCLSL012 hasta que haga falta.
+        if (hasRet && retType.GlobalNonGenericNamespace is "global::System.Collections.Generic.IAsyncEnumerable" or "global::System.Collections.Generic.IEnumerable")
         {
             contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, location,
-                $"{method.Name}: processors don't support ref/out parameters nor streamed results yet"));
+                $"{method.Name}: processors don't support streamed results yet"));
 
             code.Append(explicitHead).Append(" => throw new global::System.InvalidOperationException(\"Processors not supported on ").Append(name).Append("\");");
             return true;
@@ -238,14 +259,27 @@ public partial class ServiceHandlersGenerator
 
         string? tokenName = null;
         List<(IParameterSymbol Param, ITypeSymbol ClientType, ITypeSymbol Wire, List<Stage> Stages)> inputs = [];
+        // Vuelven en la respuesta tras el retorno, en orden de declaracion (como el host).
+        List<IParameterSymbol> outs = [];
 
         foreach (var p in method.Parameters)
         {
-            if (tokenName is null && p.Type.GlobalNamespaced == cancelTokenFullTypeName) { tokenName = p.Name; continue; }
+            if (tokenName is null && p.RefKind is RefKind.None && p.Type.GlobalNamespaced == cancelTokenFullTypeName) { tokenName = p.Name; continue; }
+
+            if (p.RefKind is RefKind.Out or RefKind.Ref) outs.Add(p);
 
             var attrs = p.GetAttributes();
             var clientStages = GetStages(attrs, false, container, contribution, location);
             var serverStages = GetStages(attrs, true, null, contribution, location);
+
+            if (!StagesFit(p, clientStages) || !StagesFit(p, serverStages))
+            {
+                contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, location, RefStagesMessage(name, p)));
+                clientStages.Clear();
+                serverStages.Clear();
+            }
+
+            if (p.RefKind is RefKind.Out) continue;
             var wire = serverStages.Count > 0 ? serverStages[0].In : p.Type;
 
             ValidateChain(compilation, null, clientStages, wire, name + "(" + p.Name + ") client -> server", contribution, location);
@@ -269,18 +303,21 @@ public partial class ServiceHandlersGenerator
             && (!hasRet || SymbolEqualityComparer.Default.Equals(finalRet, retType));
 
         var serviceId = GetServiceId(method.GlobalNamespaced);
-        // async no admite 'in' (CS1988): solo la sobrecarga sync lo conserva.
-        string ClientParams(bool sync) => string.Join(", ", method.Parameters.Select(p => (sync && p.RefKind is RefKind.In ? "in " : null) +
+        // async no admite in/ref/out (CS1988): ref pasa por valor, out se omite y ambos vuelven en la tupla.
+        string ClientParams(bool sync) => string.Join(", ", method.Parameters.Where(p => sync || p.RefKind is not RefKind.Out).Select(p => (sync ? Modifier(p) : null) +
             (inputs.FirstOrDefault(i => SymbolEqualityComparer.Default.Equals(i.Param, p)).ClientType ?? p.Type).GlobalNamespaced + " " + p.Name));
         var clientParams = ClientParams(false);
         int n = rawIndex++;
         string? finalType = hasRet ? finalRet.GlobalNamespaced : null;
+        List<ITypeSymbol> responseTypes = [.. hasRet ? [wireRet] : Enumerable.Empty<ITypeSymbol>(), .. outs.Select(p => p.Type)];
+        string? asyncType = outs.Count == 0 ? finalType : TupleOf([.. hasRet ? [finalRet] : Enumerable.Empty<ITypeSymbol>(), .. outs.Select(p => p.Type)]);
+        bool reads = responseTypes.Count > 0;
         string
             resName = "__Res" + n,
             reqArgs = inputs.Count > 0 ? "__Req" + n + "(" + string.Join(", ", inputs.Select(Wire)) + ")" : "default";
 
         if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], "");
-        if (hasRet) EmitReader(helpers, resName, [wireRet], "");
+        if (reads) EmitReader(helpers, resName, responseTypes, "", outs.Count > 0 ? (hasRet ? 1 : 0) : -1);
 
         static string Wire((IParameterSymbol Param, ITypeSymbol ClientType, ITypeSymbol Wire, List<Stage> Stages) i) => i.Stages.Count > 0 ? StageVar(i.Param.Name, i.Stages.Count - 1) : i.Param.Name;
 
@@ -291,24 +328,40 @@ public partial class ServiceHandlersGenerator
             foreach (var i in inputs.Where(i => i.Stages.Count > 0))
                 code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        ", ClientReject));
 
-            if (hasRet) code.Append("var __r = ").Append(resName).Append("((");
+            if (hasRet) code.Append("var __r = ");
+
+            if (reads) code.Append(resName).Append("((");
 
             if (isAsync) code.Append("await ");
 
-            code.Append("__connection.GetRaw").Append(isAsync ? "Async" : null).Append('(').Append(serviceId).Append(", ").Append(reqArgs);
+            code.Append(conn).Append(".GetRaw").Append(isAsync ? "Async" : null).Append('(').Append(serviceId).Append(", ").Append(reqArgs);
 
             if (token != null) code.Append(", ").Append(token);
 
             code.Append(isAsync ? ").ConfigureAwait(false)" : ")");
 
-            if (hasRet)
-                code.Append(").Span);\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        ", ClientReject))
-                    .Append("return ").Append(clientPost.Count > 0 ? StageVar("__r", clientPost.Count - 1) : "__r");
+            // sync: el lector escribe directo en los ref/out del llamador; async: en locales que vuelven en la tupla.
+            if (reads) code.Append(").Span").Append(string.Concat(outs.Select((p, k) => isAsync ? ", out var __o" + k : ", out " + p.Name))).Append(')');
 
-            code.Append(";\n    }");
+            code.Append(';');
+
+            List<string> rets = [];
+
+            if (hasRet)
+            {
+                code.Append("\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        ", ClientReject));
+                rets.Add(clientPost.Count > 0 ? StageVar("__r", clientPost.Count - 1) : "__r");
+            }
+
+            if (isAsync) rets.AddRange(outs.Select((_, k) => "__o" + k));
+
+            if (rets.Count > 0)
+                code.Append(hasRet ? null : "\n\n        ").Append("return ").Append(rets.Count == 1 ? rets[0] : "(" + string.Join(", ", rets) + ")").Append(';');
+
+            code.Append("\n    }");
         }
 
-        code.Append("\n\n    public async global::System.Threading.Tasks.ValueTask").Append(finalType is null ? null : "<" + finalType + ">")
+        code.Append("\n\n    public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
             .Append(' ').Append(asyncName).Append('(').Append(clientParams);
 
         if (tokenName is null)

@@ -18,6 +18,7 @@ using System.Text;
 public partial class ServiceHandlersGenerator
 {
     const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
+    const string DedicatedStreamAttr = "SourceCrafter.LiteSpeedLink.DedicatedStreamAttribute";
 
     private static void GenerateServiceClient(
         ServiceProviderInfo container,
@@ -101,7 +102,7 @@ public partial class ").Append(typeShortName).Append(@"
 
         foreach (var iFace in serviceClient.GetAttributes()
             .Where(a => a.AttributeClass is { IsGenericType: true } ac
-                && ac.ConstructedFrom.ToDisplayString() == ClientServiceAttr)
+                && ac.ConstructedFrom.ToDisplayString() == ServiceUnitAttr)
             .Select(a => a.AttributeClass!.TypeArguments[0])
             .OfType<INamedTypeSymbol>()
             .Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default))
@@ -140,9 +141,15 @@ public partial class ").Append(typeShortName).Append(@"
             {
                 if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                 {
-                    if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, ref rawIndex)) continue;
+                    // #14: solo QUIC tiene pool que evitar; el resto ignora [DedicatedStream] (el contrato se comparte entre hosts).
+                    string conn = connectionType == 3 && method.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == DedicatedStreamAttr)
+                        ? "__connection.Dedicated" : "__connection";
 
-                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, ref rawIndex)) continue;
+                    if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, conn, ref rawIndex)) continue;
+
+                    if (TryGenerateStreamClientMethod(clientCode, method)) continue;
+
+                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex)) continue;
 
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
@@ -332,7 +339,7 @@ public partial class ").Append(typeShortName).Append(@"
         ");
 
                     clientCode
-                        .Append("return __connection.")
+                        .Append("return ").Append(conn).Append('.')
                         .Append(opMethod);
                     
                     if(!generatingSync)
@@ -483,7 +490,7 @@ public partial class ").Append(typeShortName).Append(@"
                             }
                         }
 
-                        clientCode.Append("__connection.").Append(opMethod);
+                        clientCode.Append(conn).Append('.').Append(opMethod);
 
                         generatingSync = true;
                         useComma = closeTag = paramsComma = useReqTypesComma = asyncParamsComma = false;
@@ -505,6 +512,37 @@ public partial class ").Append(typeShortName).Append(@"
             contribution.AddSource(hintName + "." + propName + ".client", clientCode.ToString());
         }
     }
+    /// <summary>
+    /// Stream (IEnumerable/IAsyncEnumerable): el contrato se implementa con Enumerate/EnumerateAsync de la
+    /// conexion; los sync ganan una sobrecarga *Async con token. Peticion = parametro o tupla (misma forma que el host).
+    /// </summary>
+    private static bool TryGenerateStreamClientMethod(StringBuilder code, IMethodSymbol method)
+    {
+        if (method.ReturnType is not INamedTypeSymbol { IsGenericType: true } rt
+            || rt.ConstructedFrom.ToDisplayString() is not ("System.Collections.Generic.IAsyncEnumerable<T>" or "System.Collections.Generic.IEnumerable<T>")
+            || method.Parameters.Any(p => p.RefKind is not RefKind.None))
+            return false;
+
+        bool isAsync = rt.Name == "IAsyncEnumerable";
+        var token = method.Parameters.FirstOrDefault(p => p.Type.GlobalNamespaced == cancelTokenFullTypeName);
+        var request = method.Parameters.Where(p => !SymbolEqualityComparer.Default.Equals(p, token)).ToList();
+        string item = rt.TypeArguments[0].GlobalNamespaced, id = GetServiceId(method.GlobalNamespaced).ToString();
+        string generics = request.Count == 0 ? item : TupleOf([.. request.Select(p => p.Type)]) + ", " + item;
+        string payload = request.Count switch { 0 => "", 1 => ", " + request[0].Name, _ => ", (" + string.Join(", ", request.Select(p => p.Name)) + ")" };
+
+        string Call(string op, string tokenArg) => $"__connection.{op}<{generics}>({id}{payload}{tokenArg})!;";
+
+        code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append(" => ")
+            .Append(Call(isAsync ? "EnumerateAsync" : "Enumerate", token is null ? "" : ", " + token.Name));
+
+        if (!isAsync && token is null)
+            code.Append("\n\n    public global::System.Collections.Generic.IAsyncEnumerable<").Append(item).Append("> ").Append(method.Name).Append("Async(")
+                .Append(string.Concat(request.Select(p => p.Type.GlobalNamespaced + " " + p.Name + ", "))).Append(cancelTokenFullTypeName).Append(" @__token = default) => ")
+                .Append(Call("EnumerateAsync", ", @__token"));
+
+        return true;
+    }
+
     static bool Exchange(ref bool value)
     {
         return ((value, _) = (true, value)).Item2;

@@ -48,4 +48,8 @@ namespace SourceCrafter.LiteSpeedLink
         public int Batch { get; set; }
         public int MaxDelayMs { get; set; }
     }
+
+    /// <summary>Unaria con stream QUIC propio en lugar del pool (respuestas grandes, ~1 MB+). Otros transportes la ignoran.</summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class DedicatedStreamAttribute : Attribute;
 }

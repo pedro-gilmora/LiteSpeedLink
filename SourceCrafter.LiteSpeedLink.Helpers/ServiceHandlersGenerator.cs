@@ -29,7 +29,7 @@ public sealed partial class ServiceHandlersGenerator : ServiceProviderPartial
 {
     private const string ServiceHostAttr = "LiteSpeedLink.Abstractions.Internals.ServiceHostAttribute";
     private const string ServiceClientAttr = "LiteSpeedLink.Abstractions.Internals.ServiceClientAttribute";
-    private const string ClientServiceAttr = "LiteSpeedLink.Abstractions.Internals.ClientServiceAttribute<TService>";
+    private const string ServiceUnitAttr = "LiteSpeedLink.Abstractions.Internals.ServiceUnitAttribute<TService>";
 
     public override void AnalyzeContainer(
         ServiceProviderInfo container,
