@@ -835,3 +835,12 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - `ResponseChannel` es su propio `IThreadPoolWorkItem`: flush sincrono si el candado esta libre; si esta ocupado marca `_flushWanted` y quien lo suelta (`Release()`) reencola; async solo si `FlushAsync` no completa.
 - BenchmarkDotNet (Comparison): Lsl_Stream 4891 -> 3352 B (slim 4535 B), Lsl_StreamPerItem 5684 -> 3443 B, Lsl_StreamBatched 3766 -> 3537 B (slim 3067 B); tiempos sin cambio (163 / 255 / 90 us). Tests 89/89.
 - Pendiente: Lsl_StreamBatched aun +470 B vs slim por las cajas async de `FlushBatchAsync`/`WriteRawAsync` por lote.
+
+### Lotes sin maquina de estados (rama fix/batched-alloc)
+
+- `ResponseChannel.WriteRawAsync`/`WriteStatusAsync` y `RequestContext.FlushBatchAsync` ya no son `async`: camino sincrono con `_gate.Wait(0)` y flush completado en linea; solo si el candado o el flush esperan se entra en un metodo `async` con `PoolingAsyncValueTaskMethodBuilder`.
+- `FlushAndReleaseAsync` comprueba `IsCompleted` antes de esperar (tambien beneficia a `WriteAsync`).
+- El lote solo se resetea tras completar la copia al `PipeWriter` (vida del buffer intacta).
+- BenchmarkDotNet (Comparison, 1000 items): `Lsl_StreamBatched` 3537 B -> ~3287 B (3.21 KB), 87.7 us; `AspNetSlim_StreamBatched` ~3072 B (3 KB), 103.8 us. Brecha ~470 B -> ~215 B.
+- Resto: `Channel<Response>` por stream en el cliente (segmento `Response[]` + `Segment`). Siguiente paso posible: reutilizar el canal/cola por stream.
+- Tests: 88/89; `MemoryOwnerClosePoc` (RpcBuffer, conteo de hilos) falla solo en la suite completa y pasa aislado; no toca `ResponseChannel`.
