@@ -176,14 +176,14 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
     // ponytail: la respuesta llega al final del stream; un timeout de RpcBuffer no se trata como fallo (streams largos).
     private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (byte[] request, CancellationToken token) =>
-        OpenStream<TOut, byte[]>((0, request), token, static (w, s) => w.Write(s.payload));
+        OpenStream<TOut, byte[]>((0, request), static (w, s) => w.Write(s.payload), token);
 
     private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
         ((long op, TIn payload) request, CancellationToken token) =>
-        OpenStream<TOut, TIn>(request, token, WriteRequest);
+        OpenStream<TOut, TIn>(request, WriteRequest, token);
 
     private async IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, TState>
-        ((long op, TState payload) request, [EnumeratorCancellation] CancellationToken token, Action<IBufferWriter<byte>, (long op, TState payload)> write)
+        ((long op, TState payload) request, Action<IBufferWriter<byte>, (long op, TState payload)> write, [EnumeratorCancellation] CancellationToken token)
     {
         var buffer = Channel.CreateUnbounded<TOut>(new() { SingleReader = true, SingleWriter = true });
 

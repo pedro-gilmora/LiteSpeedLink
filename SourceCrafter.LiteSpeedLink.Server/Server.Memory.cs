@@ -109,7 +109,7 @@ public static class MemoryResponse
 #if !NETSTANDARD
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 #endif
-public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer rpc, ulong msgId, CancellationToken cancelToken) : BufferReader(payload)
+public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer rpc, ulong msgId, CancellationToken cancelToken)
 {
     /// <summary>Cuerpo de la peticion, sin la cabecera de operacion. No copia el array original.</summary>
     private readonly ReadOnlyMemory<byte> _body = payload.AsMemory(offset);

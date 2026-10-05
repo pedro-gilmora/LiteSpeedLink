@@ -43,12 +43,10 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IAsyncConnec
 
     internal void TryInitialize()
     {
-        if (Volatile.Read(ref connection) is not null) return;
-
+        if(Volatile.Read(ref connection) is null)
         lock (_init)
+        if (Volatile.Read(ref connection) is null)
         {
-            if (connection is not null) return;
-
             var client = new UdpClient();
 
             switch (endpoint)
@@ -72,11 +70,10 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IAsyncConnec
             {
                 var buffer = (await client.ReceiveAsync().ConfigureAwait(false)).Buffer;
 
-                if (buffer.Length < ResponseHeaderSize) continue;
+                if (buffer.Length < ResponseHeaderSize || !_pending.TryGetValue(BinaryPrimitives.ReadInt32LittleEndian(buffer), out var responses)) continue;
 
                 // Una respuesta sin destinatario pertenece a una llamada ya cancelada.
-                if (_pending.TryGetValue(BinaryPrimitives.ReadInt32LittleEndian(buffer), out var responses))
-                    responses.Writer.TryWrite(buffer);
+                responses.Writer.TryWrite(buffer);
             }
         }
         catch (Exception ex)
