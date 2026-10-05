@@ -79,7 +79,12 @@ PoC `MemorySessionLeakPoc.DisposedClientsReleaseServerSessions`: 0 sesiones viva
       Bench (antes lobby → ahora multicliente): MemoryConcurrency c=1 35.7 → 21.5 µs (3.22 → 2.88 KB), c=8 37.8 → 37.7 µs (23.85 → 21.35 KB), c=64 195 → 166 µs (188 → 168 KB); Streaming 10 items 32.6 → 29.7 µs (4.13 KB igual), 1000 items 108 → 88 µs (10.86 → 7.77 KB).
 [x] `ref`/`out` con procesadores (POC `Normalize(ref, out)` en `Program.cs`, 4 transportes; async devuelve tupla). Pre-procesador sobre `out` sigue en SCLSL012 a propósito: no hay valor de entrada. [x] Cliente generado de streams (`IEnumerable<T>`/`IAsyncEnumerable<T>`, `TryGenerateStreamClientMethod`; antes no compilaba) + POC `StreamServiceClient` en `Program.cs`. [ ] Streams con procesadores (SCLSL012).
 Stream propio gana desde ~1 MB (p99 de las pequeñas −66 %); ≤64 KB empate. Implementado como opt-in: `[DedicatedStream]` en el método del contrato → el cliente QUIC generado llama a `__connection.Dedicated` (misma conexión física, stream por unaria); otros transportes lo ignoran (el contrato se comparte entre hosts). Test `DedicatedStreamTest`.
-11. [ ] **`LocalConnection` seleccionada por el generador** (5.6): RpcBuffer en Windows, UDS en el resto; quitar los `[SupportedOSPlatform("windows")]` propagados.
+11. [x] **`LocalConnection` seleccionada por el generador** (5.6): `ServiceConnectionType.Local` (valor 4, opt-in). El DI combina
+    FAMWN con `AnalyzerConfigOptions.GlobalOptions` (`ServiceProviderInfo.GlobalOptions`, paquete 10.1.3); el parcial resuelve
+    Memory si `RuntimeIdentifier` es `win*` o el TFM es `*-windows`, UDS en otro caso; sin RID ni TFM con plataforma decide `RuntimeInformation` (SO de compilación). Host
+    `Start(string name)` y cliente `new X(string name)` exponen `IAsyncDisposable` en ambos destinos (`LocalHost`,
+    `MemoryConnection.DisposeAsync`); el `[SupportedOSPlatform]` del transporte efectivo lo emite el generador en la clase generada,
+    no el usuario. Test: `LocalConnectionTest` (5 destinos).
 12. [ ] **5.7 + 2.1**: `SharedMemory` interno y APIs `Span`/`IBufferWriter` en `RpcBuffer`.
 13. [ ] **Autenticación** como pipeline de servidor (3.8) y **retry** como pipeline de cliente (5.2-R).
 
@@ -435,6 +440,12 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
       +~8 KB por los flush en el pool).
         - [x] **Closures por paquete en `RpcBuffer`** (medido con `--alloc`, `AllocProbe` = GCAllocationTick por tipo): la lambda de los paquetes 2..N y el `Task.Run` de `RpcRequest` capturaban locales y el closure se asignaba en cada llamada aunque no se usara. Movidos a `WriteRemainingPackets`/`DispatchRequest`. Memory 1000 items: 91 KB → 5 KB (88,7 → 0,1 B/item).
         - [x] **Spin antes de `DataExists.WaitOne`** en `CircularBuffer.GetNodeForReading`: Memory 1000 items 1008 → 702 µs. Memory 1000 items 1008 → 702 µs.
+        - [x] **Latencia unaria Memory** (`MemoryConcurrencyBenchmarks`, conc. 1/8/64; base 36,4/40,9/170,8 µs · 2,74/20,04/157,84 KB → 18,8/32,7/163,8 µs · 1,87/13,16/102,84 KB):
+          `TimeoutOrCancel` con `Task.WaitAsync(TimeSpan, token)` nativo; respuestas del servidor con `SendReply` directo al nodo (sin `RpcRequest`/TCS/array por paquete);
+          spin por tiempo (~30 µs) antes del `WaitOne`; `DispatchRequest` con `ThreadPool.UnsafeQueueUserWorkItem`. Descartado: continuaciones inline en `ResponseReady` (conc. 64: 160 → 183 µs).
+          `MemoryMultiClientTest.TwoClientsRequests` es intermitente desde antes (base: 9/12 fallos; ahora menos).
+        sin `SemaphoreSlim` ni máquina async en el camino caliente; el token solo cancela la espera de cada llamante.
+                  Medido en `QuicComparison` (antes → después): Lsl_Unary 68,55 → 68,46 µs (2,08 → 2,09 KB), Lsl_Stream 260,3 → 262,7 µs, Lsl_StreamBatched 157,8 → 159,9 µs; ratio frente a ASP.NET slim H3 sin cambio (2,32 → 2,30). Neutro: el camino caliente ya no asignaba; se queda por semántica (reintento, cancelación por llamante).
   - [x] **POC A · lotes por nodo** (`MemoryRequestContext.Append/Flush`): el servidor agrupa `[int32 len][item]` en un solo `StreamItem` (lote 16 KB, buffer reutilizado; se vacía si el productor async va a esperar). Sin tipo de mensaje nuevo. Memory 1000 items: 702 → 109 µs.
   - [x] **POC B · drenado en lote en el cliente** (`WaitToReadAsync` + `TryRead` en `OpenStream`): 109 → ~100 µs, marginal pero gratis. Resultado: Memory 100 µs / 8 KB vs UDS 304 µs y TCP 344 µs (1000 items). Tests de streaming Memory cubren ambos.
   - [x] **Varios clientes por `contextId`**: Hoy con `RpcBuffer.Host`/`Connect` multicliente (ver paso 8); antes con `MemoryLobby` (eliminado). `MemoryMultiClientTest` activo y en verde. Historico: con `MemoryLobby` (servidor) + `MemoryConnection.Join`:

@@ -14,7 +14,7 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 
 
 [SupportedOSPlatform("windows")]
-public sealed class MemoryConnection(string contextId, int timeout = 5000, System.Text.Encoding? encoding = null) : IAsyncConnection, IConnection, IDisposable
+public sealed class MemoryConnection(string contextId, int timeout = 5000, System.Text.Encoding? encoding = null) : IAsyncConnection, IConnection, IDisposable, IAsyncDisposable
 {
     private readonly string _contextId = contextId;
     private readonly int _timeout = timeout;
@@ -196,7 +196,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
             if (Environment.TickCount64 - Volatile.Read(ref last) > _timeout) try { idle.Cancel(); } catch (ObjectDisposedException) { }
         }, null, _timeout, _timeout);
 
-        _ = MemoryRpc.RemoteStreamAsync(request, write, (ReadOnlySpan<byte> payload) =>
+        _ = MemoryRpc.RemoteStreamAsync(request, write, payload =>
         {
             Volatile.Write(ref last, Environment.TickCount64);
             // Lote [int32 len][item]... (ver MemoryRequestContext.Append)
@@ -285,5 +285,11 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
             _rpc?.Dispose(); // envia Close: el host libera el anillo de este cliente
             _rpc = null;
         }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return default;
     }
 }

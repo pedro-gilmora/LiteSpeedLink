@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 
@@ -24,6 +24,7 @@ public partial class ServiceHandlersGenerator
         ServiceProviderInfo container,
         PartialContribution contribution,
         int connectionType,
+        bool isLocal,
         System.Threading.CancellationToken cancellationToken)
     {
         var compilation = container.Compilation;
@@ -33,20 +34,35 @@ public partial class ServiceHandlersGenerator
 
         string nsStr = "";
 
-        var (iDisposable, dispMethod) = connectionType is not 0
-            ? ("IAsyncDisposable", @"public global::System.Threading.Tasks.ValueTask DisposeAsync()
+        // Local: la superficie es IAsyncDisposable en cualquier destino. Si el contenedor de DI ya
+        // es liberable, se encadena su propia liberacion antes de cerrar la conexion.
+        string? localDispose = !isLocal ? null : container.ContainerDisposability switch
+        {
+            PartialDisposability.AsyncDisposable => @"
+
+    async global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync()
     {
+        await DisposeAsync().ConfigureAwait(false);
+        await __connection.DisposeAsync().ConfigureAwait(false);
+    }",
+            PartialDisposability.Disposable => @"
+
+    global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync()
+    {
+        Dispose();
         return __connection.DisposeAsync();
-    }")
-: ("IDisposable", @"public void Dispose()
-    {
-        __connection.Dispose();
-    }");
+    }",
+            _ => @"
+
+    global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync() => __connection.DisposeAsync();"
+        };
+
         var connTypeName = connectionType switch
         {
             0 => "Memory",
             1 => "Udp",
             2 => "Tcp",
+            UdsConnection => "Uds",
             _ => "Quic"
         };
 
@@ -63,24 +79,30 @@ namespace ").Append(nsStr = nss.ToDisplayString()).Append(@";
 
         string typeShortName = serviceClient.TypeNameFormat;
 
-        clientCode.Append(@"
-public partial class ").Append(typeShortName).Append(@"
+        clientCode.Append(PlatformAttributes(connectionType)).Append(@"
+public partial class ").Append(typeShortName).Append(isLocal ? " : global::System.IAsyncDisposable" : null).Append(@"
 {
     private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
-    public ").Append(typeShortName).Append(connectionType > 0
+    public ").Append(typeShortName).Append(isLocal
+            // Local: mismo constructor en cualquier destino
+            ? connectionType is 0
+                ? @"(string name)
+    {
+        __connection = name.AsMemoryConnection();"
+                : @"(string name)
+    {
+        __connection = new global::SourceCrafter.LiteSpeedLink.Client.UdsConnection(" + LocalUdsPath + ");"
+            : connectionType > 0
             // QUIC, TCP, UDP
             ? @"(string hostname, int port)
     {
-        __connection = new global::System.Net.DnsEndPoint(hostname, port)"
+        __connection = new global::System.Net.DnsEndPoint(hostname, port).As" + connTypeName + "Connection();"
             // Memory
             : @"(string rpcName)
     {
-        __connection = rpcName").Append(".As");
-
-
-        clientCode.Append(connTypeName).Append(@"Connection();
-    }
+        __connection = rpcName.AsMemoryConnection();").Append(@"
+    }").Append(localDispose).Append(@"
 
     private readonly global::System.Threading.Lock __servicesLock = new();");
 

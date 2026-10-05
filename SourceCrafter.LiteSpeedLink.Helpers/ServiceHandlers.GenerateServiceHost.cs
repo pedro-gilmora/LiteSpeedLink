@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SourceCrafter.DependencyInjection.Generation;
@@ -20,6 +20,7 @@ public partial class ServiceHandlersGenerator
         ServiceProviderInfo container,
         PartialContribution contribution,
         int connectionType,
+        bool isLocal,
         CancellationToken cancelToken)
     {
         var compilation = container.Compilation;
@@ -43,7 +44,7 @@ public partial class ServiceHandlersGenerator
         string nsStr = "";
 
         string? typeName = serviceHost.TypeNameFormat;
-        var (certParam, certArg) = connectionType > 1
+        var (certParam, certArg) = connectionType is 2 or 3
                 ? ($@",
         global::System.Security.Cryptography.X509Certificates.X509Certificate2{(connectionType == 2 ? "?" : null)} certificate{(connectionType == 1 ? " = default" : null)}", @", 
             certificate")
@@ -51,6 +52,13 @@ public partial class ServiceHandlersGenerator
 
         var (context, startMethod, returnType, disposableInterface, asyncKeyword, awaitKeyword, asyncSuffix) = connectionType switch
         {
+            UdsConnection => ("global::SourceCrafter.LiteSpeedLink.RequestContext",
+                  "StartUdsServer",
+                  "global::System.Net.Sockets.Socket",
+                  "global::System.IDisposable",
+                  null,
+                  null,
+                  null),
             3 => ("global::SourceCrafter.LiteSpeedLink.RequestContext",
                   "StartQuicServerAsync",
                   "global::System.Threading.Tasks.ValueTask<global::System.Net.Quic.QuicListener>",
@@ -90,7 +98,7 @@ public partial class ServiceHandlersGenerator
             hostCode.Append("namespace ").Append(nsStr = ns.ToDisplayString()).AppendLine(@";");
         }
 
-        hostCode.Append(@"
+        hostCode.Append(PlatformAttributes(connectionType)).Append(@"
 public partial class ").Append(typeName).Append(@"
 {");
         if (isMsLoggerInstalled)
@@ -114,24 +122,27 @@ public partial class ").Append(typeName).Append(@"
 ");
         }
 
-        hostCode.Append(@"
-    public static ").Append(asyncKeyword).Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(
-        ").Append(connectionType is 0 ? "string memoryRpcName" : "int port").Append(certParam).Append(@",
-        global::System.Threading.CancellationToken cancelToken = default)
+		// Local: misma firma (nombre) y misma superficie (IAsyncDisposable) en cualquier destino.
+		if (isLocal) returnType = "global::System.IAsyncDisposable";
+
+		hostCode.Append(@"
+	public static ").Append(asyncKeyword).Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(
+		").Append(isLocal ? "string name" : connectionType is 0 ? "string memoryRpcName" : "int port").Append(certParam).Append(@",
+		global::System.Threading.CancellationToken cancelToken = default)
 	{
-        var provider = new ").Append(typeName).Append(@"();
-		return ").Append(awaitKeyword).Append(@"global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append(@"(
-            ").Append(connectionType is 0 ? "memoryRpcName" : "port").Append(@", 
-            ").Append(connectionType > 1 ? "new __Handler(provider)" : "provider.HandleRequestsAsync").Append(@", 
-            ");
+		var provider = new ").Append(typeName).Append(@"();
+		return ").Append(awaitKeyword).Append(isLocal ? "new global::SourceCrafter.LiteSpeedLink.LocalHost(" : null).Append(@"global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append(@"(
+			").Append(isLocal ? (connectionType is 0 ? "name" : LocalUdsPath) : connectionType is 0 ? "memoryRpcName" : "port").Append(@", 
+			").Append(connectionType > 1 ? "new __Handler(provider)" : "provider.HandleRequestsAsync").Append(@", 
+			");
 
-        var onFinalizePoint = hostCode.Length;
+		var onFinalizePoint = hostCode.Length;
 
-        if (certArg != null)
-            hostCode.Append(certArg);
+		if (certArg != null)
+			hostCode.Append(certArg);
 
 		hostCode.Append(@", 
-			cancelToken)").Append(awaitKeyword != null ? ".ConfigureAwait(false)" : null).Append(@";
+			cancelToken)").Append(isLocal ? ")" : null).Append(awaitKeyword != null ? ".ConfigureAwait(false)" : null).Append(@";
 	}
 ");
 
