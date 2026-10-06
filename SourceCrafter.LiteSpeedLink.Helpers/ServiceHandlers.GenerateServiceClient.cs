@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 
@@ -18,11 +18,13 @@ using System.Text;
 public partial class ServiceHandlersGenerator
 {
     const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
+    const string DedicatedStreamAttr = "SourceCrafter.LiteSpeedLink.DedicatedStreamAttribute";
 
     private static void GenerateServiceClient(
         ServiceProviderInfo container,
         PartialContribution contribution,
         int connectionType,
+        bool isLocal,
         System.Threading.CancellationToken cancellationToken)
     {
         var compilation = container.Compilation;
@@ -32,20 +34,35 @@ public partial class ServiceHandlersGenerator
 
         string nsStr = "";
 
-        var (iDisposable, dispMethod) = connectionType is not 0
-            ? ("IAsyncDisposable", @"public global::System.Threading.Tasks.ValueTask DisposeAsync()
+        // Local: la superficie es IAsyncDisposable en cualquier destino. Si el contenedor de DI ya
+        // es liberable, se encadena su propia liberacion antes de cerrar la conexion.
+        string? localDispose = !isLocal ? null : container.ContainerDisposability switch
+        {
+            PartialDisposability.AsyncDisposable => @"
+
+    async global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync()
     {
+        await DisposeAsync().ConfigureAwait(false);
+        await __connection.DisposeAsync().ConfigureAwait(false);
+    }",
+            PartialDisposability.Disposable => @"
+
+    global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync()
+    {
+        Dispose();
         return __connection.DisposeAsync();
-    }")
-: ("IDisposable", @"public void Dispose()
-    {
-        __connection.Dispose();
-    }");
+    }",
+            _ => @"
+
+    global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync() => __connection.DisposeAsync();"
+        };
+
         var connTypeName = connectionType switch
         {
             0 => "Memory",
             1 => "Udp",
             2 => "Tcp",
+            UdsConnection => "Uds",
             _ => "Quic"
         };
 
@@ -62,24 +79,30 @@ namespace ").Append(nsStr = nss.ToDisplayString()).Append(@";
 
         string typeShortName = serviceClient.TypeNameFormat;
 
-        clientCode.Append(@"
-public partial class ").Append(typeShortName).Append(@"
+        clientCode.Append(PlatformAttributes(connectionType)).Append(@"
+public partial class ").Append(typeShortName).Append(isLocal ? " : global::System.IAsyncDisposable" : null).Append(@"
 {
     private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
-    public ").Append(typeShortName).Append(connectionType > 0
+    public ").Append(typeShortName).Append(isLocal
+            // Local: mismo constructor en cualquier destino
+            ? connectionType is 0
+                ? @"(string name)
+    {
+        __connection = name.AsMemoryConnection();"
+                : @"(string name)
+    {
+        __connection = new global::SourceCrafter.LiteSpeedLink.Client.UdsConnection(" + LocalUdsPath + ");"
+            : connectionType > 0
             // QUIC, TCP, UDP
             ? @"(string hostname, int port)
     {
-        __connection = new global::System.Net.DnsEndPoint(hostname, port)"
+        __connection = new global::System.Net.DnsEndPoint(hostname, port).As" + connTypeName + "Connection();"
             // Memory
             : @"(string rpcName)
     {
-        __connection = rpcName").Append(".As");
-
-
-        clientCode.Append(connTypeName).Append(@"Connection();
-    }
+        __connection = rpcName.AsMemoryConnection();").Append(@"
+    }").Append(localDispose).Append(@"
 
     private readonly global::System.Threading.Lock __servicesLock = new();");
 
@@ -101,7 +124,7 @@ public partial class ").Append(typeShortName).Append(@"
 
         foreach (var iFace in serviceClient.GetAttributes()
             .Where(a => a.AttributeClass is { IsGenericType: true } ac
-                && ac.ConstructedFrom.ToDisplayString() == ClientServiceAttr)
+                && ac.ConstructedFrom.ToDisplayString() == ServiceUnitAttr)
             .Select(a => a.AttributeClass!.TypeArguments[0])
             .OfType<INamedTypeSymbol>()
             .Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default))
@@ -140,9 +163,15 @@ public partial class ").Append(typeShortName).Append(@"
             {
                 if (member is IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method)
                 {
-                    if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, ref rawIndex)) continue;
+                    // #14: solo QUIC tiene pool que evitar; el resto ignora [DedicatedStream] (el contrato se comparte entre hosts).
+                    string conn = connectionType == 3 && method.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == DedicatedStreamAttr)
+                        ? "__connection.Dedicated" : "__connection";
 
-                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, ref rawIndex)) continue;
+                    if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, conn, ref rawIndex)) continue;
+
+                    if (TryGenerateStreamClientMethod(clientCode, method)) continue;
+
+                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex)) continue;
 
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
@@ -332,7 +361,7 @@ public partial class ").Append(typeShortName).Append(@"
         ");
 
                     clientCode
-                        .Append("return __connection.")
+                        .Append("return ").Append(conn).Append('.')
                         .Append(opMethod);
                     
                     if(!generatingSync)
@@ -483,7 +512,7 @@ public partial class ").Append(typeShortName).Append(@"
                             }
                         }
 
-                        clientCode.Append("__connection.").Append(opMethod);
+                        clientCode.Append(conn).Append('.').Append(opMethod);
 
                         generatingSync = true;
                         useComma = closeTag = paramsComma = useReqTypesComma = asyncParamsComma = false;
@@ -505,6 +534,37 @@ public partial class ").Append(typeShortName).Append(@"
             contribution.AddSource(hintName + "." + propName + ".client", clientCode.ToString());
         }
     }
+    /// <summary>
+    /// Stream (IEnumerable/IAsyncEnumerable): el contrato se implementa con Enumerate/EnumerateAsync de la
+    /// conexion; los sync ganan una sobrecarga *Async con token. Peticion = parametro o tupla (misma forma que el host).
+    /// </summary>
+    private static bool TryGenerateStreamClientMethod(StringBuilder code, IMethodSymbol method)
+    {
+        if (method.ReturnType is not INamedTypeSymbol { IsGenericType: true } rt
+            || rt.ConstructedFrom.ToDisplayString() is not ("System.Collections.Generic.IAsyncEnumerable<T>" or "System.Collections.Generic.IEnumerable<T>")
+            || method.Parameters.Any(p => p.RefKind is not RefKind.None))
+            return false;
+
+        bool isAsync = rt.Name == "IAsyncEnumerable";
+        var token = method.Parameters.FirstOrDefault(p => p.Type.GlobalNamespaced == cancelTokenFullTypeName);
+        var request = method.Parameters.Where(p => !SymbolEqualityComparer.Default.Equals(p, token)).ToList();
+        string item = rt.TypeArguments[0].GlobalNamespaced, id = GetServiceId(method.GlobalNamespaced).ToString();
+        string generics = request.Count == 0 ? item : TupleOf([.. request.Select(p => p.Type)]) + ", " + item;
+        string payload = request.Count switch { 0 => "", 1 => ", " + request[0].Name, _ => ", (" + string.Join(", ", request.Select(p => p.Name)) + ")" };
+
+        string Call(string op, string tokenArg) => $"__connection.{op}<{generics}>({id}{payload}{tokenArg})!;";
+
+        code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append(" => ")
+            .Append(Call(isAsync ? "EnumerateAsync" : "Enumerate", token is null ? "" : ", " + token.Name));
+
+        if (!isAsync && token is null)
+            code.Append("\n\n    public global::System.Collections.Generic.IAsyncEnumerable<").Append(item).Append("> ").Append(method.Name).Append("Async(")
+                .Append(string.Concat(request.Select(p => p.Type.GlobalNamespaced + " " + p.Name + ", "))).Append(cancelTokenFullTypeName).Append(" @__token = default) => ")
+                .Append(Call("EnumerateAsync", ", @__token"));
+
+        return true;
+    }
+
     static bool Exchange(ref bool value)
     {
         return ((value, _) = (true, value)).Item2;

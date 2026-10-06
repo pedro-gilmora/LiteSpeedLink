@@ -135,7 +135,7 @@ public partial class ServiceHandlersGenerator
     /// sin retorno se envian igual; el cuerpo de respuesta se ignora salvo out/ref. Streams y Task sin
     /// resultado siguen por la API tipada.
     /// </summary>
-    private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, INamedTypeSymbol iFace, IMethodSymbol method, ref int rawIndex)
+    private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, INamedTypeSymbol iFace, IMethodSymbol method, string conn, ref int rawIndex)
     {
         bool isTask = method.ReturnType.TryGetAsyncType(out var retType, out var hasRet, out var isValueTask);
         hasRet = isTask ? hasRet : !method.ReturnsVoid;
@@ -178,7 +178,7 @@ public partial class ServiceHandlersGenerator
         if (tokenName is null)
             code.Append(asyncParams.Length > 0 ? ", " : null).Append(cancelTokenFullTypeName).Append(" @__token = default");
 
-        code.Append(")\n    {\n        ").Append(readsResponse ? "var __res = " : null).Append("await __connection.GetRawAsync(").Append(serviceId).Append(", ").Append(reqArgs).Append(", ").Append(tokenName ?? "@__token")
+        code.Append(")\n    {\n        ").Append(readsResponse ? "var __res = " : null).Append("await ").Append(conn).Append(".GetRawAsync(").Append(serviceId).Append(", ").Append(reqArgs).Append(", ").Append(tokenName ?? "@__token")
             .Append(").ConfigureAwait(false);");
 
         if (!readsResponse) { }
@@ -200,7 +200,7 @@ public partial class ServiceHandlersGenerator
 
         if (!isTask)
         {
-            string raw = $"__connection.GetRaw({serviceId}, {reqArgs}" + (tokenName is null ? "" : $", {tokenName}") + ")";
+            string raw = $"{conn}.GetRaw({serviceId}, {reqArgs}" + (tokenName is null ? "" : $", {tokenName}") + ")";
 
             code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ")
                 .Append(hasRet ? "return " : null)

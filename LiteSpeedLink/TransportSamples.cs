@@ -4,7 +4,6 @@ using LiteSpeedLink;
 using LiteSpeedLink.Abstractions.Internals;
 
 using SourceCrafter.DependencyInjection.Attributes;
-using System.Runtime.Versioning;
 
 namespace SourceCrafter.LiteSpeedLink;
 
@@ -22,7 +21,7 @@ namespace SourceCrafter.LiteSpeedLink;
 public partial class UdpTextService;
 
 [ServiceClient(ServiceConnectionType.Udp)]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]
@@ -44,7 +43,7 @@ public sealed partial class UdpTextServiceClient;
 public partial class TcpTextService;
 
 [ServiceClient(ServiceConnectionType.Tcp)]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]
@@ -63,12 +62,10 @@ public sealed partial class TcpTextServiceClient;
 [Singleton<ParseInt>]
 [Singleton<IntToString>]
 [Scoped<IAuth, AuthService>]
-[SupportedOSPlatform("windows")]
-[RequiresPreviewFeatures]
 public partial class QuicTextService;
 
 [ServiceClient(ServiceConnectionType.Quic)]
-[ClientService<IAuth>]
+[ServiceUnit<IAuth>]
 [ServiceProvider]
 [Singleton<Exclaim>]
 [Singleton<TrimName>]
@@ -76,6 +73,4 @@ public partial class QuicTextService;
 [Singleton<Tag>]
 [Singleton<ParseInt>]
 [Singleton<IntToString>]
-[SupportedOSPlatform("windows")]
-[RequiresPreviewFeatures]
 public sealed partial class QuicTextServiceClient;

@@ -10,6 +10,7 @@
 - LiteSpeedLink: data-exchange economics first — add framing/correlation bytes only where the transport needs them; keep PLAN.md updated as work progresses.
 - LiteSpeedLink: everything known at compile time (contract, transport, operation shape, types, batch/coalesce/correlation choices) must be decided by the source generator; avoid runtime branching/guessing in hot paths.
 - LiteSpeedLink: every plan item implemented must ship with a test or a POC demonstrating its purpose.
+- LiteSpeedLink: consume SharedMemory sources as linked files (<Compile Include ... Link>) compiled internal (SG_CONTEXT) inside Client/Server assemblies; never use InternalsVisibleTo. SharedMemory's own tests/benchmarks live in separate SharedMemory projects (SharedMemory.Tests), not in LiteSpeedLink.Tests.
 
 # Ponytail, lazy senior dev mode
 

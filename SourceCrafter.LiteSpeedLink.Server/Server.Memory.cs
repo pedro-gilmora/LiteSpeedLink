@@ -6,9 +6,12 @@ using System.Runtime.Versioning;
 
 namespace SourceCrafter.LiteSpeedLink;
 
-/// <summary>Devuelve siempre una respuesta <c>[estado][cuerpo]</c>, nunca <c>null</c>.</summary>
-public delegate byte[] MemoryRequestHandler(long op, MemoryRequestContext ctx, CancellationToken token);
-public delegate Task<byte[]> MemoryAsyncRequestHandler(long op, MemoryRequestContext ctx, CancellationToken token);
+/// <summary>
+/// La respuesta <c>[estado][cuerpo]</c> la escribe el contexto directamente en el nodo (<c>Return</c>, <c>Yield</c>, <c>NotFound</c>, <c>Fail</c>);
+/// si el handler solo devuelve un estado, se responde <c>[estado]</c>.
+/// </summary>
+public delegate ResponseStatus MemoryRequestHandler(long op, MemoryRequestContext ctx, CancellationToken token);
+public delegate ValueTask<ResponseStatus> MemoryAsyncRequestHandler(long op, MemoryRequestContext ctx, CancellationToken token);
 
 public static partial class Server
 {
@@ -19,20 +22,22 @@ public static partial class Server
         Action? onFinalize = null,
         CancellationToken cancelToken = default)
     {
-        RpcBuffer rpc = null!;
-        return new MemoryHost(rpc = RpcBuffer.Host(contextId, (msgId, payload) =>
+        MemHandler handle = request =>
         {
+            var ctx = new MemoryRequestContext(request, cancelToken);
             try
             {
-                long op = Framing.ReadOpId(payload.AsSpan());
-
-                return requestHandlers(op, new(payload, Framing.OpIdSize, rpc, msgId, cancelToken), cancelToken);
+                ctx.Complete(requestHandlers(Framing.ReadOpId(request.Payload), ctx, cancelToken));
             }
             catch (Exception ex)
             {
-                return MemoryResponse.Failed(ex);
+                ctx.Fail(ex);
             }
-        }), onFinalize);
+
+            return default;
+        };
+
+        return new MemoryHost(MemHost.Start(contextId, handle), onFinalize);
     }
 
     [SupportedOSPlatform("windows")]
@@ -42,100 +47,105 @@ public static partial class Server
         Action? onFinalize = null,
         CancellationToken cancelToken = default)
     {
-        RpcBuffer rpc = null!;
-        return new MemoryHost(rpc = RpcBuffer.Host(contextId, async (msgId, payload) =>
+        MemHandler handle = async request =>
         {
+            var ctx = new MemoryRequestContext(request, cancelToken);
             try
             {
-                long op = Framing.ReadOpId(payload.AsSpan());
-
-                return await requestHandlers(op, new(payload, Framing.OpIdSize, rpc, msgId, cancelToken), cancelToken).ConfigureAwait(false);
+                long op = Framing.ReadOpId(request.Payload);
+                ctx.Complete(await requestHandlers(op, ctx, cancelToken).ConfigureAwait(false));
             }
             catch (Exception ex)
             {
-                return MemoryResponse.Failed(ex);
+                ctx.Fail(ex);
             }
-        }), onFinalize);
+        };
+
+        return new MemoryHost(MemHost.Start(contextId, handle), onFinalize);
     }
 
-    /// <summary>Un solo <see cref="RpcBuffer"/> multicliente: cada cliente se libera con su propio Close, sin lobby ni Bye.</summary>
-    private sealed class MemoryHost(RpcBuffer rpc, Action? onFinalize) : IDisposable
+    /// <summary>Un solo <see cref="MemHost"/> multicliente: cada cliente se libera con su propio Close, sin lobby ni Bye.</summary>
+    private sealed class MemoryHost(MemHost host, Action? onFinalize) : IDisposable
     {
         public void Dispose()
         {
-            rpc.Dispose();
+            host.Dispose();
             onFinalize?.Invoke();
         }
-    }
-}
-
-/// <summary>
-/// Respuestas del transporte en memoria. Se construyen sobre un buffer por hilo, de modo que la
-/// unica asignacion es el array final que exige <see cref="RpcBuffer"/>.
-/// </summary>
-public static class MemoryResponse
-{
-    [ThreadStatic] private static ArrayBufferWriter<byte>? _writer;
-
-    private static readonly byte[]
-        _notFound = [(byte)ResponseStatus.NotFound],
-        _streamEnd = [(byte)ResponseStatus.StreamEnd];
-
-    public static byte[] NotFound => _notFound;
-
-    public static byte[] StreamEnd => _streamEnd;
-
-    public static byte[] Success<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(T? value) => Build(ResponseStatus.Success, value);
-
-    public static byte[] Failed(Exception exception) => Build(ResponseStatus.Failed, exception.ToString());
-
-    public static byte[] Failed(string reason) => Build(ResponseStatus.Failed, reason);
-
-    private static byte[] Build<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(ResponseStatus status, T? value)
-    {
-        var writer = _writer ??= new(256);
-
-        writer.ResetWrittenCount();
-
-        writer.GetSpan(Framing.StatusSize)[0] = (byte)status;
-        writer.Advance(Framing.StatusSize);
-
-        Serialize(writer, value);
-
-        return writer.WrittenSpan.ToArray();
     }
 }
 
 #if !NETSTANDARD
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 #endif
-public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer rpc, ulong msgId, CancellationToken cancelToken) : BufferReader(payload)
+public sealed class MemoryRequestContext
 {
-    /// <summary>Cuerpo de la peticion, sin la cabecera de operacion. No copia el array original.</summary>
-    private readonly ReadOnlyMemory<byte> _body = payload.AsMemory(offset);
+    private readonly MemRequest request;
+    private readonly CancellationToken cancelToken;
+    private bool _replied;
 
-    public ReadOnlyMemory<byte> Body => _body;
+    internal MemoryRequestContext(MemRequest request, CancellationToken cancelToken)
+    {
+        this.request = request;
+        this.cancelToken = cancelToken;
+    }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(_body.Span);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte[] Return<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(TIn @in) => MemoryResponse.Success(@in);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte[] NotFound() => MemoryResponse.NotFound;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte[] Fail(Exception exception) => MemoryResponse.Failed(exception);
+    /// <summary>Cuerpo de la peticion, sin la cabecera de operacion. Buffer prestado: solo valido mientras dura el handler.</summary>
+    public ReadOnlyMemory<byte> Body => request.PayloadMemory[Framing.OpIdSize..];
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte[] Fail(string reason) => MemoryResponse.Failed(reason);
+    public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>() => Deserialize<TOut>(Body.Span);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ResponseStatus Return<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(TIn @in) => Reply(ResponseStatus.Success, @in);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ResponseStatus NotFound() => Reply(ResponseStatus.NotFound);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ResponseStatus Fail(Exception exception) => Reply(ResponseStatus.Failed, exception.ToString());
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ResponseStatus Fail(string reason) => Reply(ResponseStatus.Failed, reason);
+
+    /// <summary>Responde <c>[estado]</c> si el handler devolvio un estado sin responder.</summary>
+    internal void Complete(ResponseStatus status) => Reply(status);
+
+    // Una sola respuesta por peticion; se escribe directamente en el nodo del cliente. Si serializar falla, _replied
+    // sigue en false y el Fail del llamador aun puede responder.
+    private ResponseStatus Reply(ResponseStatus status)
+    {
+        if (_replied) return status;
+        request.Reply(status, WriteStatus);
+        _replied = true;
+        return status;
+    }
+
+    private ResponseStatus Reply<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(ResponseStatus status, T value)
+    {
+        if (_replied) return status;
+        request.Reply((status, value), WriteValue);
+        _replied = true;
+        return status;
+    }
+
+    private static void WriteStatus(IBufferWriter<byte> writer, ResponseStatus status)
+    {
+        writer.GetSpan(Framing.StatusSize)[0] = (byte)status;
+        writer.Advance(Framing.StatusSize);
+    }
+
+    private static void WriteValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(IBufferWriter<byte> writer, (ResponseStatus status, T value) state)
+    {
+        WriteStatus(writer, state.status);
+        Serialize(writer, state.value);
+    }
 
     /// <summary>
     /// Envia cada elemento por el canal principal, dirigido a esta peticion (solo lo acepta el cliente que la hizo),
     /// y responde <see cref="ResponseStatus.StreamEnd"/>. Usa el token del servidor: el generador no inyecta otro.
     /// </summary>
-    public byte[] Yield<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IEnumerable<TData> enumerate)
+    public ResponseStatus Yield<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IEnumerable<TData> enumerate)
     {
         var batch = RentBatch();
         foreach (var item in enumerate)
@@ -146,10 +156,10 @@ public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer r
 
         Flush(batch);
         _batches.Add(batch);
-        return MemoryResponse.StreamEnd;
+        return Reply(ResponseStatus.StreamEnd);
     }
 
-    public async Task<byte[]> Yield<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IAsyncEnumerable<TData> enumerate)
+    public async ValueTask<ResponseStatus> Yield<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(IAsyncEnumerable<TData> enumerate)
     {
         var batch = RentBatch();
         await using var e = enumerate.GetAsyncEnumerator(cancelToken);
@@ -163,10 +173,10 @@ public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer r
 
         Flush(batch);
         _batches.Add(batch);
-        return MemoryResponse.StreamEnd;
+        return Reply(ResponseStatus.StreamEnd);
     }
 
-    // ponytail: lote fijo de 16 KB (< nodo de 50 KB); items mayores van solos en su propio mensaje multipaquete.
+    // ponytail
     private const int BatchBytes = 16 * 1024;
 
     // ponytail: un buffer por stream en curso, reutilizado entre streams; pool sin limite (tantos como streams concurrentes).
@@ -190,7 +200,8 @@ public sealed class MemoryRequestContext(byte[] payload, int offset, RpcBuffer r
     private void Flush(ArrayBufferWriter<byte> batch)
     {
         if (batch.WrittenCount == 0) return;
-        if (!rpc.SendStreamItem(msgId, batch, static (w, b) => w.Write(b.WrittenSpan))) throw new IOException("Stream channel closed.");
+        // false = el cliente cancelo/abandono el stream o se desconecto: el productor para.
+        if (!request.Item(batch, static (w, b) => w.Write(b.WrittenSpan))) throw new OperationCanceledException("Stream cancelled by the client.");
         batch.ResetWrittenCount();
     }
 }

@@ -4,10 +4,8 @@ using LiteSpeedLink;
 using LiteSpeedLink.Abstractions.Internals;
 
 using SourceCrafter.DependencyInjection.Attributes;
-using System.Runtime.Versioning;
 
 namespace SourceCrafter.LiteSpeedLink;
-
 
 [ServiceHost]
 [ServiceProvider]
@@ -18,5 +16,4 @@ namespace SourceCrafter.LiteSpeedLink;
 [Singleton<ParseInt>]
 [Singleton<IntToString>]
 [Scoped<IAuth, AuthService>]
-[SupportedOSPlatform("windows")]
 public partial class TextService;

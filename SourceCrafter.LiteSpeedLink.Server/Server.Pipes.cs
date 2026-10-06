@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
@@ -29,6 +29,9 @@ public static partial class Server
     /// </summary>
     /// <summary>Limite por defecto de peticiones concurrentes por conexion; al llegar se deja de leer el socket (back-pressure TCP).</summary>
     public const int MaxInFlightPerConnection = 256;
+
+    /// <summary>Por defecto TCP/UDS agrupan como Memory: lote hasta 32 KB o hasta que el productor va a esperar. 0 = item a item.</summary>
+    public const int DefaultStreamBatch = int.MaxValue;
 
     internal static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection, BatchPolicy batch = default)
         where THandler : struct, IRequestHandler
@@ -180,17 +183,33 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         return WriteSlowAsync(correlationId, status, body, token, deferFlush);
     }
 
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-    private async ValueTask<ResponseStatus> FlushAndReleaseAsync(ResponseStatus status)
+    /// <summary>Flush con el candado tomado: si completa en linea no hay maquina de estados.</summary>
+    private ValueTask<ResponseStatus> FlushAndReleaseAsync(ResponseStatus status)
     {
+        ValueTask<FlushResult> flush;
         try
         {
-            await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            flush = writer.FlushAsync(CancellationToken.None);
         }
-        finally
+        catch
         {
             Release();
+            throw;
         }
+
+        if (!flush.IsCompleted) return AwaitFlushAndReleaseAsync(flush, status);
+
+        try { flush.GetAwaiter().GetResult(); }
+        finally { Release(); }
+
+        return new(status);
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<ResponseStatus> AwaitFlushAndReleaseAsync(ValueTask<FlushResult> flush, ResponseStatus status)
+    {
+        try { await flush.ConfigureAwait(false); }
+        finally { Release(); }
 
         return status;
     }
@@ -294,15 +313,46 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
     }
 
     /// <summary>Trama con cuerpo ya codificado (lotes); flush diferido como los items sueltos.</summary>
-    public async ValueTask<ResponseStatus> WriteRawAsync(int correlationId, ResponseStatus status, ReadOnlyMemory<byte> body, CancellationToken token)
+    public ValueTask<ResponseStatus> WriteRawAsync(int correlationId, ResponseStatus status, ReadOnlyMemory<byte> body, CancellationToken token)
+    {
+        // Camino sincrono: candado libre -> sin maquina de estados por lote.
+        if (!_gate.Wait(0)) return WriteRawSlowAsync(correlationId, status, body, token);
+
+        bool release = true;
+        try
+        {
+            WriteRawFrame(correlationId, status, body.Span);
+
+            if (writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
+            {
+                ScheduleFlush();
+                return new(status);
+            }
+
+            release = false;
+            return FlushAndReleaseAsync(status);
+        }
+        finally
+        {
+            if (release) Release();
+        }
+    }
+
+    private void WriteRawFrame(int correlationId, ResponseStatus status, ReadOnlySpan<byte> body)
+    {
+        _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
+        body.CopyTo(_frames.GetSpan(body.Length));
+        _frames.Advance(body.Length);
+        _frames.EndFrame();
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<ResponseStatus> WriteRawSlowAsync(int correlationId, ResponseStatus status, ReadOnlyMemory<byte> body, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
-            body.Span.CopyTo(_frames.GetSpan(body.Length));
-            _frames.Advance(body.Length);
-            _frames.EndFrame();
+            WriteRawFrame(correlationId, status, body.Span);
 
             if (writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
             {
@@ -320,7 +370,17 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
         return status;
     }
 
-    public async ValueTask<ResponseStatus> WriteStatusAsync(int correlationId, ResponseStatus status, CancellationToken token)
+    public ValueTask<ResponseStatus> WriteStatusAsync(int correlationId, ResponseStatus status, CancellationToken token)
+    {
+        if (!_gate.Wait(0)) return WriteStatusSlowAsync(correlationId, status, token);
+
+        _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
+        _frames.EndFrame();
+        return FlushAndReleaseAsync(status);
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<ResponseStatus> WriteStatusSlowAsync(int correlationId, ResponseStatus status, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -552,15 +612,30 @@ public sealed class RequestContext
             : new(ResponseStatus.Success);
     }
 
-    private async ValueTask<ResponseStatus> FlushBatchAsync()
+    private ValueTask<ResponseStatus> FlushBatchAsync()
     {
-        if (_batched == 0) return ResponseStatus.Success;
+        if (_batched == 0) return new(ResponseStatus.Success);
 
-        await _responses.WriteRawAsync(_correlationId, ResponseStatus.Batch, _batch!.WrittenMemory, _token).ConfigureAwait(false);
-        _batch.ResetWrittenCount();
-        _batched = 0;
+        var write = _responses.WriteRawAsync(_correlationId, ResponseStatus.Batch, _batch!.WrittenMemory, _token);
 
+        if (!write.IsCompletedSuccessfully) return AwaitBatchAsync(write);
+
+        ResetBatch();
+        return new(ResponseStatus.Success);
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<ResponseStatus> AwaitBatchAsync(ValueTask<ResponseStatus> write)
+    {
+        await write.ConfigureAwait(false);
+        ResetBatch();
         return ResponseStatus.Success;
+    }
+
+    private void ResetBatch()
+    {
+        _batch!.ResetWrittenCount();
+        _batched = 0;
     }
 
     private void Complete()

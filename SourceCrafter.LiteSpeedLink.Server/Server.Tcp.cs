@@ -15,7 +15,7 @@ public static partial class Server
         X509Certificate2? cert = default,
         CancellationToken token = default,
         int maxInFlightPerConnection = MaxInFlightPerConnection,
-        int streamBatch = 0,
+        int streamBatch = DefaultStreamBatch,
         TimeSpan streamBatchMaxDelay = default)
         => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, streamBatch, streamBatchMaxDelay);
 
@@ -26,7 +26,7 @@ public static partial class Server
         X509Certificate2? cert = default,
         CancellationToken token = default,
         int maxInFlightPerConnection = MaxInFlightPerConnection,
-        int streamBatch = 0,
+        int streamBatch = DefaultStreamBatch,
         TimeSpan streamBatchMaxDelay = default)
         where THandler : struct, IRequestHandler
     {

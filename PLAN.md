@@ -77,9 +77,14 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 PoC `MemorySessionLeakPoc.DisposedClientsReleaseServerSessions`: 0 sesiones vivas y los hilos lectores se recuperan en <1 s.
    Mismo PoC: 0 clientes vivos en el host.
       Bench (antes lobby → ahora multicliente): MemoryConcurrency c=1 35.7 → 21.5 µs (3.22 → 2.88 KB), c=8 37.8 → 37.7 µs (23.85 → 21.35 KB), c=64 195 → 166 µs (188 → 168 KB); Streaming 10 items 32.6 → 29.7 µs (4.13 KB igual), 1000 items 108 → 88 µs (10.86 → 7.77 KB).
-[ ] `ref`/`out` y streams con procesadores (siguen SCLSL012, diferido: sin caso de uso). [x] Arnés Roslyn `LiteSpeedLink.Tests/GeneratorHarness.cs` (carga el parcial de `Helpers` y el generador DI del paquete por `AssemblyMetadata`; ejecuta en memoria) + `PipelineDiagnosticsTest` (SCLSL010-014 y caso válido que exige `.host` generado).
-10. [ ] **PoC #14**: pool QUIC vs stream propio para unarias grandes/lentas; generar la ruta por operación solo si gana.
-11. [ ] **`LocalConnection` seleccionada por el generador** (5.6): RpcBuffer en Windows, UDS en el resto; quitar los `[SupportedOSPlatform("windows")]` propagados.
+[x] `ref`/`out` con procesadores (POC `Normalize(ref, out)` en `Program.cs`, 4 transportes; async devuelve tupla). Pre-procesador sobre `out` sigue en SCLSL012 a propósito: no hay valor de entrada. [x] Cliente generado de streams (`IEnumerable<T>`/`IAsyncEnumerable<T>`, `TryGenerateStreamClientMethod`; antes no compilaba) + POC `StreamServiceClient` en `Program.cs`. [ ] Streams con procesadores (SCLSL012).
+Stream propio gana desde ~1 MB (p99 de las pequeñas −66 %); ≤64 KB empate. Implementado como opt-in: `[DedicatedStream]` en el método del contrato → el cliente QUIC generado llama a `__connection.Dedicated` (misma conexión física, stream por unaria); otros transportes lo ignoran (el contrato se comparte entre hosts). Test `DedicatedStreamTest`.
+11. [x] **`LocalConnection` seleccionada por el generador** (5.6): `ServiceConnectionType.Local` (valor 4, opt-in). El DI combina
+    FAMWN con `AnalyzerConfigOptions.GlobalOptions` (`ServiceProviderInfo.GlobalOptions`, paquete 10.1.3); el parcial resuelve
+    Memory si `RuntimeIdentifier` es `win*` o el TFM es `*-windows`, UDS en otro caso; sin RID ni TFM con plataforma decide `RuntimeInformation` (SO de compilación). Host
+    `Start(string name)` y cliente `new X(string name)` exponen `IAsyncDisposable` en ambos destinos (`LocalHost`,
+    `MemoryConnection.DisposeAsync`); el `[SupportedOSPlatform]` del transporte efectivo lo emite el generador en la clase generada,
+    no el usuario. Test: `LocalConnectionTest` (5 destinos).
 12. [ ] **5.7 + 2.1**: `SharedMemory` interno y APIs `Span`/`IBufferWriter` en `RpcBuffer`.
 13. [ ] **Autenticación** como pipeline de servidor (3.8) y **retry** como pipeline de cliente (5.2-R).
 
@@ -435,6 +440,12 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
       +~8 KB por los flush en el pool).
         - [x] **Closures por paquete en `RpcBuffer`** (medido con `--alloc`, `AllocProbe` = GCAllocationTick por tipo): la lambda de los paquetes 2..N y el `Task.Run` de `RpcRequest` capturaban locales y el closure se asignaba en cada llamada aunque no se usara. Movidos a `WriteRemainingPackets`/`DispatchRequest`. Memory 1000 items: 91 KB → 5 KB (88,7 → 0,1 B/item).
         - [x] **Spin antes de `DataExists.WaitOne`** en `CircularBuffer.GetNodeForReading`: Memory 1000 items 1008 → 702 µs. Memory 1000 items 1008 → 702 µs.
+        - [x] **Latencia unaria Memory** (`MemoryConcurrencyBenchmarks`, conc. 1/8/64; base 36,4/40,9/170,8 µs · 2,74/20,04/157,84 KB → 18,8/32,7/163,8 µs · 1,87/13,16/102,84 KB):
+          `TimeoutOrCancel` con `Task.WaitAsync(TimeSpan, token)` nativo; respuestas del servidor con `SendReply` directo al nodo (sin `RpcRequest`/TCS/array por paquete);
+          spin por tiempo (~30 µs) antes del `WaitOne`; `DispatchRequest` con `ThreadPool.UnsafeQueueUserWorkItem`. Descartado: continuaciones inline en `ResponseReady` (conc. 64: 160 → 183 µs).
+          `MemoryMultiClientTest.TwoClientsRequests` es intermitente desde antes (base: 9/12 fallos; ahora menos).
+        sin `SemaphoreSlim` ni máquina async en el camino caliente; el token solo cancela la espera de cada llamante.
+                  Medido en `QuicComparison` (antes → después): Lsl_Unary 68,55 → 68,46 µs (2,08 → 2,09 KB), Lsl_Stream 260,3 → 262,7 µs, Lsl_StreamBatched 157,8 → 159,9 µs; ratio frente a ASP.NET slim H3 sin cambio (2,32 → 2,30). Neutro: el camino caliente ya no asignaba; se queda por semántica (reintento, cancelación por llamante).
   - [x] **POC A · lotes por nodo** (`MemoryRequestContext.Append/Flush`): el servidor agrupa `[int32 len][item]` en un solo `StreamItem` (lote 16 KB, buffer reutilizado; se vacía si el productor async va a esperar). Sin tipo de mensaje nuevo. Memory 1000 items: 702 → 109 µs.
   - [x] **POC B · drenado en lote en el cliente** (`WaitToReadAsync` + `TryRead` en `OpenStream`): 109 → ~100 µs, marginal pero gratis. Resultado: Memory 100 µs / 8 KB vs UDS 304 µs y TCP 344 µs (1000 items). Tests de streaming Memory cubren ambos.
   - [x] **Varios clientes por `contextId`**: Hoy con `RpcBuffer.Host`/`Connect` multicliente (ver paso 8); antes con `MemoryLobby` (eliminado). `MemoryMultiClientTest` activo y en verde. Historico: con `MemoryLobby` (servidor) + `MemoryConnection.Join`:
@@ -469,7 +480,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] **Early-return**: el host ya no lanza al rechazar; emite `return __context.Fail[Async](string)` (sobrecargas nuevas en los 4 contextos). El cliente lanza (no hay respuesta que devolver).
   - [x] **`in` con procesadores** (cliente y host). `IAuth.Shout`.
   - [x] **Arnés Roslyn** (`GeneratorHarness.cs`) y `PipelineDiagnosticsTest`: SCLSL010-014.
-  - [ ] Pendiente: ref/out y streams con procesadores (hoy SCLSL012).
+  - [x] `ref`/`out` con procesadores (POC `Normalize` en `Program.cs`). [ ] Pendiente: streams con procesadores (hoy SCLSL012).
 
   `Pipeline.cs` actual: 4 interfaces sin uso, y `IPipelineAsync.ProcessAsync` devuelve `TOut` en vez
   de `Task<TOut>`. Se reemplaza entero.
@@ -801,6 +812,20 @@ Ganancia real (~45% latencia, ~85% memoria en crudo). Pendiente de decision: mul
 
 Unarias: -35% latencia, -69% memoria. EnumerateAsync sigue con stream propio (aislamiento HOL). Marcador opId=long.MinValue abre el stream como canal multiplexado (8 B una vez). unaryStreams: 0 restaura el modo anterior. Test: TestQuicUnaryStreams(0|4).
 
+### PoC #14: unaria grande en el pool vs stream propio (`--quicpool [KB]`)
+Misma conexion (pool de 4). 2 bucles de unaria grande en segundo plano; 4 workers x 2000 unarias pequeñas. Latencia de las pequeñas (us):
+
+| Grande | Ruta | media | p50 | p99 |
+|---|---|---|---|---|
+| — | sin grande | 76-101 | 70-98 | 126-190 |
+| 16 KB | pool / stream | 173 / 164 | 170 / 159 | 306 / 273 |
+| 64 KB | pool / stream | 234 / 229 | 213 / 210 | 448 / 456 |
+| 256 KB | pool / stream | 690 / 491 | 604 / 438 | 1493 / 1463 |
+| 1 MB | pool / stream | 1998 / 1262 | 2041 / 1631 | 7067 / 2378 |
+| 4 MB | pool / stream | 14686 / 4793 | 14470 / 5048 | 18250 / 8199 |
+
+Rendimiento de las grandes igual en ambas rutas. Conclusion: el HOL del pool solo pesa desde ~256 KB-1 MB; por debajo, empate y el pool es mas barato por llamada (70 vs 108 us). Una heuristica por tipo ("respuesta de longitud variable => stream propio") penalizaria las unarias pequeñas con `string`/`byte[]`; la ruta debe ser opt-in explicita por operacion.
+
 
 ### TCP: tecnicas de Kestrel (Transport.Sockets) probadas contra LSL
 Kestrel: Pipe entre app y socket con bucles DoSend/DoReceive, BufferList multi-segmento, SocketAwaitableEventArgs reutilizable, SocketSenderPool, IOQueue, PinnedBlockMemoryPool, AggressiveOptimization, UnsafePreferInlineScheduling.
@@ -815,3 +840,82 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - [x] El hueco del stream simple era el handoff por item en el lector del cliente (Coalesced = mismo servidor y mismo cable, ~80 us menos). TcpConnection/UdsConnection pasan a coalesceStreams = true: agrupa solo lo ya leido en cada ReadAsync, sin espera ni cambio de cable; unarias intactas (grupo de 1 = Success).
 - Arnes completo: Lsl_Stream 196 us / 5.0 KB vs AspNetSlim_Stream 229 us / 4.6 KB; Lsl_StreamPerItem (coalesceStreams:false) 274 us; Lsl_Unary 47 us vs slim 57 us.
 - Prueba: StreamBatchingTest/StreamBatchConcurrencyTest cubren coalesce true/false. Descartado sink sin Channel para streams: ya no hace falta (YAGNI).
+
+### Flush diferido sin asignaciones (ResponseChannel, rama fix/stream-flush-alloc)
+- [x] `--alloc cmp` (AllocProbe sobre las filas de Comparison) mostro que el 54 % de Lsl_Stream era `FlushLaterAsync`: caja async por flush (`_ = ...` nunca se awaitaba, el pool no la reciclaba) + `TaskNode` al esperar el candado del productor.
+- `ResponseChannel` es su propio `IThreadPoolWorkItem`: flush sincrono si el candado esta libre; si esta ocupado marca `_flushWanted` y quien lo suelta (`Release()`) reencola; async solo si `FlushAsync` no completa.
+- BenchmarkDotNet (Comparison): Lsl_Stream 4891 -> 3352 B (slim 4535 B), Lsl_StreamPerItem 5684 -> 3443 B, Lsl_StreamBatched 3766 -> 3537 B (slim 3067 B); tiempos sin cambio (163 / 255 / 90 us). Tests 89/89.
+- Pendiente: Lsl_StreamBatched aun +470 B vs slim por las cajas async de `FlushBatchAsync`/`WriteRawAsync` por lote.
+
+### Lotes sin maquina de estados (rama fix/batched-alloc)
+
+- `ResponseChannel.WriteRawAsync`/`WriteStatusAsync` y `RequestContext.FlushBatchAsync` ya no son `async`: camino sincrono con `_gate.Wait(0)` y flush completado en linea; solo si el candado o el flush esperan se entra en un metodo `async` con `PoolingAsyncValueTaskMethodBuilder`.
+- `FlushAndReleaseAsync` comprueba `IsCompleted` antes de esperar (tambien beneficia a `WriteAsync`).
+- El lote solo se resetea tras completar la copia al `PipeWriter` (vida del buffer intacta).
+- BenchmarkDotNet (Comparison, 1000 items): `Lsl_StreamBatched` 3537 B -> ~3287 B (3.21 KB), 87.7 us; `AspNetSlim_StreamBatched` ~3072 B (3 KB), 103.8 us. Brecha ~470 B -> ~215 B.
+- Resto: `Channel<Response>` por stream en el cliente (segmento `Response[]` + `Segment`). Siguiente paso posible: reutilizar el canal/cola por stream.
+- Tests: 88/89; `MemoryOwnerClosePoc` (RpcBuffer, conteo de hilos) falla solo en la suite completa y pasa aislado; no toca `ResponseChannel`.
+
+### Memory RPC directo (RpcBuffer <-> MemoryConnection/Server.Memory)
+
+- [x] Unario tipado: `RpcBuffer.Call` escribe `[op][body]` en el nodo (`WriteProtocolV1<TState>`) y lee `[status][body]` desde el span del nodo en el lector (`PendingCall<TState,TOut>`); sin `RpcResponse` ni array de respuesta en single-packet. Multi-packet sigue ensamblando.
+- [x] Streaming separado: `RpcBuffer.CallStream` (items por `StreamItemHandler`, timeout infinito); `MemoryConnection` mantiene Channel/watchdog/batches.
+- [x] Servidor: `RpcRequestHandler`/`RpcAsyncRequestHandler` reciben `ReadOnlyMemory` sobre buffer de ArrayPool (devuelto al terminar el handler, tambien async); `MemoryRequestContext` responde con `RpcBuffer.Reply` directo al nodo. Handlers devuelven `ResponseStatus`/`ValueTask<ResponseStatus>` (generador incluido); fuera `MemoryResponse`.
+- [x] Carrera lector/Dispose (AccessViolation en `SharedBuffer.ShuttingDown`, ~2/8 corridas): `_disposed` se marca bajo `m_ReadThreadIsReadingLock` y el lector lo comprueba al reclamar el buffer; el dueño levanta `MarkShutdown` antes del desmapeo diferido.
+- BenchmarkDotNet MemoryConcurrency (--fast): c=1 1.87 -> 1.5 KB, c=8 13.16 -> 10.16 KB, c=64 102.84 -> 78.85 KB; tiempos sin cambio (17.7 / 38 / 162 us).
+- Tests: LiteSpeedLink 93/93 (35 corridas seguidas sin crash), SharedMemory 47/47 (12 corridas).
+
+### POC MemChannel: canal propio sobre CircularBuffer, sin RpcBuffer (`test/POC/MemChannelPoc`)
+
+- Se conserva `SharedBuffer`+`CircularBuffer` (MMF+EWH); reescribirlo no aporta. Lo que sobra es `RpcBuffer`.
+- Canal: frame de 12 B (`Total,Id,Client,Kind`) frente a la cabecera V1; slots con generacion + `Pending<TOut>` pooled (`IValueTaskSource`), sin Task/TCS/ConcurrentDictionary por llamada; timeouts por un timer de barrido (100 ms); `MemRequest` pooled; anillos con refcount y lector unido (`Join`) en Dispose.
+- Hallazgo: varios writers sin serializar sobre el mismo anillo se duermen en `NodeAvailable` (AutoReset) hasta el timeout -> lock por anillo (igual que `lock_sendQ`).
+- Self-checks (`dotnet run -c Release`): unario sync/async, 400 concurrentes en 2 clientes, 100 KB multi-packet, streams (1000 items, 8 concurrentes + 50 unarios), error, doble reply, timeout, cancelacion, respuestas tardias, host caido, dispose storm x30. 6/6 corridas OK.
+- Unario int, 20k llamadas (mediana de 6 corridas): c=1 9.6 -> 6.2 us, 808 -> 0 B; c=8 22 -> 9.5 us, 808 -> 0 B; c=64 165 -> 75 us, 809 -> 1 B; sync c=1 23 -> 14.5 us, 756 -> 0 B.
+- [ ] Decidir si sustituir `RpcBuffer` en `MemoryConnection`/`Server.Memory` por este canal (protocolo `[op][body]`/`[status][body]` encima, sin cambios en el generador).
+
+#### Modos de stream en MemChannel (mismo canal, ruta propia)
+
+- Frames nuevos: `Stream` (request con `int32` de creditos delante del body), `Credit`, `Cancel`; unarias sin cambios (0 B, mismos tiempos).
+- `credits` fijado por operacion (lo emitiria el generador): `0` server-sized/push hasta la respuesta final; `-N` client-sized, el host corta tras N items (`Item` devuelve false); `N>0` ventana, el host envia como mucho N por delante de `Grant`.
+- `idleTimeoutMs`: watchdog re-armado por cada item; `Timeout.Infinite` para streams abiertos/silenciosos.
+- Todo fin local (cancel, watchdog, fallo del callback) envia `Cancel`; `Close` del cliente y Dispose del host cancelan sus productores (`MemRequest.IsCancelled`/`Aborted`).
+- Checks (5/5 corridas): take 50 sobre productor infinito; push cancelado detiene el host; ventana 16 con consumidor lento, backlog max 16 y 200 unarias a 14-19 us; watchdog 200 ms (~260 ms) y re-armado (8 x 100 ms con limite 400 ms); stream abierto silencioso 600 ms y fin por cancel; dispose del cliente detiene sus productores; sin slots perdidos.
+- Contrato propuesto: `[Stream(Take = nameof(count))]`, `[Stream(Window = n)]`, `[Stream(IdleTimeoutMs = Timeout.Infinite)]`; ServerSized `(int Count, IAsyncEnumerable<T>)` solo con caso real.
+
+#### Integracion MemChannel (sustituye a RpcBuffer)
+
+- Comparativa de streaming con el batching de produccion (lotes `[int32 len][item]` de 16 KB, nodos 50 KB x 10), us/stream, 4 corridas: N=10 c=1 ~12 -> ~10, c=8 ~28 -> ~19; N=1000 c=1 ~60 -> ~57, c=8 ~100 -> ~87; N=20000 c=1 ~150 -> ~138, c=8 empate (900-990 vs 860-1120, ruido). Asignacion ~470 -> 0-8 B/stream. Unario: c=1 8.9 -> 5.8 us, c=64 114 -> 58 us, 696 -> 0 B.
+- Veredicto: gana o empata en todos los escenarios, nunca pierde de forma consistente -> integrado.
+- `MemChannel.cs` vive en el fork SharedMemory (namespace `SharedMemory`, internal por SG_CONTEXT); Client/Server lo enlazan en lugar de `RpcBuffer.cs`. La POC enlaza el mismo archivo (RpcBuffer solo como baseline).
+- `MemoryConnection`: `MemClient` (reconexion si `!IsAlive`); unarias sync sin `GetAwaiter().GetResult()`, async sin `Task`; streaming por `StreamAsync` con watchdog nativo (fuera Timer propio) y `Cancel` al host si se abandona la enumeracion.
+- `Server.Memory`: `MemHost.Start` + `MemoryRequestContext` sobre `MemRequest` (`Reply`/`Item`); un `Item` rechazado (cliente cancelo/se fue) detiene el productor con `OperationCanceledException`.
+- `MemRequest.Reply` deshace el claim si no se publico nada (serializador fallo), para que `Fail` aun responda.
+- Cambio observable: el watchdog de inactividad lanza `TimeoutException` (antes `OperationCanceledException`); `MemoryStreamBatchingTest.WatchdogCancelsStalledStream` actualizado. `MemorySessionLeakPoc` mira `MemHost._peers`.
+- Tests: LiteSpeedLink 93/93 (3 corridas); POC 22/22 checks.
+- BenchmarkDotNet publicable (mascara 97, control OK), RpcBuffer -> MemChannel: MemoryConcurrency c=1 17.7 -> 16.4 us, 1.5 KB -> 663 B; c=8 38 -> 28 us, 10.16 -> 3.56 KB; c=64 162 -> 146 us, 78.85 -> 25.96 KB (UDS: 35.6 / 51 / 200 us). Streaming 10 items 29.7 -> 19.6 us, 4.13 -> 1.97 KB; 1000 items 88 -> 92 us (ruido), 7.77 -> 5.79 KB (UDS 33 / 128 us).
+- [x] Streaming Memory asigna mas que UDS
+  - [x] POC `MemPull` (MemChannel.cs): el hilo lector copia cada item como `[int32 len][payload]` en dos buffers del ArrayPool intercambiados; un unico `ManualResetValueTaskSourceCore` despierta al consumidor, `Pending.Complete/Fail` señala el fin. Sin Channel ni Task de `Complete`. Checks: orden + final, 8 pulls concurrentes + 50 unary, fallo del consumidor cancela al productor.
+    POC pull (us / B por stream): N=10 8.9/345 (c1), 14.8/349 (c8); N=1000 12.1/353, 18.5/358; N=20000 73.1/1635, 155.9/7486. RpcBuffer ~465 B. Los ~350 B fijos son `MemPull` + su `Lock` + la caja async del consumidor.
+  - [x] `MemPull` pooled (`Rent`/`Dispose`, buffers retenidos hasta 256 KB): solo se recicla si termino por respuesta en el hilo lector (sin items en vuelo); cancel/watchdog/dispose devuelven los buffers al ArrayPool y no se reutiliza. Check: 50 streams seguidos sobre la misma instancia, items exactos.
+    ya no hay `byte[]` ni `MemPull`.
+      - [x] `MemPullEnumerator<TItem,TEnd>` (MemChannel.cs): `IAsyncEnumerator` pooled sobre `MemPull` pooled, `MoveNextAsync` sincrono mientras haya registros y si no via su propio `IValueTaskSource<bool>` (sin maquina de estados async ni Channel). Items decodificados en el hilo consumidor; `DisposeAsync` temprano cancela al productor; token de enumeracion enlazado solo si ambos cancelan. Checks: orden + final, 8 lotes concurrentes, dispose temprano, cancel por token, fallo del handler.
+        `alloc` POC (B/stream): pull rent 218-234 -> enumerador 35-73 (resto: work item del pool y ruido del muestreo).
+      - [x] Portado a `MemoryConnection.OpenStream`: `StreamEnumerable` (unico objeto por llamada) sobre `MemPullEnumerator`; fuera Channel, CTS enlazado y Task de `Complete`. Suite 93/93.
+        `--alloc memory`: 1 item 1975 -> 414 B/llamada (el resto es del harness: `Drain`, `Range` y `MemoryRequestContext` del host); 100000 items 0.5 B/item.
+        BenchmarkDotNet (mascara 97, control estable): Streaming Memory 10 items 14.98 us / 440 B (antes 19.62 us / 1.97 KB) vs UDS 37.38 us / 1040 B; 1000 items 58.71 us / 472 B (antes 91.83 us / 5.79 KB) vs UDS 170.44 us / 1662 B. MemoryConcurrency sin cambios: c1 13.98 us / 655 B, c8 28.59 / 3559, c64 150.80 / 25959 (UDS 38.92 / 52.54 / 208.69 us).
+
+### Estudio: llevar a UDS lo aprendido en Memory (sin cambios de produccion)
+
+- Medicion: `--alloc uds` (1 / 1000 / 100000 items, repeticiones ampliadas para que el muestreo por tipo sea fiable) y `StreamBatchBreakdown` con fila UDS (mascara 513, `--filter *Uds*`).
+- Asignacion (B/llamada): 1 item 1052 (~550 los dos iteradores `async` anidados del cliente: `StreamConnection.EnumerateAsync` sobre `MultiplexedChannel.EnumerateAsync`; resto harness + `RequestContext`); 1000 items 3416 (45 % `TaskNode`, 14 % caja de `DispatchAsync`, `ContinueWith` de `inflight`); 100000 items 0.8 B/item (93 % `TaskNode`).
+- `TaskNode` = `ResponseChannel._gate.WaitAsync` en `WriteSlowAsync`: el productor choca con el work item del flush diferido, que retiene el candado durante la escritura al socket. Al pasar a async, el handler deja de completar en linea y aparecen las cajas de `DispatchAsync`/`EnumerateAsync` y la continuacion de `inflight` (~500 B por stream).
+- Lo que Memory ya no tiene y UDS si: Channel no (UDS ya reutiliza `StreamSink`); CTS enlazado no; iteradores async si; lotes en el servidor por defecto si (Memory siempre agrupa a 16 KB, UDS/TCP con `streamBatch = 0`).
+- Tiempo, UDS 1000 int (BDN, us / B): Batch 0 sin coalesce 328 / 1.64 KB; Batch 0 coalesce (defecto actual) 177 / 1.69 KB; Batch 8 134-148; Batch 64 96-100 / 1.5-1.7 KB; Batch 256 89-91 / 1.3-1.4 KB. Memory 59 us / 472 B.
+- Conclusion: la palanca de tiempo es el lote en el servidor (~2x); la de asignacion fija, los iteradores del cliente; el `TaskNode` por item baja con lotes (un choque por lote, no por item). Suelo de 10 items (UDS 37 us vs Memory 15 us): ida y vuelta del socket, no asignaciones.
+- [x] Lotes por defecto en TCP/UDS (como Memory), conservando el flush cuando el productor va a esperar. `Server.DefaultStreamBatch = int.MaxValue` (lote limitado por 32 KB o por espera del productor); `streamBatch: 0` sigue desactivandolo.
+- [x] `StreamConnection.EnumerateAsync` sin iterador propio si el canal ya esta conectado; el iterador `async` solo queda para la primera llamada antes de conectar.
+- [x] Enumerador manual en `MultiplexedChannel` (`StreamEnumerable`): un objeto por llamada, perezoso (envio en el primer `MoveNextAsync`), lotes decodificados sin esperar, `MoveNextSlowAsync` con caja pooled solo para envio/espera; si `TryRead` deja el sink armado se espera antes de releer. Test: `UdsTest.TestEarlyExitReenumerateAndReuse` (salida temprana, reenumeracion, sink pooled reutilizado, conexion sana).
+- [ ] Solo si tras el lote sigue el `TaskNode`: escritura via `Pipe` + bombeo por conexion para que el flush al socket no retenga el candado del productor (afecta tambien a TCP). Tras los cambios el `TaskNode` no aparece en `--alloc uds`: aparcado.
+- Resultado `--alloc uds` (B/llamada, antes -> despues): 1 item 1052 -> 553; 1000 items 3416 -> 549; 100000 items 82886 -> 3239 (resto: `byte[]` del pool). Lo que queda a 1 item es harness + `RequestContext` + el propio enumerador.
+- Resultado BDN `--fast`, 1000 int (us / B): UDS lote por defecto 89 / 1.01 KB -> 79 / 642 B; TCP 112 / 1.01 KB -> 101 / 670 B; UDS Batch 0 coalesce 120 / 1.97 KB -> 166 / 1.09 KB (tiempo ruidoso en modo rapido). Tests: 94/94.

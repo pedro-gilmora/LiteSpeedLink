@@ -7,6 +7,7 @@
 		<LangVersion>latest</LangVersion>
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<Configurations>Debug;Release;Pack;DEBUG_SG</Configurations>
+		<DefineConstants>$(DefineConstants);SG_CONTEXT</DefineConstants>
 		<IsTrimmable>true</IsTrimmable>
 		<IsAotCompatible>true</IsAotCompatible>
 		<PublishTrimmed>true</PublishTrimmed>
@@ -21,6 +22,14 @@
 		<Compile Include="..\Internals\*.cs">
 			<Link>InternalsShared\%(Filename)%(Extension)</Link>
 		</Compile>
+		<!-- Transporte Memory enlazado como internal (SG_CONTEXT): no forma parte de la API publica. -->
+		<Compile Include="$(SharedMemoryDir)MemChannel.cs;$(SharedMemoryDir)CircularBuffer.cs;$(SharedMemoryDir)SharedBuffer.cs;$(SharedMemoryDir)SharedHeader.cs;$(SharedMemoryDir)FastStructure.cs;$(SharedMemoryDir)MemoryHelpers.cs">
+			<Link>SharedMemory\%(Filename)%(Extension)</Link>
+		</Compile>
 	</ItemGroup>
+
+	<PropertyGroup>
+		<SharedMemoryDir>..\..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\</SharedMemoryDir>
+	</PropertyGroup>
 
 </Project>

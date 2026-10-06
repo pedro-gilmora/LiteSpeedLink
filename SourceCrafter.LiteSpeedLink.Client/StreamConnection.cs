@@ -72,19 +72,24 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
     public async ValueTask SendAsync(long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
         await (await GetChannelAsync(token).ConfigureAwait(false)).SendAsync<byte>(op, default, false, token).ConfigureAwait(false);
 
-    public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-        (long op, TIn payload, [EnumeratorCancellation] CancellationToken token = default, [CallerMemberName] string name = "")
-    {
-        var channel = await GetChannelAsync(token).ConfigureAwait(false);
-        await foreach (var item in channel.EnumerateAsync<TIn, TOut>(op, payload, true, token).ConfigureAwait(false))
-            yield return item;
-    }
+    public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.EnumerateAsync<TIn, TOut>(op, payload, true, token)
+            : ConnectThenEnumerateAsync<TIn, TOut>(op, payload, true, token);
 
-    public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-        (long op, [EnumeratorCancellation] CancellationToken token = default, [CallerMemberName] string name = "")
+    public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.EnumerateAsync<byte, TOut>(op, default, false, token)
+            : ConnectThenEnumerateAsync<byte, TOut>(op, default, false, token);
+
+    /// <summary>Solo antes de conectar (una vez por conexion): despues el canal se devuelve directo, sin iterador intermedio.</summary>
+    private async IAsyncEnumerable<TOut?> ConnectThenEnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn? payload, bool hasPayload, [EnumeratorCancellation] CancellationToken token)
     {
         var channel = await GetChannelAsync(token).ConfigureAwait(false);
-        await foreach (var item in channel.EnumerateAsync<byte, TOut>(op, default, false, token).ConfigureAwait(false))
+        await foreach (var item in channel.EnumerateAsync<TIn, TOut>(op, payload, hasPayload, token).ConfigureAwait(false))
             yield return item;
     }
 }

@@ -34,6 +34,14 @@ public interface IAuth : IServiceUnit
 
     // 'in' con procesadores en ambos lados: cliente TrimName, servidor Upper.
     string Shout([ClientPreProcessor<TrimName>, ServerPreProcessor<Upper>] in string text);
+
+    // ref con procesadores que preservan el tipo (ida) + out (vuelta) + post en el retorno.
+    [return: ClientPostProcessor<Exclaim>]
+    string Normalize([ClientPreProcessor<TrimName>, ServerPreProcessor<Upper>] ref string text, out int length);
+
+    // Respuesta grande: en QUIC va por stream propio y no bloquea las unarias del pool (#14); otros transportes lo ignoran.
+    [DedicatedStream]
+    byte[] Download(int size);
 }
 
 public sealed class ParseInt : IPipeline<string, int>

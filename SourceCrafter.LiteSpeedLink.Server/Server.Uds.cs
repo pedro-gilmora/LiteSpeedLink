@@ -12,7 +12,7 @@ public static partial class Server
         Action onFinalize,
         CancellationToken token = default,
         int maxInFlightPerConnection = MaxInFlightPerConnection,
-        int streamBatch = 0,
+        int streamBatch = DefaultStreamBatch,
         TimeSpan streamBatchMaxDelay = default)
         => StartUdsServer(path, new DelegateRequestHandler(handlers), onFinalize, token, maxInFlightPerConnection, streamBatch, streamBatchMaxDelay);
 
@@ -22,7 +22,7 @@ public static partial class Server
         Action onFinalize,
         CancellationToken token = default,
         int maxInFlightPerConnection = MaxInFlightPerConnection,
-        int streamBatch = 0,
+        int streamBatch = DefaultStreamBatch,
         TimeSpan streamBatchMaxDelay = default)
         where THandler : struct, IRequestHandler
     {

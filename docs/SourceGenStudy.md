@@ -36,7 +36,7 @@ El generador decide la forma de cada operación (Get, Enumerate o Send), el tran
 | 11 | `EnumerateAsync` abre un stream QUIC por llamada | `Client.QuicConnection` | Operación de stream | Reutilizar stream (pool, como unarias) | Menos coste fijo por stream (suelo medido: stream crudo 86 µs frente a RPC 110 µs tras el arreglo del FIN) | **Descartado como defecto**: se mantiene stream propio por `EnumerateAsync` para aislar el bloqueo de cabeza de línea. El lote por política (#1) ya aplica en QUIC (−35 %). Reabrir solo si QUIC pasa a transporte principal |
 Test `UdsTest.TestRawRoundtrip`. Streams **diferidos** por POC (`StreamRawDecodePoc`): un `MemoryPackReader` con métodos específicos frente a `Deserialize(span, ref item)` por item cuesta +125 % con 1 item (alquiler del estado, ~15 ns) y ahorra −29 % (strings) / −17 % (packables) con 64, ~3,6 ns/item: ~2 % de `Lsl_Stream` (196 µs), a cambio de una API `EnumerateRawAsync` en 5 transportes. Reabrir si un perfil de stream señala la decodificación |
 | 13 | Buffer de respuesta de tamaño variable | Host | Respuesta de tamaño fijo | Buffer exacto | Menos reservas y ramas | **Descartado** por POC (`FixedSizeResponsePoc`): 8,37 vs 8,86 ns (−0,5 ns, 0 B ambos); por debajo del ruido de cualquier transporte |
-| 14 | Pool QUIC elige stream por turno | `Client.QuicConnection.GetMuxAsync` | Forma y tamaño esperado por operación | Ruta emitida por operación: pool o stream propio (grandes/lentas) | Menos bloqueo de cabeza de línea entre unarias | **Pendiente** de PoC |
+≤64 KB empate. **Hecho** como opt-in: `[DedicatedStream]` → `QuicConnection.Dedicated`; ignorado fuera de QUIC. Test `DedicatedStreamTest` |
 | 15 | Coalescing de streams en el cliente | `StreamConnection`/`MultiplexedChannel` | — | No aplica: depende de lo que traiga cada `ReadAsync` | — | **Hecho como defecto** (`coalesceStreams = true` en TCP/UDS), sin cambio de cable. `Lsl_Stream` 274 → 196 µs (AspNetSlim 229 µs). Tests `StreamBatchingTest`, `StreamBatchConcurrencyTest` |
 
 Las columnas 2 a 5 de las filas 5, 7, 9 y 10 se perdieron en una edición anterior y aquí están **inferidas** del código y de las conclusiones que sí quedaron (beneficio y estado). Las filas 4, 6, 8, 12 y 13 se reconstruyeron a partir de sus POCs. Revisar las inferidas si se retoman.
@@ -59,11 +59,11 @@ Las columnas 2 a 5 de las filas 5, 7, 9 y 10 se perdieron en una edición anteri
 | 15 | Hecho (defecto TCP/UDS) | `Comparison`: `Lsl_Stream` 196 µs vs `AspNetSlim_Stream` 229 µs |
 | 2, 9, 10, 13 | Descartados | Ver inventario |
 | 5, 6, 7 | Diferidos | Solo si un perfil muestra la rama en el camino caliente |
-| 14 | Pendiente | PoC: unaria grande/lenta en el pool vs stream propio, midiendo la latencia de las unarias pequeñas concurrentes |
+| 14 | Hecho (opt-in) | `QuicPoolContentionPoc`, `DedicatedStreamTest` |
 
 **Siguiente en el generador:**
 1. POC de raw (#12) para streams: decide si `Enumerate*` pasa a raw.
-3. PoC de #14.
+3. —
 
 ## ConfigureAwait(false) en cada await
 
@@ -78,5 +78,5 @@ Matiz práctico:
 
 ## Principio
 
-Pendientes: #14 y el POC de streams raw (#12).
+Pendientes: el POC de streams raw (#12).
 

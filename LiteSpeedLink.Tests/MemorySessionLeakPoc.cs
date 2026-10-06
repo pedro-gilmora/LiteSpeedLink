@@ -13,7 +13,7 @@ using Xunit.Abstractions;
 namespace LiteSpeedLink.Tests;
 
 /// <summary>
-/// PoC del paso 8: el servidor Memory es un solo <c>RpcBuffer.Host</c> multicliente; cada cliente que hace Dispose
+/// PoC del paso 8: el servidor Memory es un solo <c>MemHost</c> multicliente; cada cliente que hace Dispose
 /// envia Close y el host libera su anillo de respuestas (sin lobby, Bye ni hilo lector por cliente).
 /// </summary>
 [SupportedOSPlatform("windows")]
@@ -26,8 +26,8 @@ public class MemorySessionLeakPoc(ITestOutputHelper output)
         const int clients = 20;
         string name = $"Test-{Guid.CreateVersion7()}";
         var server = Server.StartMemoryServer(name, (op, ctx, token) => ctx.Return(ctx.Get<int>() + 1), () => { });
-        var rpc = server.GetType().GetFields(BindingFlags.NonPublic | BindingFlags.Instance).Single(f => f.FieldType == typeof(SharedMemory.RpcBuffer)).GetValue(server)!;
-        var sessions = (ICollection)rpc.GetType().GetField("_clients", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(rpc)!;
+        var host = server.GetType().GetFields(BindingFlags.NonPublic | BindingFlags.Instance).Single(f => f.FieldType.Name == "MemHost").GetValue(server)!;
+        var sessions = (ICollection)host.GetType().GetField("_peers", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(host)!;
         var (handles0, threads0) = Usage();
 
         for (int i = 0; i < clients; i++)

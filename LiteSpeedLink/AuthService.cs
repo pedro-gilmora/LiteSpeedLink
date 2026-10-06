@@ -27,6 +27,15 @@ public partial class AuthService() : IAuth
 
     public string Shout(in string text) => text + "!";
 
+    public string Normalize(ref string text, out int length)
+    {
+        length = text.Length;
+        text = $"<{text}>";
+        return "ok";
+    }
+
+    public byte[] Download(int size) => new byte[size];
+
     public bool TryAuthenticate(Credentials credentials, out string token)
     {
         if (credentials is ("pedro", "test!123"))

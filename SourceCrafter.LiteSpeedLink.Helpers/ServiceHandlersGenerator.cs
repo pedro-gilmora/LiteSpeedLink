@@ -29,7 +29,7 @@ public sealed partial class ServiceHandlersGenerator : ServiceProviderPartial
 {
     private const string ServiceHostAttr = "LiteSpeedLink.Abstractions.Internals.ServiceHostAttribute";
     private const string ServiceClientAttr = "LiteSpeedLink.Abstractions.Internals.ServiceClientAttribute";
-    private const string ClientServiceAttr = "LiteSpeedLink.Abstractions.Internals.ClientServiceAttribute<TService>";
+    private const string ServiceUnitAttr = "LiteSpeedLink.Abstractions.Internals.ServiceUnitAttribute<TService>";
 
     public override void AnalyzeContainer(
         ServiceProviderInfo container,
@@ -46,12 +46,14 @@ public sealed partial class ServiceHandlersGenerator : ServiceProviderPartial
             // (LITSPLNK001): un contenedor no puede declararse dos veces.
             if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection))
             {
-                GenerateServiceHost(container, contribution, hostConnection, cancelToken);
+                var isLocal = ResolveLocal(container, ref hostConnection);
+                GenerateServiceHost(container, contribution, hostConnection, isLocal, cancelToken);
             }
 
             if (TryGetConnectionType(container.ContainerType, ServiceClientAttr, out var clientConnection))
             {
-                GenerateServiceClient(container, contribution, clientConnection, cancelToken);
+                var isLocal = ResolveLocal(container, ref clientConnection);
+                GenerateServiceClient(container, contribution, clientConnection, isLocal, cancelToken);
             }
         }
         catch (Exception e)
@@ -66,6 +68,55 @@ public sealed partial class ServiceHandlersGenerator : ServiceProviderPartial
                     true,
                     e.ToString()), null));
         }
+    }
+
+    /// <summary><c>ServiceConnectionType.Local</c>.</summary>
+    private const int LocalConnection = 4;
+
+    /// <summary>Transporte efectivo de <c>Local</c> fuera de Windows; no es un valor publico del enum.</summary>
+    private const int UdsConnection = 5;
+
+    /// <summary>Ruta del socket UDS de <c>Local</c>; host y cliente la derivan igual del mismo nombre.</summary>
+    private const string LocalUdsPath = "global::System.IO.Path.Combine(global::System.IO.Path.GetTempPath(), name + \".lsl\")";
+
+    /// <summary>
+    /// <c>[SupportedOSPlatform]</c>/<c>[RequiresPreviewFeatures]</c> del transporte efectivo, emitidos en la clase generada para que el
+    /// usuario no tenga que anotar su contenedor.
+    /// </summary>
+    private static string PlatformAttributes(int connectionType) => connectionType switch
+    {
+        0 => @"
+[global::System.Runtime.Versioning.SupportedOSPlatform(""windows"")]",
+        3 => @"
+[global::System.Runtime.Versioning.SupportedOSPlatform(""windows"")]
+[global::System.Runtime.Versioning.SupportedOSPlatform(""linux"")]
+[global::System.Runtime.Versioning.SupportedOSPlatform(""macos"")]
+[global::System.Runtime.Versioning.RequiresPreviewFeatures]",
+        _ => ""
+    };
+
+    /// <summary>
+    /// <c>Local</c> se decide aqui, en compilacion: Memory (RpcBuffer) si el destino es Windows, UDS en otro caso.
+    /// El destino sale de <c>RuntimeIdentifier</c> o de un <c>TargetFramework</c> con plataforma; si las
+    /// opciones globales no lo fijan, del SO donde compila (<see cref="System.Runtime.InteropServices.RuntimeInformation"/>).
+    /// </summary>
+    private static bool ResolveLocal(ServiceProviderInfo container, ref int connectionType)
+    {
+        if (connectionType != LocalConnection) return false;
+
+        connectionType = TargetsWindows(container.GlobalOptions) ? 0 : UdsConnection;
+        return true;
+    }
+
+    internal static bool TargetsWindows(Microsoft.CodeAnalysis.Diagnostics.AnalyzerConfigOptions options)
+    {
+        if (options.TryGetValue("build_property.RuntimeIdentifier", out var rid) && rid.Length > 0)
+            return rid.StartsWith("win", StringComparison.OrdinalIgnoreCase);
+
+        if (options.TryGetValue("build_property.TargetFramework", out var tfm) && tfm.IndexOf('-') >= 0)
+            return tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase);
+
+        return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
     }
 
     private static bool TryGetConnectionType(
