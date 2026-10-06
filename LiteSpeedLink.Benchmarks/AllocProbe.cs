@@ -108,7 +108,8 @@ internal sealed class AllocProbe : EventListener
             _ => bench.Memory
         };
 
-        foreach (var (items, reps) in new[] { (1, 5000), (100_000, 5) })
+        // GCAllocationTick muestrea cada ~100 KB: repeticiones suficientes para que el reparto por tipo sea fiable.
+        foreach (var (items, reps) in new[] { (1, 5000), (1000, 2000), (100_000, 40) })
         {
             bench.Items = items;
             await run();

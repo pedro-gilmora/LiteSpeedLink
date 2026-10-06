@@ -23,6 +23,36 @@ public class UdsTest
         items.Should().Equal(0, 1, 2);
     }
 
+    /// <summary>Enumerador manual: salida temprana libera el sink pooled, la misma secuencia se reenumera y la conexion sigue sana.</summary>
+    [Fact]
+    public async Task TestEarlyExitReenumerateAndReuse()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"lsl-{Guid.NewGuid():N}.sock");
+        using var uds = Server.StartUdsServer(path, async (id, ctx, token) =>
+            id == 1 ? await ctx.EnumerateAsync(() => Enumerable.Range(0, 1000)) : await ctx.ReturnAsync(ctx.Get<int>() * 2), () => { });
+
+        await using var connection = new UdsConnection(path);
+        var token = new CancellationTokenSource(5000).Token;
+        var stream = connection.EnumerateAsync<int>(1, token);
+
+        for (int round = 0; round < 20; round++)
+        {
+            int seen = 0;
+            await foreach (var i in stream)
+            {
+                i.Should().Be(seen);
+                if (++seen == 5 + round) break;
+            }
+            seen.Should().Be(5 + round);
+
+            var all = new List<int>();
+            await foreach (var i in stream) all.Add(i);
+            all.Should().Equal(Enumerable.Range(0, 1000));
+        }
+
+        (await connection.GetAsync<int, int>(0, 21, token)).Should().Be(42);
+    }
+
     private readonly struct Doubler : IRequestHandler
     {
         public ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token) => ctx.ReturnAsync(ctx.Get<int>() * 2);

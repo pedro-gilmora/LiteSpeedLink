@@ -12,11 +12,11 @@ namespace LiteSpeedLink.Tests;
 public class MemoryMultiClientTest
 {
 
-    static Task<byte[]> Handle(long op, MemoryRequestContext ctx, CancellationToken token) => op switch
+    static ValueTask<ResponseStatus> Handle(long op, MemoryRequestContext ctx, CancellationToken token) => op switch
     {
-        0 => Task.FromResult(ctx.Return(ctx.Get<int>() + 1)),
+        0 => ValueTask.FromResult(ctx.Return(ctx.Get<int>() + 1)),
         2 => ctx.Yield(Items()),
-        _ => Task.FromResult(ctx.NotFound())
+        _ => ValueTask.FromResult(ctx.NotFound())
     };
 
     static async IAsyncEnumerable<int> Items()

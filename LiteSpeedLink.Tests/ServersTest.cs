@@ -1,7 +1,6 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using MemoryPack;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
-using SharedMemory;
 using SourceCrafter.LiteSpeedLink;
 using SourceCrafter.LiteSpeedLink.Client;
 
@@ -140,7 +139,7 @@ public partial class ServersTest(ITestOutputHelper output)
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
-    static async Task<byte[]> HandleAsyncMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
+    static async ValueTask<ResponseStatus> HandleAsyncMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
     {
         switch (op)
         {
@@ -340,57 +339,9 @@ public partial class ServersTest(ITestOutputHelper output)
         return await ctx.NotFoundAsync();
     }
 
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    public void RPC_SlaveStreaming()
-    {
-        var ipcName = Guid.CreateVersion7().ToString();
-        //RpcBuffer ipcMaster = null!;
-        RpcBuffer ipcSlave = null!;
-
-        ipcSlave = new RpcBuffer(ipcName, (msgId, payload) =>
-        {
-            for (int i = 1; i < 11; i++)
-            {
-                ipcSlave.RemoteRequest([(byte)i]);
-            }
-
-            ipcSlave.RemoteRequest(null);
-        });
-
-        int y = 0;
-
-        foreach (var element in GetEnumerable())
-        {
-            element.Should().Be(++y);
-        }
-
-        ipcSlave.Dispose();
-        IEnumerable<int> GetEnumerable()
-        {
-            BufferBlock<int> _buffer = new();
-
-            using RpcBuffer rpc = new(ipcName, (id, payload) =>
-            {
-                if (payload?.Length > 0)
-                {
-                    _buffer.Post(payload[0]);
-                }
-                else
-                {
-                    _buffer.Complete();
-                }
-            });
-
-            rpc.RemoteRequest();
-
-            return _buffer.ReceiveAllAsync().ToBlockingEnumerable();
-        }
-    }
-
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
-    private static byte[] HandleMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
+    private static ResponseStatus HandleMemoryRequest(long op, MemoryRequestContext ctx, CancellationToken token)
     {
         switch (op)
         {

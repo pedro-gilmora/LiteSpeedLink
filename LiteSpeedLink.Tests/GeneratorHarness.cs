@@ -49,7 +49,7 @@ static class GeneratorHarness
         }
 
         foreach (var name in (string[])["LiteSpeedLink.Abstractions", "SourceCrafter.LiteSpeedLink.Server", "SourceCrafter.LiteSpeedLink.Client",
-            "SourceCrafter.DependencyInjection.Metadata", "MemoryPack.Core", "SharedMemory"])
+            "SourceCrafter.DependencyInjection.Metadata", "MemoryPack.Core"])
             refs.Add(MetadataReference.CreateFromFile(Path.Combine(AppContext.BaseDirectory, name + ".dll")));
 
         return refs;

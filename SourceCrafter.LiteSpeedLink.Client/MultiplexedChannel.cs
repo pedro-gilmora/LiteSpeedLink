@@ -206,58 +206,161 @@ internal sealed class MultiplexedChannel
             => _core.OnCompleted(continuation, state, token, flags);
     }
 
-    public async IAsyncEnumerable<TOut?> EnumerateAsync<
+    public IAsyncEnumerable<TOut?> EnumerateAsync<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn,
-        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(long op, TIn? payload, bool hasPayload, [EnumeratorCancellation] CancellationToken token)
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(long op, TIn? payload, bool hasPayload, CancellationToken token)
+        => new StreamEnumerable<TIn, TOut>(this, op, payload, hasPayload, token);
+
+    /// <summary>
+    /// Unico objeto por llamada (antes: dos iteradores async con su caja); el sink es pooled. Perezoso como el iterador:
+    /// la peticion sale en el primer <c>MoveNextAsync</c>. Los items de un lote se decodifican sin esperar; solo se entra
+    /// en un metodo async (caja pooled) para enviar o cuando el sink esta vacio.
+    /// </summary>
+    private sealed class StreamEnumerable<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(
+        MultiplexedChannel channel, long op, TIn? payload, bool hasPayload, CancellationToken token)
+        : IAsyncEnumerable<TOut?>, IAsyncEnumerator<TOut?>
     {
-        var sink = _streams.TryTake(out var pooled) ? pooled : new();
+        private bool _opened, _done, _held;
+        private CancellationToken _token = token;
+        private CancellationTokenSource? _linked;
+        private StreamSink? _sink;
+        private int _id;
+        private CancellationTokenRegistration _cancel;
+        private Response _batch;
+        private int _offset;
+        private TOut? _current;
 
-        int id = await SendRequestAsync(op, payload, hasPayload, sink, token).ConfigureAwait(false);
-
-        try
+        public IAsyncEnumerator<TOut?> GetAsyncEnumerator(CancellationToken enumeratorToken = default)
         {
-            // Se libera al salir del try, antes de devolver el sink al pool.
-            using var cancel = token.UnsafeRegister(static (s, t) => ((StreamSink)s!).Cancel(t), sink);
+            // Re-enumeracion: peticion nueva, como un iterador async.
+            if (_opened) return new StreamEnumerable<TIn, TOut>(channel, op, payload, hasPayload, token).GetAsyncEnumerator(enumeratorToken);
 
+            _opened = true;
+
+            // Mismo criterio que [EnumeratorCancellation]: se enlazan solo si ambos pueden cancelar.
+            if (enumeratorToken.CanBeCanceled)
+            {
+                if (!_token.CanBeCanceled) _token = enumeratorToken;
+                else if (_token != enumeratorToken) _token = (_linked = CancellationTokenSource.CreateLinkedTokenSource(_token, enumeratorToken)).Token;
+            }
+
+            return this;
+        }
+
+        public TOut? Current => _current;
+
+        public ValueTask<bool> MoveNextAsync()
+        {
+            if (_done) return new(false);
+            if (_sink is null) return MoveNextSlowAsync(armed: false);
+
+            try
+            {
+                // false = sink armado: esperar antes de volver a leer (un TryRead extra reiniciaria el core con un SetResult en vuelo).
+                return TryNext(_sink, out bool more) ? new(more) : MoveNextSlowAsync(armed: true);
+            }
+            catch (Exception ex)
+            {
+                _done = true;
+                return ValueTask.FromException<bool>(ex);
+            }
+        }
+
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+        private async ValueTask<bool> MoveNextSlowAsync(bool armed)
+        {
+            try
+            {
+                if (_sink is null)
+                {
+                    var sink = channel._streams.TryTake(out var pooled) ? pooled : new();
+                    _id = await channel.SendRequestAsync(op, payload, hasPayload, sink, _token).ConfigureAwait(false);
+                    _sink = sink;
+                    // Se libera en DisposeAsync antes de devolver el sink al pool.
+                    _cancel = _token.UnsafeRegister(static (s, t) => ((StreamSink)s!).Cancel(t), sink);
+                }
+
+                if (armed) await _sink.WaitAsync().ConfigureAwait(false);
+
+                while (!TryNext(_sink, out _)) await _sink.WaitAsync().ConfigureAwait(false);
+
+                return !_done;
+            }
+            catch
+            {
+                _done = true;
+                throw;
+            }
+        }
+
+        /// <summary>true si el resultado ya se conoce (item o fin); false si el sink quedo armado para esperar.</summary>
+        private bool TryNext(StreamSink sink, out bool more)
+        {
             while (true)
             {
-                Response response;
-                while (!sink.TryRead(out response)) await sink.WaitAsync().ConfigureAwait(false);
+                if (_held)
+                {
+                    if (_offset < _batch.Length)
+                    {
+                        // default antes: con ref, MemoryPack rellenaria la instancia ya entregada.
+                        _current = default;
+                        _offset += Deserialize(_batch.Body.AsSpan(_offset, _batch.Length - _offset), ref _current);
+                        return more = true;
+                    }
+
+                    _held = false;
+                    _batch.Dispose();
+                }
+
+                if (!sink.TryRead(out var response)) return more = false;
 
                 if (response.Status is ResponseStatus.Batch)
                 {
-                    using (response)
-                    {
-                        for (int offset = 0; offset < response.Length;)
-                        {
-                            TOut? batchItem = default;
-                            offset += Deserialize(response.Body.AsSpan(offset, response.Length - offset), ref batchItem);
-                            yield return batchItem;
-                        }
-                    }
-
+                    (_batch, _offset, _held) = (response, 0, true);
                     continue;
                 }
 
-                TOut? item;
-
                 using (response)
                 {
-                    if (response.Status is ResponseStatus.StreamEnd) yield break;
+                    if (response.Status is ResponseStatus.StreamEnd)
+                    {
+                        _done = true;
+                        more = false;
+                        return true;
+                    }
 
-                    EnsureSuccess(response);
-
-                    item = Deserialize<TOut>(response.Span);
+                    channel.EnsureSuccess(response);
+                    _current = Deserialize<TOut>(response.Span);
                 }
 
-                yield return item;
+                return more = true;
             }
         }
-        finally
+
+        public ValueTask DisposeAsync()
         {
-            _pending.TryRemove(new(id, sink));
-            sink.Disarm();
-            _streams.Add(sink);
+            _done = true;
+
+            if (_held)
+            {
+                _held = false;
+                _batch.Dispose();
+            }
+
+            if (_sink is { } sink)
+            {
+                _sink = null;
+                _cancel.Dispose();
+                channel._pending.TryRemove(new(_id, sink));
+                sink.Disarm();
+                channel._streams.Add(sink);
+            }
+
+            _linked?.Dispose();
+            _linked = null;
+            return default;
         }
     }
 

@@ -30,6 +30,9 @@ public static partial class Server
     /// <summary>Limite por defecto de peticiones concurrentes por conexion; al llegar se deja de leer el socket (back-pressure TCP).</summary>
     public const int MaxInFlightPerConnection = 256;
 
+    /// <summary>Por defecto TCP/UDS agrupan como Memory: lote hasta 32 KB o hasta que el productor va a esperar. 0 = item a item.</summary>
+    public const int DefaultStreamBatch = int.MaxValue;
+
     internal static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection, BatchPolicy batch = default)
         where THandler : struct, IRequestHandler
     {

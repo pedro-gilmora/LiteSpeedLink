@@ -19,13 +19,16 @@ public class StreamBatchBreakdownBenchmarks
 {
     private TcpListener _tcpServer = null!;
     private TcpConnection _tcp = null!;
+    private Socket _udsServer = null!;
+    private UdsConnection _uds = null!;
 #pragma warning disable CA2252 // QUIC es preview: el banco lo acepta a sabiendas
     private System.Net.Quic.QuicListener _quicServer = null!;
     private QuicConnection _quic = null!;
 
     private const int Items = 1000;
 
-    [Params(0, 8, 64, 256)]
+    // int.MaxValue = solo por bytes (32 KB) o cuando el productor va a esperar, como Memory.
+    [Params(0, 8, 64, 256, int.MaxValue)]
     public int Batch { get; set; }
 
     [Params(false, true)]
@@ -43,18 +46,26 @@ public class StreamBatchBreakdownBenchmarks
         _quicServer = await Server.StartQuicServerAsync(0, handler, () => { }, cert, default, Batch);
         _quic = new DnsEndPoint("localhost", _quicServer.LocalEndPoint.Port).AsQuicConnection(cert);
 
-        await Tcp(); await Quic();
+        string path = Path.Combine(Path.GetTempPath(), $"Breakdown-{Guid.CreateVersion7():N}.sock");
+        _udsServer = Server.StartUdsServer(path, handler, () => { }, streamBatch: Batch);
+        _uds = new UdsConnection(path, coalesceStreams: Coalesce);
+
+        await Tcp(); await Uds(); await Quic();
     }
 
     [GlobalCleanup]
     public async Task Cleanup()
     {
         await _tcp.DisposeAsync(); _tcpServer.Stop();
+        await _uds.DisposeAsync(); _udsServer.Dispose();
         await _quic.DisposeAsync(); await _quicServer.DisposeAsync();
     }
 
     [Benchmark]
     public Task<int> Tcp() => Drain(_tcp.EnumerateAsync<int, int>(0, Items));
+
+    [Benchmark]
+    public Task<int> Uds() => Drain(_uds.EnumerateAsync<int, int>(0, Items));
 
     // QUIC no tiene lector multiplexado: Coalesce no aplica y sus filas repiten la medicion.
     [Benchmark]

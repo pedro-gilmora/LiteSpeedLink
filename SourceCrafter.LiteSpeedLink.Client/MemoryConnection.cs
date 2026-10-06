@@ -8,7 +8,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Threading.Channels;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
@@ -20,19 +19,19 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
     private readonly int _timeout = timeout;
     public System.Text.Encoding Encoding { get; } = encoding ??= System.Text.Encoding.Default;
     private readonly Lock _lock = new();
-    private RpcBuffer? _rpc;
+    private MemClient? _rpc;
 
-    private RpcBuffer MemoryRpc
+    private MemClient MemoryRpc
     {
         get
         {
             lock (_lock)
             {
-                if (_rpc?.DisposeFinished is null or true)
+                if (_rpc is not { IsAlive: true })
                 {
-                    // Un solo RpcBuffer multicliente por contextId: el cliente crea su anillo de respuestas y se registra solo.
+                    // Un solo host multicliente por contextId: el cliente crea su anillo de respuestas y se registra solo.
                     _rpc?.Dispose();
-                    try { _rpc = RpcBuffer.Connect(_contextId); }
+                    try { _rpc = MemClient.Connect(_contextId); }
                     catch (FileNotFoundException ex) { throw new TimeoutException($"Memory server '{_contextId}' did not answer.", ex); }
                 }
 
@@ -47,7 +46,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return ReadResponse<TOut>(MemoryRpc.Send((op, payload), WriteRequest, _timeout, token));
+        return MemoryRpc.Call((op, payload), WriteRequest, ReadValue<TOut>, this, _timeout, token);
     }
 
     public TOut? Get<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -55,7 +54,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return ReadResponse<TOut>(MemoryRpc.RemoteRequest(SerializeOpId(op), _timeout, token));
+        return MemoryRpc.Call(op, WriteOp, ReadValue<TOut>, this, _timeout, token);
     }
 
     public bool Send<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
@@ -64,15 +63,15 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        ReadResponse<byte>(MemoryRpc.Send((op, payload), WriteRequest, _timeout, token));
+        MemoryRpc.Call((op, payload), WriteRequest, ReadValue<byte>, this, _timeout, token);
         return true;
     }
 
     public ReadOnlyMemory<byte> GetRaw(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
-        ReadRawResponse(MemoryRpc.Send((op, request), WriteRawRequest, _timeout, token));
+        MemoryRpc.Call((op, request), WriteRawRequest, ReadRaw, this, _timeout, token);
 
-    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
-        ReadRawResponse(await MemoryRpc.SendAsync((op, request), WriteRawRequest, _timeout, token).ConfigureAwait(false));
+    public ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
+        MemoryRpc.CallAsync((op, request), WriteRawRequest, ReadRaw, this, _timeout, token);
 
     private static void WriteRawRequest(IBufferWriter<byte> writer, (long op, ReadOnlyMemory<byte> request) state)
     {
@@ -81,23 +80,18 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         writer.Write(state.request.Span);
     }
 
-    private ReadOnlyMemory<byte> ReadRawResponse(RpcResponse response)
-    {
-        if (!response.Success) throw new TimeoutException($"No response from memory server '{_contextId}'.");
-
-        if (response.Data is not { Length: > 0 } data) throw new InvalidDataException("Empty response.");
-
-        return (ResponseStatus)data[0] is ResponseStatus.Success
-            ? data.AsMemory(Framing.StatusSize)
-            : throw ResponseError.Create((ResponseStatus)data[0], $"'{_contextId}'", data.AsSpan(Framing.StatusSize));
-    }
+    // La respuesta solo es valida durante la lectura (puede apuntar al nodo): el raw se copia.
+    private static ReadOnlyMemory<byte> ReadRaw(object? c, ReadOnlySpan<byte> response) =>
+        (ResponseStatus)Status(response) is ResponseStatus.Success
+            ? response[Framing.StatusSize..].ToArray()
+            : throw ResponseError.Create((ResponseStatus)response[0], $"'{((MemoryConnection)c!)._contextId}'", response[Framing.StatusSize..]);
 
     public bool Send(
         long op,
         CancellationToken token = default,
         [CallerMemberName] string name = "")
     {
-        ReadResponse<byte>(MemoryRpc.RemoteRequest(SerializeOpId(op), _timeout, token));
+        MemoryRpc.Call(op, WriteOp, ReadValue<byte>, this, _timeout, token);
         return true;
     }
 
@@ -115,24 +109,24 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         CancellationToken token = default,
         [CallerMemberName] string name = "")
     {
-        return OpenStream<TOut>(SerializeOpId(op), token).ToBlockingEnumerable(token);
+        return OpenStream<TOut, long>(op, WriteOp, token).ToBlockingEnumerable(token);
     }
 
-    public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+    public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op,
          TIn payload,
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return ReadResponse<TOut>(await MemoryRpc.SendAsync((op, payload), WriteRequest, _timeout, token).ConfigureAwait(false));
+        return MemoryRpc.CallAsync((op, payload), WriteRequest, ReadValue<TOut>, this, _timeout, token);
     }
 
-    public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+    public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op,
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        return ReadResponse<TOut>(await MemoryRpc.RemoteRequestAsync(SerializeOpId(op), _timeout, token).ConfigureAwait(false));
+        return MemoryRpc.CallAsync(op, WriteOp, ReadValue<TOut>, this, _timeout, token);
     }
 
     public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
@@ -141,7 +135,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
          CancellationToken token = default,
          [CallerMemberName] string name = "")
     {
-        ReadResponse<byte>(await MemoryRpc.SendAsync((op, payload), WriteRequest, _timeout, token).ConfigureAwait(false));
+        await MemoryRpc.CallAsync((op, payload), WriteRequest, ReadValue<byte>, this, _timeout, token).ConfigureAwait(false);
     }
 
     public async ValueTask SendAsync(
@@ -149,7 +143,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         CancellationToken token = default,
         [CallerMemberName] string name = "")
     {
-        ReadResponse<byte>(await MemoryRpc.RemoteRequestAsync(SerializeOpId(op), _timeout, token).ConfigureAwait(false));
+        await MemoryRpc.CallAsync(op, WriteOp, ReadValue<byte>, this, _timeout, token).ConfigureAwait(false);
     }
 
     public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
@@ -166,68 +160,60 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         CancellationToken token = default,
         [CallerMemberName] string name = "")
     {
-        return OpenStream<TOut>(SerializeOpId(op), token);
+        return OpenStream<TOut, long>(op, WriteOp, token);
     }
 
     /// <summary>
-    /// Envia la peticion; los elementos llegan por el canal principal dirigidos a ella (<c>StreamItem</c>) y la respuesta
-    /// cierra el stream. Un fallo (excepcion, <c>Failed</c>, <c>NotFound</c>) termina el enumerable con error.
+    /// Envia la peticion; los lotes llegan como <c>Item</c> dirigidos a ella y la respuesta cierra el stream. Un fallo
+    /// (excepcion, <c>Failed</c>, <c>NotFound</c>) o el watchdog de inactividad (<c>_timeout</c> sin items, rearmado por
+    /// cada lote) terminan el enumerable con error; cancelar o abandonar la enumeracion detiene al productor del host.
     /// </summary>
-    // ponytail: la respuesta llega al final del stream; un timeout de RpcBuffer no se trata como fallo (streams largos).
-    private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-        (byte[] request, CancellationToken token) =>
-        OpenStream<TOut, byte[]>((0, request), static (w, s) => w.Write(s.payload), token);
-
     private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
         ((long op, TIn payload) request, CancellationToken token) =>
-        OpenStream<TOut, TIn>(request, WriteRequest, token);
+        OpenStream<TOut, (long op, TIn payload)>(request, WriteRequest, token);
 
-    private async IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, TState>
-        ((long op, TState payload) request, Action<IBufferWriter<byte>, (long op, TState payload)> write, [EnumeratorCancellation] CancellationToken token)
+    private IAsyncEnumerable<TOut> OpenStream<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, TState>
+        (TState request, Action<IBufferWriter<byte>, TState> write, CancellationToken token) =>
+        new StreamEnumerable<TOut, TState>(this, request, write, token);
+
+    /// <summary>
+    /// Unico objeto por llamada (como el de un iterador async); el resto (enumerador, buffers, slot) es pooled. Los lotes
+    /// <c>[int32 len][item]...</c> (ver MemoryRequestContext.Append) se copian en el hilo lector y se deserializan en el
+    /// del consumidor. Disponer antes del final (break/cancel) detiene al productor del host; un doble Dispose es inocuo.
+    /// </summary>
+    private sealed class StreamEnumerable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, TState>
+        (MemoryConnection connection, TState request, Action<IBufferWriter<byte>, TState> write, CancellationToken token)
+        : IAsyncEnumerable<TOut>, IAsyncEnumerator<TOut>
     {
-        var buffer = Channel.CreateUnbounded<TOut>(new() { SingleReader = true, SingleWriter = true });
+        private MemPullEnumerator<TOut, byte>? _e;
+        private bool _opened;
 
-        // Timeout de inactividad: sin el, un mensaje perdido cuelga el stream para siempre. Por elemento solo se anota
-        // la hora (sin reprogramar timers); un timer periodico cancela si pasa `_timeout` sin recibir nada.
-        using var idle = CancellationTokenSource.CreateLinkedTokenSource(token);
-        long last = Environment.TickCount64;
-        using var watchdog = new Timer(_ =>
+        public IAsyncEnumerator<TOut> GetAsyncEnumerator(CancellationToken enumeratorToken = default)
         {
-            if (Environment.TickCount64 - Volatile.Read(ref last) > _timeout) try { idle.Cancel(); } catch (ObjectDisposedException) { }
-        }, null, _timeout, _timeout);
+            if (_opened) // re-enumeracion: una peticion nueva
+                return new StreamEnumerable<TOut, TState>(connection, request, write, token).GetAsyncEnumerator(enumeratorToken);
 
-        _ = MemoryRpc.RemoteStreamAsync(request, write, payload =>
+            _opened = true;
+            _e = MemPullEnumerator<TOut, byte>.Open(connection.MemoryRpc, request, write, ReadItem<TOut>, ReadValue<byte>, connection,
+                records: true, idleTimeoutMs: connection._timeout, cancellationToken: token, enumeratorToken: enumeratorToken);
+            return this;
+        }
+
+        public TOut Current => _e!.Current;
+
+        public ValueTask<bool> MoveNextAsync() =>
+            _e?.MoveNextAsync() ?? throw new ObjectDisposedException(nameof(StreamEnumerable<TOut, TState>));
+
+        public ValueTask DisposeAsync()
         {
-            Volatile.Write(ref last, Environment.TickCount64);
-            // Lote [int32 len][item]... (ver MemoryRequestContext.Append)
-            while (payload.Length > 0)
-            {
-                int len = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(payload);
-                buffer.Writer.TryWrite(Deserialize<TOut>(payload.Slice(sizeof(int), len))!);
-                payload = payload[(sizeof(int) + len)..];
-            }
-        }, idle.Token).ContinueWith((t, s) =>
-        {
-            var writer = (ChannelWriter<TOut>)s!;
-
-            try
-            {
-                ReadResponse<byte>(t.Result);
-                writer.TryComplete();
-            }
-            catch (Exception ex)
-            {
-                writer.TryComplete(ex is AggregateException a ? a.GetBaseException() : ex);
-            }
-        }, buffer.Writer, TaskContinuationOptions.ExecuteSynchronously);
-
-        // ReadAllAsync relanza la excepcion con la que se completo el canal (fallo de la peticion).
-        // Drena en lote: un solo despertar por rafaga en vez de uno por item.
-        var reader = buffer.Reader;
-        while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
-            while (reader.TryRead(out var item))
-                yield return item;
+            var e = _e;
+            _e = null;
+            return e?.DisposeAsync() ?? default;
+        }
     }
+
+    private static TOut ReadItem<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(object? _, ReadOnlySpan<byte> item) =>
+        Deserialize<TOut>(item)!;
 
     /// <summary>Escribe <c>[opId][cuerpo]</c> directamente en el nodo de memoria compartida.</summary>
     private static void WriteRequest<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(IBufferWriter<byte> writer, (long op, TIn payload) state)
@@ -238,45 +224,23 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         Serialize(writer, state.payload);
     }
 
-    [ThreadStatic] private static ArrayBufferWriter<byte>? _requestWriter;
-
-    /// <summary>Construye <c>[opId][cuerpo]</c> sobre un buffer por hilo; sin asignar: RpcBuffer lo copia antes de devolver, asi que solo es valido hasta la siguiente llamada del hilo.</summary>
-    private static ReadOnlyMemory<byte> SerializePayload<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn payload)
+    private static void WriteOp(IBufferWriter<byte> writer, long op)
     {
-        var writer = _requestWriter ??= new(256);
-
-        writer.ResetWrittenCount();
-
         Framing.WriteOpId(writer.GetSpan(Framing.OpIdSize), op);
         writer.Advance(Framing.OpIdSize);
-
-        Serialize(writer, payload);
-
-        return writer.WrittenMemory;
     }
 
-    private TOut? ReadResponse<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(RpcResponse response)
-    {
-        if (!response.Success) throw new TimeoutException($"No response from memory server '{_contextId}'.");
+    private static byte Status(ReadOnlySpan<byte> response) =>
+        response.Length > 0 ? response[0] : throw new InvalidDataException("Empty response.");
 
-        if (response.Data is not { Length: > 0 } data) throw new InvalidDataException("Empty response.");
-
-        return (ResponseStatus)data[0] switch
+    /// <summary>Lee <c>[estado][cuerpo]</c> directamente del nodo (hilo lector): sin array de respuesta.</summary>
+    private static TOut? ReadValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(object? c, ReadOnlySpan<byte> response) =>
+        (ResponseStatus)Status(response) switch
         {
-            ResponseStatus.Success => Deserialize<TOut>(data.AsSpan(Framing.StatusSize)),
+            ResponseStatus.Success => Deserialize<TOut>(response[Framing.StatusSize..]),
             ResponseStatus.StreamEnd => default,
-            var status => throw ResponseError.Create(status, $"'{_contextId}'", data.AsSpan(Framing.StatusSize))
+            var status => throw ResponseError.Create(status, $"'{((MemoryConnection)c!)._contextId}'", response[Framing.StatusSize..])
         };
-    }
-
-    private static byte[] SerializeOpId(long op)
-    {
-        var request = new byte[Framing.OpIdSize];
-
-        Framing.WriteOpId(request, op);
-
-        return request;
-    }
 
     public void Dispose()
     {

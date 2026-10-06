@@ -12,13 +12,13 @@ namespace LiteSpeedLink.Tests;
 [SupportedOSPlatform("windows")]
 public class MemoryStreamBatchingTest
 {
-    static Task<byte[]> Handle(long op, MemoryRequestContext ctx, CancellationToken token) => op switch
+    static ValueTask<ResponseStatus> Handle(long op, MemoryRequestContext ctx, CancellationToken token) => op switch
     {
-        1 => Task.FromResult(ctx.Yield(Enumerable.Range(0, ctx.Get<int>()))),
-        3 => Task.FromResult(ctx.Yield(Enumerable.Range(1, 3).Select(i => Enumerable.Repeat((byte)i, 100_000).ToArray()))),
-        4 => Task.FromResult(ctx.Yield(Enumerable.Range(ctx.Get<int>() * 1000, 500))),
+        1 => ValueTask.FromResult(ctx.Yield(Enumerable.Range(0, ctx.Get<int>()))),
+        3 => ValueTask.FromResult(ctx.Yield(Enumerable.Range(1, 3).Select(i => Enumerable.Repeat((byte)i, 100_000).ToArray()))),
+        4 => ValueTask.FromResult(ctx.Yield(Enumerable.Range(ctx.Get<int>() * 1000, 500))),
         5 => ctx.Yield(Stall()),
-        _ => Task.FromResult(ctx.NotFound())
+        _ => ValueTask.FromResult(ctx.NotFound())
     };
 
     static async IAsyncEnumerable<int> Stall()
@@ -93,7 +93,7 @@ public class MemoryStreamBatchingTest
             var sw = Stopwatch.StartNew();
             var drain = async () => await Drain(client.EnumerateAsync<int>(5));
 
-            await drain.Should().ThrowAsync<OperationCanceledException>();
+            await drain.Should().ThrowAsync<TimeoutException>();
             sw.ElapsedMilliseconds.Should().BeLessThan(2500, "el watchdog corta antes de que el productor reanude (3 s)");
         }
     }

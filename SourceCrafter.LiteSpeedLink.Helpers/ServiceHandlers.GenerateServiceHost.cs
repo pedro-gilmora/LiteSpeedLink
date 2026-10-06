@@ -89,7 +89,7 @@ public partial class ServiceHandlersGenerator
                   null),
         };
 
-        var handlerReturnType = connectionType is 0 ? "byte[]" : "global::SourceCrafter.LiteSpeedLink.ResponseStatus";
+        var handlerReturnType = "global::SourceCrafter.LiteSpeedLink.ResponseStatus";
 
         var handlerType = context.Replace("Context", "Handler");
 
@@ -614,7 +614,7 @@ public partial class ").Append(typeName).Append(@"
 
         if (handlerResultType.HasValue)
         {
-            hostCode.Insert(handlerResultType.Value, "byte[]");
+            hostCode.Insert(handlerResultType.Value, handlerReturnType);
         }
 
         hostCode.Insert(onFinalizePoint, containerDisposability switch
