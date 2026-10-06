@@ -15,9 +15,10 @@ using System.Reflection.Metadata;
 using System.Text;
 
 
+public sealed class ServiceClientGenerator : ServiceHandlersGenerator;
+
 public partial class ServiceHandlersGenerator
 {
-    const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
     const string DedicatedStreamAttr = "SourceCrafter.LiteSpeedLink.DedicatedStreamAttribute";
 
     private static void GenerateServiceClient(
@@ -563,11 +564,6 @@ public partial class ").Append(typeShortName).Append(@"
                 .Append(Call("EnumerateAsync", ", @__token"));
 
         return true;
-    }
-
-    static bool Exchange(ref bool value)
-    {
-        return ((value, _) = (true, value)).Item2;
     }
 }
 

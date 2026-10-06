@@ -1,13 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project>
 
+	<!--
+		Comun a los generadores parciales de host (ServerGenerator) y cliente (ClientGenerator).
+		El generador de DI solo sondea los ensamblados cuyo nombre empieza por
+		'SourceCrafter.DependencyInjection.Partial'; cada proyecto fija su AssemblyName con ese prefijo.
+	-->
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
-		<!--
-			El generador de DI solo sondea los ensamblados cuyo nombre empieza por
-			'SourceCrafter.DependencyInjection.Partial'. El nombre del proyecto se conserva;
-			lo que tiene que coincidir es el del ensamblado.
-		-->
-		<AssemblyName>SourceCrafter.DependencyInjection.Partial.LiteSpeedLink</AssemblyName>
 		<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 		<LangVersion>latest</LangVersion>
 		<Nullable>enable</Nullable>
@@ -31,7 +30,6 @@
 			))
 		</PackageVersion>
 		<Company>AsereHighDev</Company>
-		<Description>Generator for server and client generator using QUIC, TCP and UDP</Description>
 		<PackageReadmeFile>ReadMe.md</PackageReadmeFile>
 		<Configurations>Debug;Release;DEBUG_SG</Configurations>
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
@@ -56,6 +54,12 @@
 		</Compile>-->
 		<Compile Include="D:\Code\SourceCrafter.DependencyInjection\Solution\Metadata\*.cs">
 			<Link>Metadata\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Compile>
+		<Compile Include="$(MSBuildThisFileDirectory)..\LiteSpeedLink.Abstractions\Helpers.cs">
+			<Link>Shared\Abstractions.Helpers.cs</Link>
+		</Compile>
+		<Compile Include="$(MSBuildThisFileDirectory)*.cs">
+			<Link>Shared\%(Filename)%(Extension)</Link>
 		</Compile>
 	</ItemGroup>
 

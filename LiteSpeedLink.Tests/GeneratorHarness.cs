@@ -30,7 +30,8 @@ static class GeneratorHarness
 
     static readonly Lazy<IIncrementalGenerator> Generator = new(() =>
     {
-        Assembly.LoadFrom(Meta("LslPartial"));
+        Assembly.LoadFrom(Meta("LslServerPartial"));
+        Assembly.LoadFrom(Meta("LslClientPartial"));
 
         var type = Assembly.LoadFrom(Meta("DiGenerator")).GetTypes()
             .First(t => typeof(IIncrementalGenerator).IsAssignableFrom(t) && !t.IsAbstract);

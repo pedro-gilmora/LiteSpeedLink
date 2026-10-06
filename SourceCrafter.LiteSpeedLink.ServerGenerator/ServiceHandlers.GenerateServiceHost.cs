@@ -12,6 +12,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
+public sealed class ServiceHostGenerator : ServiceHandlersGenerator;
+
 public partial class ServiceHandlersGenerator
 {
     private const string IServiceUnit = "global::SourceCrafter.LiteSpeedLink.IServiceUnit";
@@ -678,25 +680,6 @@ public partial class ").Append(typeName).Append(@"
         return services.TryGetValue((resolvedLifetime, exportTypeFullName, key), out service!)
             || (key.Length is 0
                 && services.TryGetValue((resolvedLifetime, exportTypeFullName, param.Name), out service!));
-    }
-
-    /// <summary>
-    /// Identificador estable de una operación. Debe producir el mismo valor en cliente y host,
-    /// independientemente de la máquina, la cultura o el codepage ANSI por defecto.
-    /// </summary>
-    public static long GetServiceId(string input)
-    {
-        const ulong offsetBasis = 14695981039346656037;
-        const ulong prime = 1099511628211;
-
-        var hash = offsetBasis;
-
-        foreach (var b in Encoding.UTF8.GetBytes(input))
-        {
-            hash = (hash ^ b) * prime;
-        }
-
-        return unchecked((long)hash);
     }
 
     internal const string

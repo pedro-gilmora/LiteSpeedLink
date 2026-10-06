@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SourceCrafter.DependencyInjection.Generation;
 
@@ -23,13 +23,41 @@ using System.Threading;
 /// <para>
 /// Se descubre por el nombre del ensamblado, que debe empezar por
 /// <c>SourceCrafter.DependencyInjection.Partial</c> (ver <c>AssemblyName</c> en el csproj).
+/// Es la base comun de <c>ServiceHostGenerator</c> (ServerGenerator) y <c>ServiceClientGenerator</c>
+/// (ClientGenerator, con <c>CLIENT_PARTIAL</c>): el registro de DI desduplica por nombre de tipo, asi que
+/// cada ensamblado necesita el suyo.
 /// </para>
 /// </summary>
-public sealed partial class ServiceHandlersGenerator : ServiceProviderPartial
+public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
 {
     private const string ServiceHostAttr = "LiteSpeedLink.Abstractions.Internals.ServiceHostAttribute";
     private const string ServiceClientAttr = "LiteSpeedLink.Abstractions.Internals.ServiceClientAttribute";
     private const string ServiceUnitAttr = "LiteSpeedLink.Abstractions.Internals.ServiceUnitAttribute<TService>";
+    private const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
+
+    /// <summary>
+    /// Identificador estable de una operación. Debe producir el mismo valor en cliente y host,
+    /// independientemente de la máquina, la cultura o el codepage ANSI por defecto.
+    /// </summary>
+    public static long GetServiceId(string input)
+    {
+        const ulong offsetBasis = 14695981039346656037;
+        const ulong prime = 1099511628211;
+
+        var hash = offsetBasis;
+
+        foreach (var b in System.Text.Encoding.UTF8.GetBytes(input))
+        {
+            hash = (hash ^ b) * prime;
+        }
+
+        return unchecked((long)hash);
+    }
+
+    static bool Exchange(ref bool value)
+    {
+        return ((value, _) = (true, value)).Item2;
+    }
 
     public override void AnalyzeContainer(
         ServiceProviderInfo container,
@@ -44,17 +72,21 @@ public sealed partial class ServiceHandlersGenerator : ServiceProviderPartial
             // El contenedor es el propio host o cliente: el atributo se lee de su simbolo, no
             // de un SyntaxProvider aparte. Esto tambien elimina la comprobacion de unicidad
             // (LITSPLNK001): un contenedor no puede declararse dos veces.
-            if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection))
-            {
-                var isLocal = ResolveLocal(container, ref hostConnection);
-                GenerateServiceHost(container, contribution, hostConnection, isLocal, cancelToken);
-            }
+
+#if CLIENT_PARTIAL
 
             if (TryGetConnectionType(container.ContainerType, ServiceClientAttr, out var clientConnection))
             {
                 var isLocal = ResolveLocal(container, ref clientConnection);
                 GenerateServiceClient(container, contribution, clientConnection, isLocal, cancelToken);
             }
+#else
+            if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection))
+            {
+                var isLocal = ResolveLocal(container, ref hostConnection);
+                GenerateServiceHost(container, contribution, hostConnection, isLocal, cancelToken);
+            }
+#endif
         }
         catch (Exception e)
         {

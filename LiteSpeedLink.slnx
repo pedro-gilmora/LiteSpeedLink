@@ -7,6 +7,13 @@
   <Folder Name="/Generals/">
     <File Path="PLAN.md" />
   </Folder>
+  <Folder Name="/Generators/Shared/">
+    <File Path="SourceCrafter.LiteSpeedLink.Helpers/Generator.props" />
+    <File Path="SourceCrafter.LiteSpeedLink.Helpers/Helpers.cs" />
+    <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlers.Pipelines.cs" />
+    <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlers.Raw.cs" />
+    <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlersGenerator.cs" />
+  </Folder>
   <Folder Name="/Tests/">
     <Project Path="Application.Contracts/Application.Contracts.csproj" />
     <Project Path="LiteSpeedLink.Benchmarks/LiteSpeedLink.Benchmarks.csproj" />
@@ -17,7 +24,8 @@
     <Project Path="D:\Code\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
     <Project Path="LiteSpeedLink.Abstractions/LiteSpeedLink.Abstractions.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj" />
-    <Project Path="SourceCrafter.LiteSpeedLink.Helpers/SourceCrafter.LiteSpeedLink.Helpers.csproj" />
+    <Project Path="SourceCrafter.LiteSpeedLink.ClientGenerator/SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" />
+    <Project Path="SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj" />
   </Folder>
 </Solution>

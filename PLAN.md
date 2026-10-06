@@ -11,7 +11,9 @@ añadir lo aprendido en *Trampas conocidas* y actualizar *Siguiente paso*.
 |---|---|
 | `LiteSpeedLink.Abstractions` | Contratos compartidos: `ResponseStatus` (incl. `Batch`), `Pipeline.cs` (interfaces + atributos de procesadores + `[Stream(Batch, MaxDelayMs)]`). |
 | `Internals` | `Framing`/`FrameWriter`, enlazados (`<Compile Include>`) en Client, Server, Tests y Benchmarks; no es proyecto ni API pública. |
-| `SourceCrafter.LiteSpeedLink.Helpers` | **Generador**: `ServiceHandlers.GenerateServiceHost.cs` (host, `__Handler`, políticas de stream), `ServiceHandlers.GenerateServiceClient.cs` (cliente), `ServiceHandlers.Raw.cs` (lectores/escritores raw por operación), `ServiceHandlers.Pipelines.cs` (etapas y diagnósticos). |
+| `SourceCrafter.LiteSpeedLink.Helpers` | **Código común de generadores** (enlazado vía `Generator.props`): base abstracta `ServiceHandlersGenerator` (`AnalyzeContainer` con `#if CLIENT_PARTIAL`, `GetServiceId`), `ServiceHandlers.Raw.cs` (lectores/escritores raw por operación), `ServiceHandlers.Pipelines.cs` (etapas y diagnósticos), `Helpers.cs`. |
+| `SourceCrafter.LiteSpeedLink.ServerGenerator` | **Generador host** (`ServiceHostGenerator`, ensamblado `SourceCrafter.DependencyInjection.Partial.LiteSpeedLink.Server`): `ServiceHandlers.GenerateServiceHost.cs` (host, `__Handler`, políticas de stream). |
+| `SourceCrafter.LiteSpeedLink.ClientGenerator` | **Generador cliente** (`ServiceClientGenerator`, `CLIENT_PARTIAL`, ensamblado `...Partial.LiteSpeedLink.Client`): `ServiceHandlers.GenerateServiceClient.cs`. |
 | `SourceCrafter.LiteSpeedLink.Client` / `.Server` | Transportes: `MemoryConnection`, `Tcp/Uds/Udp/QuicConnection` (`StreamConnection` + `MultiplexedChannel` para TCP/UDS), `Server.*` (`Server.Pipes` compartido). |
 | `Application.Contracts` | Contratos de ejemplo `IAuth` y `IStreams` (8 formas de stream) + pipelines de muestra (`TrimName`, `Upper`, `Bracket`, `Tag`, `Exclaim`, `ParseInt`, `IntToString`). |
 | `LiteSpeedLink` | App de muestra: `TextService`/`TextServiceClient` (Memory), `TransportSamples.cs` (Udp/Tcp/Quic), `StreamService`, `AuthService`, `Program.cs`. |

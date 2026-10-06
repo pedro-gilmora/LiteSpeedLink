@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\SourceCrafter.LiteSpeedLink.Helpers\Generator.props" />
+
+	<PropertyGroup>
+		<AssemblyName>SourceCrafter.DependencyInjection.Partial.LiteSpeedLink.Client</AssemblyName>
+		<Description>Client generator for LiteSpeedLink services using Memory, UDS, QUIC, TCP and UDP</Description>
+		<DefineConstants>$(DefineConstants);CLIENT_PARTIAL</DefineConstants>
+	</PropertyGroup>
+
+</Project>

@@ -84,7 +84,8 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\Application.Contracts\Application.Contracts.csproj" />
-		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Helpers\SourceCrafter.LiteSpeedLink.Helpers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.ServerGenerator\SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.ClientGenerator\SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
 		<Compile Include="..\LiteSpeedLink.Abstractions\Internals\*.cs">

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\SourceCrafter.LiteSpeedLink.Helpers\Generator.props" />
+
+	<PropertyGroup>
+		<AssemblyName>SourceCrafter.DependencyInjection.Partial.LiteSpeedLink.Server</AssemblyName>
+		<Description>Host generator for LiteSpeedLink services using Memory, UDS, QUIC, TCP and UDP</Description>
+	</PropertyGroup>
+
+</Project>

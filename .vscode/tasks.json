@@ -7,7 +7,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/SourceCrafter.LiteSpeedLink.Helpers/SourceCrafter.LiteSpeedLink.Helpers.csproj",
+        "${workspaceFolder}/SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj",
         "--configuration",
         "DEBUG_SG",
         "--no-restore"
