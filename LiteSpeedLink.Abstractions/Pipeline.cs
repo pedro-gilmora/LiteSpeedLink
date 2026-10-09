@@ -65,6 +65,9 @@ namespace SourceCrafter.LiteSpeedLink
     {
         public int Batch { get; set; }
         public int MaxDelayMs { get; set; }
+
+        /// <summary>Watchdog de inactividad del cliente de memoria; 0 = timeout de la conexion, -1 (Timeout.Infinite) = suscripciones que pueden callar.</summary>
+        public int IdleTimeoutMs { get; set; }
     }
 
     /// <summary>Unaria con stream QUIC propio en lugar del pool (respuestas grandes, ~1 MB+). Otros transportes la ignoran.</summary>

@@ -9,6 +9,16 @@
     <Folder Name="/docs/" />
   </Folder>
   <Folder Name="/Generators/" />
+  <Folder Name="/Samples/">
+    <File Path="samples/Directory.Build.props" />
+    <File Path="samples/README.md" />
+    <Project Path="samples/Chat/Chat.csproj" />
+  </Folder>
+  <Folder Name="/Samples/Jobs/">
+    <Project Path="samples/Jobs/Jobs.Agent/Jobs.Agent.csproj" />
+    <Project Path="samples/Jobs/Jobs.Cli/Jobs.Cli.csproj" />
+    <Project Path="samples/Jobs/Jobs.Contracts/Jobs.Contracts.csproj" />
+  </Folder>
   <Folder Name="/Generators/Shared/">
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/Generator.props" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/Helpers.cs" />

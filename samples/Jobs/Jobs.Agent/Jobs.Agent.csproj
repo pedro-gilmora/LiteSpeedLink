@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+	<ItemGroup>
+		<ProjectReference Include="..\Jobs.Contracts\Jobs.Contracts.csproj" />
+		<PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+		<!--<PackageReference Include="SourceCrafter.LiteSpeedLink.Server" Version="$(LiteSpeedLinkVersion)" />
+		<PackageReference Include="SourceCrafter.LiteSpeedLink.ServerGenerator" Version="$(LiteSpeedLinkVersion)" PrivateAssets="all" />-->
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.142" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
+		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.ServerGenerator\SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+	</ItemGroup>
+
+</Project>

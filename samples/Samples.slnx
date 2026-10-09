@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/Chat/">
+	<Project Path="Chat/Chat.csproj" />
+  </Folder>
+  <Folder Name="/Jobs/">
+	<Project Path="Jobs/Jobs.Contracts/Jobs.Contracts.csproj" />
+	<Project Path="Jobs/Jobs.Agent/Jobs.Agent.csproj" />
+	<Project Path="Jobs/Jobs.Cli/Jobs.Cli.csproj" />
+  </Folder>
+</Solution>

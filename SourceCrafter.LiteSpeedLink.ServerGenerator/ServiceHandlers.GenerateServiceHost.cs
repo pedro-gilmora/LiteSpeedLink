@@ -241,8 +241,8 @@ public partial class ").Append(typeName).Append(@"
             // lateral que antes evitaba retener ISymbol.
             if (dependency.ExportType is not { } exportType) continue;
 
-            // Los pipelines registrados se consumen desde los handlers; no son operaciones remotas.
-            if (exportType is INamedTypeSymbol namedExport && TryGetStage(namedExport, out _)) continue;
+            // Solo los contratos (IServiceUnit) son operaciones remotas; pipelines y demas dependencias se consumen desde los handlers.
+            if (!exportType.AllInterfaces.Any(i => i.GlobalNamespaced == IServiceUnit)) continue;
 
             foreach (var member in exportType.GetMembers())
             {
@@ -597,13 +597,15 @@ public partial class ").Append(typeName).Append(@"
                     continue;
                 }
 
-                bool isStream = connectionType > 1 && returnsType && IsStream(method.ReturnType);
+                bool isStream = connectionType != 1 && returnsType && IsStream(method.ReturnType),
+                    // ponytail: el host de memoria es sync; un stream async bloquea un hilo del pool mientras dure. Mejora: handler async (StartMemoryServerAsync).
+                    blockOnStream = isStream && connectionType == 0 && ((INamedTypeSymbol)method.ReturnType).Name == "IAsyncEnumerable";
 
-                hostCode.Append("return ").Append(connectionType == 0 ? "__context.Return(" : isStream ? "await __context.EnumerateAsync(" : "await __context.ReturnAsync(");
+                hostCode.Append("return ").Append(connectionType == 0 ? isStream ? "__context.Yield(" : "__context.Return(" : isStream ? "await __context.EnumerateAsync(" : "await __context.ReturnAsync(");
 
                 if (isStream)
                 {
-                    if (method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "SourceCrafter.LiteSpeedLink.StreamAttribute") is { } streamAttr)
+                    if (connectionType > 1 && method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "SourceCrafter.LiteSpeedLink.StreamAttribute") is { } streamAttr)
                     {
                         int batch = 0, delay = 0;
                         foreach (var arg in streamAttr.NamedArguments)
@@ -650,7 +652,7 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append("false");
                 }
 
-                hostCode.Append(connectionType > 0 ? ").ConfigureAwait(false);" : ");").Append(@"
+                hostCode.Append(connectionType > 0 ? ").ConfigureAwait(false);" : blockOnStream ? ").GetAwaiter().GetResult();" : ");").Append(@"
         }
 ");
             }

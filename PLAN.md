@@ -787,6 +787,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 ## Politica de stream como tipo (SourceGen #1b) - implementado
 
 - [Stream(Batch, MaxDelayMs)] -> el host emite EnumerateAsync<T, TPolicy> con struct __Policy_B{n}_D{ms} (uno por configuracion) o Unbatched; sin atributo, politica del servidor.
+- [x] [Stream(IdleTimeoutMs)] -> el cliente de memoria generado pasa el watchdog como constante a `MemoryConnection.EnumerateAsync(op, payload, idleTimeoutMs, token)`; 0 = timeout de la conexion, -1 = suscripciones silenciosas (Chat.Join). Antes un Join callado 5 s moria con TimeoutException. Test: `MemoryStreamHostTest.IdleTimeoutFromContractReachesMemoryClient`.
 - POC SourceGenPocBenchmarks.Policy_* (1000 int): campo runtime 15.1 us -> tipo 3.0 us (sin plazo, el JIT elimina Stopwatch); con plazo 14.2 -> 13.9 us (manda el reloj). 0 B ambos.
 - Cobertura: IStreams/StreamService (8 formas sync/async x default/unbatched/batched/timed) + StreamPolicyTypeTest.
 - Cliente: sin cambios; solo decodifica Batch, no decide politica.

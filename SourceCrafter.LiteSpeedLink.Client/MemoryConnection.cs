@@ -155,6 +155,15 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         return OpenStream<TOut, TIn>((op, payload), token);
     }
 
+    /// <summary>Como <see cref="EnumerateAsync{TIn, TOut}(long, TIn, CancellationToken, string)"/> con el watchdog fijado por el contrato ([Stream(IdleTimeoutMs)]).</summary>
+    public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn payload, int idleTimeoutMs, CancellationToken token = default) =>
+        new StreamEnumerable<TOut, (long op, TIn payload)>(this, (op, payload), WriteRequest, token, idleTimeoutMs);
+
+    public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, int idleTimeoutMs, CancellationToken token = default) =>
+        new StreamEnumerable<TOut, long>(this, op, WriteOp, token, idleTimeoutMs);
+
     public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op,
         CancellationToken token = default,
@@ -182,7 +191,7 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
     /// del consumidor. Disponer antes del final (break/cancel) detiene al productor del host; un doble Dispose es inocuo.
     /// </summary>
     private sealed class StreamEnumerable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut, TState>
-        (MemoryConnection connection, TState request, Action<IBufferWriter<byte>, TState> write, CancellationToken token)
+        (MemoryConnection connection, TState request, Action<IBufferWriter<byte>, TState> write, CancellationToken token, int idleTimeoutMs = 0)
         : IAsyncEnumerable<TOut>, IAsyncEnumerator<TOut>
     {
         private MemPullEnumerator<TOut, byte>? _e;
@@ -191,11 +200,11 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         public IAsyncEnumerator<TOut> GetAsyncEnumerator(CancellationToken enumeratorToken = default)
         {
             if (_opened) // re-enumeracion: una peticion nueva
-                return new StreamEnumerable<TOut, TState>(connection, request, write, token).GetAsyncEnumerator(enumeratorToken);
+                return new StreamEnumerable<TOut, TState>(connection, request, write, token, idleTimeoutMs).GetAsyncEnumerator(enumeratorToken);
 
             _opened = true;
             _e = MemPullEnumerator<TOut, byte>.Open(connection.MemoryRpc, request, write, ReadItem<TOut>, ReadValue<byte>, connection,
-                records: true, idleTimeoutMs: connection._timeout, cancellationToken: token, enumeratorToken: enumeratorToken);
+                records: true, idleTimeoutMs: idleTimeoutMs == 0 ? connection._timeout : idleTimeoutMs, cancellationToken: token, enumeratorToken: enumeratorToken);
             return this;
         }
 

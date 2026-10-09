@@ -1,0 +1,12 @@
+<Project>
+
+	<!-- Los ejemplos usan los proyectos locales; las PackageReference de nuget.org quedan comentadas en cada csproj. -->
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<LiteSpeedLinkVersion>2.26.282.164</LiteSpeedLinkVersion>
+	</PropertyGroup>
+
+</Project>

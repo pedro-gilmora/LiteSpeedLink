@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Contrato compartido: el agente lo hospeda y la CLI lo consume. -->
+	<ItemGroup>
+		<!--<PackageReference Include="SourceCrafter.LiteSpeedLink.Abstractions" Version="$(LiteSpeedLinkVersion)" />-->
+		<ProjectReference Include="..\..\..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
+		<PackageReference Include="MemoryPack" Version="1.21.4" />
+	</ItemGroup>
+
+</Project>

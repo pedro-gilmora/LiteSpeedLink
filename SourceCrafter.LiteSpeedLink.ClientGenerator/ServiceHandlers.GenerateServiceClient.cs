@@ -173,7 +173,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                     if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, conn, ref rawIndex)) continue;
 
-                    if (TryGenerateStreamClientMethod(clientCode, method)) continue;
+                    if (TryGenerateStreamClientMethod(clientCode, method, connectionType)) continue;
 
                     if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex, compilation, contribution)) continue;
 
@@ -542,7 +542,7 @@ public partial class ").Append(typeShortName).Append(@"
     /// Stream (IEnumerable/IAsyncEnumerable): el contrato se implementa con Enumerate/EnumerateAsync de la
     /// conexion; los sync ganan una sobrecarga *Async con token. Peticion = parametro o tupla (misma forma que el host).
     /// </summary>
-    private static bool TryGenerateStreamClientMethod(StringBuilder code, IMethodSymbol method)
+    private static bool TryGenerateStreamClientMethod(StringBuilder code, IMethodSymbol method, int connectionType)
     {
         if (!IsStream(method.ReturnType) || method.Parameters.Any(p => p.RefKind is not RefKind.None))
             return false;
@@ -555,7 +555,14 @@ public partial class ").Append(typeShortName).Append(@"
         string generics = request.Count == 0 ? item : TupleOf([.. request.Select(p => p.Type)]) + ", " + item;
         string payload = request.Count switch { 0 => "", 1 => ", " + request[0].Name, _ => ", (" + string.Join(", ", request.Select(p => p.Name)) + ")" };
 
-        string Call(string op, string tokenArg) => $"__connection.{op}<{generics}>({id}{payload}{tokenArg})!;";
+        // [Stream(IdleTimeoutMs)]: watchdog fijado por el contrato (solo memoria lo aplica en cliente).
+        int idle = 0;
+        if (connectionType == 0 && method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "SourceCrafter.LiteSpeedLink.StreamAttribute") is { } streamAttr)
+            foreach (var arg in streamAttr.NamedArguments)
+                if (arg.Key == "IdleTimeoutMs") idle = (int)arg.Value.Value!;
+        string idleArg = idle == 0 ? "" : ", " + idle;
+
+        string Call(string op, string tokenArg) => $"__connection.{op}<{generics}>({id}{payload}{(op == "EnumerateAsync" ? idleArg : "")}{tokenArg})!;";
 
         code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append(" => ")
             .Append(Call(isAsync ? "EnumerateAsync" : "Enumerate", token is null ? "" : ", " + token.Name));
