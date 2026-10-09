@@ -379,7 +379,7 @@ jobs:
           rich_message = @{ markdown = $message } | ConvertTo-Json
         }
 
-        # Cada repositorio publica en su propio tema del grupo (variable de repositorio).
-        if ('${{ vars.TG_THREAD_ID }}') { $body.message_thread_id = '${{ vars.TG_THREAD_ID }}' }
+        # Cada repositorio publica en su propio tema del grupo.
+        if ('${{ secrets.TG_THREAD_ID }}') { $body.message_thread_id = '${{ secrets.TG_THREAD_ID }}' }
 
         Invoke-RestMethod -Uri $uri -Method Post -Body $body
