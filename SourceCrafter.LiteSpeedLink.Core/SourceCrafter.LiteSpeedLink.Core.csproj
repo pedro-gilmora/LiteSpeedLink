@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\Package.props" />
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<Configurations>Debug;Release;DEBUG_SG</Configurations>
+		<IsAotCompatible>true</IsAotCompatible>
+		<IsTrimmable>true</IsTrimmable>
+		<Description>LiteSpeedLink wire framing shared by the generated clients and hosts.</Description>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
+	</ItemGroup>
+
+</Project>

@@ -68,7 +68,6 @@ static class GeneratorHarness
             [
                 CSharpSyntaxTree.ParseText(source, ParseOptions, "Probe.cs"),
                 CSharpSyntaxTree.ParseText(GlobalUsings, ParseOptions, "Usings.cs"),
-                CSharpSyntaxTree.ParseText(File.ReadAllText(Meta("InternalAttributes")), ParseOptions, "Attributes.cs"),
             ],
             References.Value,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable, allowUnsafe: true));

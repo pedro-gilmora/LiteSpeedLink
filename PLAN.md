@@ -1,4 +1,4 @@
-# Plan de mejoras — LiteSpeedLink
+﻿# Plan de mejoras — LiteSpeedLink
 
 ## Arranque de sesión *(leer primero)*
 
@@ -20,13 +20,13 @@ añadir lo aprendido en *Trampas conocidas* y actualizar *Siguiente paso*.
 | `LiteSpeedLink.Tests` | xUnit: servidores, framing, pipelines, lotes de stream, raw, pool QUIC. |
 | `LiteSpeedLink.Benchmarks` | BenchmarkDotNet (6.1): escenarios, POCs del estudio (`Scenarios/*Poc*`) y comparativas (`Comparison/`, `QuicComparison`). |
 | `docs/SourceGenStudy.md` | Inventario de decisiones runtime → generador, con estado y evidencia. |
-| `..\SourceCrafter.DependencyInjection\SharedMemory` | **Repo aparte** (fork, rama `migrating-to-modern-memory-management`). Sus cambios se commitean allí. |
+| `..\SourceCrafter.DependencyInjection\SharedMemory` | **Repo aparte** (fork, rama `migrating-to-modern-memory-management`). Sus cambios se commitean allí. LiteSpeedLink **no** referencia `SharedMemory.csproj` ni su DLL: Client/Server enlazan 6 fuentes (`MemChannel`, `CircularBuffer`, `SharedBuffer`, `SharedHeader`, `FastStructure`, `MemoryHelpers`) como `internal` (`SG_CONTEXT`). El `.csproj` solo está en la solución para sus propios tests. |
 
 ### Verificar (PowerShell, desde `D:\Code\MemLink`)
 
 ```powershell
 dotnet build-server shutdown; dotnet build LiteSpeedLink.slnx --no-incremental -nodeReuse:false
-dotnet test LiteSpeedLink.Tests --no-build     # esperado: 69/69
+dotnet test LiteSpeedLink.Tests --no-build     # esperado: 94/94
 dotnet run --project LiteSpeedLink --no-build   # esperado: saludo, Echo procesado y "Rejected: Pipeline 'TrimName'..."
 ```
 
@@ -47,12 +47,11 @@ Código generado: `LiteSpeedLink\obj\gen\SourceCrafter.DependencyInjection\Servi
 - **`PSSecurityException` / `UnauthorizedAccess` en la salida de benchmarks**: no es red ni transporte. Un `powershell.exe` hijo (BenchmarkDotNet, info de hardware) no puede cargar el perfil del usuario (`ExecutionPolicy` indefinida ⇒ `Restricted`). Inocuo; la consulta funciona igual. El código de salida 1 de `dotnet run ... | Select-String` viene de ahí (stderr de proceso nativo), no de un fallo de medición.
 - **`ArgumentNullException` en `--check` (TCP, fila `A) sin proteccion`)**: carrera demostrada a propósito (`[INFO]`); la verificación termina en `TODO CORRECTO`.
 - **`PipelineExamplesTest.PostgresAuthorization` falla** sin Postgres en `127.0.0.1:5432`: dependencia externa, no regresión.
-- **Generador cacheado**: tras tocar `Helpers`, sin `build-server shutdown` + `--no-incremental` el `.g.cs` no cambia.
+- **Generador cacheado**: tras tocar `Helpers`, `ServerGenerator` o `ClientGenerator`, sin `build-server shutdown` + `--no-incremental` el `.g.cs` no cambia.
 - **Ediciones que no llegan a disco** (scripts PowerShell con caracteres no ASCII incluidos): verificar con `Select-String` antes de compilar.
 - **Deadlock sync tras async en Memory**: resuelto con `RunContinuationsAsynchronously` en `RpcBuffer.ResponseReady` (fork). Si reaparece un timeout en una llamada sync, mirar ahí.
 - **Id de operación**: `GetServiceId` se calcula sobre el nombre completo del método; no alterarlo al cambiar el formato de firmas (5.3).
-- Warnings `MSB3270` (MSIL vs AMD64 de `SharedMemory.dll`): conocidos e inocuos.
-- **`SharedMemory.dll` se consume publicado**: tras tocar el fork, `dotnet publish ..\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj -c Release -f net10.0 -r win-x64 --self-contained false -o ..\SourceCrafter.DependencyInjection\publish\net10.0\win-x64`.
+- **SharedMemory enlazado, no publicado**: los cambios en las 6 fuentes del fork entran en la siguiente compilación de Client/Server; no hace falta `dotnet publish` del fork.
 - **Ediciones desde VS que no llegan a disco** en ficheros abiertos (`ServersTest.cs`): verificar con `Test-Path`/`Select-String`.
 - **Puertos en tests paralelos** (xUnit): cada test de red usa un puerto propio; una colisión se ve como `QuicException` al enlazar, no como fallo del transporte.
 - **HTTP/3 en benchmarks**: `https://localhost` resuelve a `::1` y Kestrel escucha en 127.0.0.1 ⇒ error ALPN. Usar IP.
@@ -79,7 +78,7 @@ Pendientes en orden (uno a uno; cada uno con test o PoC y verde antes del siguie
 PoC `MemorySessionLeakPoc.DisposedClientsReleaseServerSessions`: 0 sesiones vivas y los hilos lectores se recuperan en <1 s.
    Mismo PoC: 0 clientes vivos en el host.
       Bench (antes lobby → ahora multicliente): MemoryConcurrency c=1 35.7 → 21.5 µs (3.22 → 2.88 KB), c=8 37.8 → 37.7 µs (23.85 → 21.35 KB), c=64 195 → 166 µs (188 → 168 KB); Streaming 10 items 32.6 → 29.7 µs (4.13 KB igual), 1000 items 108 → 88 µs (10.86 → 7.77 KB).
-[x] `ref`/`out` con procesadores (POC `Normalize(ref, out)` en `Program.cs`, 4 transportes; async devuelve tupla). Pre-procesador sobre `out` sigue en SCLSL012 a propósito: no hay valor de entrada. [x] Cliente generado de streams (`IEnumerable<T>`/`IAsyncEnumerable<T>`, `TryGenerateStreamClientMethod`; antes no compilaba) + POC `StreamServiceClient` en `Program.cs`. [ ] Streams con procesadores (SCLSL012).
+[x] `ref`/`out` con procesadores (POC `Normalize(ref, out)` en `Program.cs`, 4 transportes; async devuelve tupla). Processor de parámetro sobre `out` sigue en SCLSL012 a propósito: no hay valor de entrada. [x] Cliente generado de streams (`IEnumerable<T>`/`IAsyncEnumerable<T>`, `TryGenerateStreamClientMethod`; antes no compilaba) + POC `StreamServiceClient` en `Program.cs`. [x] Streams: processors de retorno → SCLSL012 (cliente y host; procesar = desempaquetar/reempaquetar cada elemento) y `[ClientRetry]`/`[ServerRetry]` → SCLSL016, ignorados (repetir reenviaría lo ya entregado; reanudar exigiría checkpoint en el contrato). Tests `PipelineDiagnosticsTest`, `RetryAttributeTest.RetryOnStreamIsIgnoredWithWarning`.
 Stream propio gana desde ~1 MB (p99 de las pequeñas −66 %); ≤64 KB empate. Implementado como opt-in: `[DedicatedStream]` en el método del contrato → el cliente QUIC generado llama a `__connection.Dedicated` (misma conexión física, stream por unaria); otros transportes lo ignoran (el contrato se comparte entre hosts). Test `DedicatedStreamTest`.
 11. [x] **`LocalConnection` seleccionada por el generador** (5.6): `ServiceConnectionType.Local` (valor 4, opt-in). El DI combina
     FAMWN con `AnalyzerConfigOptions.GlobalOptions` (`ServiceProviderInfo.GlobalOptions`, paquete 10.1.3); el parcial resuelve
@@ -87,8 +86,12 @@ Stream propio gana desde ~1 MB (p99 de las pequeñas −66 %); ≤64 KB empate. 
     `Start(string name)` y cliente `new X(string name)` exponen `IAsyncDisposable` en ambos destinos (`LocalHost`,
     `MemoryConnection.DisposeAsync`); el `[SupportedOSPlatform]` del transporte efectivo lo emite el generador en la clase generada,
     no el usuario. Test: `LocalConnectionTest` (5 destinos).
-12. [ ] **5.7 + 2.1**: `SharedMemory` interno y APIs `Span`/`IBufferWriter` en `RpcBuffer`.
-13. [ ] **Autenticación** como pipeline de servidor (3.8) y **retry** como pipeline de cliente (5.2-R).
+12. [x] **5.7 + 2.1**: SharedMemory enlazado como `internal` (`SG_CONTEXT`) en Client/Server, sin referencia de proyecto ni `InternalsVisibleTo`; `RpcBuffer` sustituido por `MemChannel`, que escribe con `IBufferWriter<byte>` directo al nodo y lee desde `ReadOnlySpan<byte>` (ver *Integracion MemChannel*).
+POC `test/POC/AuthRetryPoc` (Memory, fallos inyectados en el host, 8 checks en verde):
+    - Autenticación: **ya funciona sin cambios** con `[ServerProcessor<Authenticate>] Principal caller` (`IPipeline<string, Principal>` con `TokenStore` inyectado por DI): el cable lleva el token, el handler recibe el `Principal`, un token falso devuelve `Failed` sin ejecutar el handler.
+    - Retry: política como tipo (`IRetryPolicy` con miembros `static abstract`), envoltorio a mano alrededor de `HitAsync`. Memory no pierde tramas: la pérdida se simula atascando el handler 400 ms (plazo del intento 200 ms) antes o después de ejecutar. Petición "perdida" → 1 reintento, 1 ejecución; respuesta "perdida" → el handler se ejecuta 2 veces (exige idempotencia); agotado → `OperationCanceledException`. La respuesta tardía del intento abandonado la descarta `MemClient` (id con generación). Sin fallos: tiempo igual (ruido de 11,5-13,7 µs), **+432 B/llamada** (336 → 768 B: CTS enlazado + `CancelAfter`).
+    - [x] Retry generado: `[ClientRetry(attempts, intervalMs)]` (alrededor del transporte) y `[ServerRetry(attempts, intervalMs)]` (alrededor del handler), bucle inline sin structs ni delegados, solo `TimeoutException`, nunca tras cancelación; processors fuera del bucle. Ambos a la vez → SCLSL015 (intentos multiplicados). Argumentos con nombre: Roslyn normaliza `ConstructorArguments` al orden del constructor, la lectura por símbolo es posicional. Plazo por intento = el del transporte. Tests `RetryAttributeTest`; POC `Fetch` con `[ServerRetry(3)]`.
+14. [x] **Generadores separados**: `ServerGenerator` (`ServiceHostGenerator`) y `ClientGenerator` (`ServiceClientGenerator`, `CLIENT_PARTIAL`) heredan de la base abstracta `ServiceHandlersGenerator`; el código común se enlaza desde `Helpers` vía `Generator.props`. Clases con nombre distinto porque el registro de DI desduplica parciales por nombre de tipo. `GeneratorHarness` carga ambos ensamblados. Suite 94/94 (commit `9f31c34`).
 
 Pospuestos: 5.8 (endpoints por configuración), estudio #5/#6/#7 (solo con perfil), cookie anti-amplificación UDP, test de servidor falso byte a byte.
 
@@ -219,7 +222,9 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
   Así MemoryPack serializa **directamente sobre la memoria compartida**: 0 asignaciones y 0 copias.
   Esa es la ganancia real, y es la que justifica tocar el fork.
-  - **Depende de**: 5.7 (integrar `SharedMemory` como código interno hace este cambio trivial).
+  - **Depende de**: 5.7 (hecho). Estado final: `MemChannel.Send<TState>(..., Action<IBufferWriter<byte>, TState>)`
+    escribe sobre el nodo con `NodeWriter` y las respuestas se leen como `ReadOnlySpan<byte>`; el texto de arriba
+    sobre `RpcBuffer` queda como histórico.
 
 - [x] **2.2 `BuildRequest`: quitar `stackalloc` + `ToArray()`** *(acordado)*
   - `TcpConnection.cs:532`, `UdpConnection.cs:76`, `QuicConnection.cs:496`.
@@ -404,7 +409,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] TCP valida trama < `opId`; `Failed` envía `Message`, no la traza.
   - [~] Confidencialidad/integridad: QUIC ya usa TLS. TCP → `SslStream` opcional (`cert`): hecho, mTLS con pinning por hash del
     certificado configurado (antes fallaba con autofirmados: `UntrustedRoot`). Test `TestTcpTls`. UDP → sin cifrar (DTLS no está en .NET); solo red de confianza.
-  - [ ] Autenticación: pipeline de servidor (5.2), no transporte.
+  - [x] Autenticación: pipeline de servidor (5.2), no transporte. Cubierta por los pipelines actuales (`[ServerProcessor<Authenticate>]`, etapa con dependencias de DI); POC `test/POC/AuthRetryPoc` (paso 13).
   - [x] Límite de peticiones en vuelo por conexión TCP: `Server.MaxInFlightPerConnection` (256). Al
     llenarse, el lector deja de leer el socket → back-pressure TCP, sin rechazos. Test `TestTcpInFlightLimit`.
     QUIC no lo necesita (un stream por petición, lo limita QUIC).
@@ -493,6 +498,16 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [ ] **5.2-R Retry como pipeline de cliente** *(para después)*: opt-in, registrado en DI, solo
 	útil en UDP (TCP/QUIC ya retransmiten). Timeout + reintento por corrId; en streams re-pide
 	los `seq` faltantes (4.3). Requiere handlers idempotentes.
+	POC `test/POC/AuthRetryPoc` (paso 13, sobre Memory): semántica validada; el envoltorio por llamada cuesta +432 B, así que la versión generada debe usar el plazo del transporte.
+	- [x] `[ClientRetry(attempts = 3, intervalMs = 0)]` / `[ServerRetry(...)]`, uno de cada por método (sustituyen a wrappers/`RetryPolicy`): bucle inline solo alrededor de `GetRaw`/`GetRawAsync` (cliente) o de la invocación al handler (host, p.ej. si éste llama a otro servicio); sin structs ni delegados por operación; processors y lectores fuera, una vez. Solo `TimeoutException`, nunca si el llamante canceló. Ambos en el mismo método → warning `SCLSL015` (intentos y latencia se multiplican). Test `RetryAttributeTest`.
+	- [x] `[ClientCache(durationMs, capacity = 1024)]` / `[ServerCache(...)]` + `[CacheKey]`: propuesta en `docs/CacheProposal.md` (servidor: bytes de petición → bytes de respuesta tras return processors, lookup por span sin asignar; con `[CacheKey]`, clave tipada; cliente: `CacheManager<TKey, TValue>` tipado, clave = valores completos o bytes, sin boxing; `SCLSL017`/`018`/`019`).
+		- [x] 1. Atributos
+		- [x] 2. Host: `ReturnRaw*` en los tres contextos, escritor `__ResN`, consulta/guardado; `SCLSL017`. Manager por método perezoso (`LazyInitializer`); consulta antes de deserializar o tras los server param processors; single-flight (`TryLead`/`Complete`/`Fail`, fallos no cacheados) también en `ClientCacheManager`. Tests `ServerCacheGeneratorTest` (Tcp/Udp/Memory, SCLSL017) y `CacheManagerTest.SingleFlight…`.
+		- [x] 3. Clave (rev. 3 de la propuesta): igualdad por valor comprobada en el generador (primitivos, string, enum, `IEquatable<T>`, records con campos que la tengan); si no la tienen y no hay `[CacheKey]`, clave = bytes serializados + `SCLSL018` (info, elevable a error para forzar igualdad por valor). `[CacheKey(params string[] members)]` en parámetro o método, rutas leídas de la sintaxis (`nameof(a.b.c)` evalúa a `"c"`); `SCLSL019` para rutas inválidas u hojas sin igualdad. Clave = hoja tal cual o `ValueTuple` (sin `HashCode` como identidad). `ByteContentComparer` y `CacheManager<TKey, TValue>` (antes `ClientCacheManager`) movidos a Abstractions: los usan cliente y host (`[ServerCache]` + `[CacheKey]` → clave tipada tras los param processors). Test `CacheKeyGeneratorTest`.
+		- [x] 4. Cliente: consulta/single-flight/guardado en la ruta raw (clave por bytes = la propia petición) y en la de processors (clave = argumentos originales, consulta antes de processors y retry). Test `CacheKeyGeneratorTest`.
+		Campos `__cacheN` sin `?` (el código generado no tiene contexto nullable: CS8669).
+				- [x] 6. Benchmark `FeatureBenchmarks` (suite `Features` = 4096): contrato generado TCP vs ASP.NET Core slim (HTTP/1.1, binario, `OutputCache` nativo). Setup valida por deltas que los aciertos no ejecutan handler (`MemoryRandomization` repite `GlobalSetup` en el mismo proceso). Arnés de publicación (`4097`, control incluido; Processor reejecutado aparte por `SocketException 10048` de puertos efímeros): Plain 37,8 vs 50,1 µs · 1,2 vs 2,9 KB; Processor 34,6 vs 45,3 µs · 1,4 vs 6,0 KB; ClientRetry 37,8 vs 42,5 µs (±7 µs en Slim); ServerRetry 37,5 vs 47,2 µs; ClientCacheHit **15 ns / 72 B** vs 52,4 µs (Slim acierta en servidor: sí viaja); ServerCacheHit 46,5 vs 51,3 µs · 1,2 vs 4,2 KB; CacheKeyHit 44,4 vs 50,4 µs · 1,4 vs 4,3 KB; SingleFlight (16 concurrentes en frío) 39,5 vs 228 µs · 4,9 vs 45 KB.
+	- [ ] POC `AuthRetryPoc` E2E con el retry generado
 
   **Contrato** — comportamientos como `struct` para que el JIT los desvirtualice e inline:
 
@@ -591,18 +606,14 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Reutiliza el framing de 3.3 — UDS es un stream, mismas reglas que TCP (P4).
   - Elimina los `#if`/`SupportedOSPlatform` que hoy se propagan hasta `Program.cs:37`.
 
-- [~] **5.7
-  - Hecho: `StartMemoryServer*` y el host generado devuelven `IDisposable`; `RpcBuffer` ya no aparece
-	Aplazado (no necesario para funcionar): hacer `internal` los tipos del fork
-	`InternalsVisibleTo`); los tests usan `RpcBuffer` directamente y habría que darles acceso.
-  - Hoy: `SharedMemory.csproj` referenciado como proyecto y **público** en la superficie de
-	`Client`/`Server`.
-  - → incorporar como **linked files** `internal` dentro de `SourceCrafter.LiteSpeedLink.Server` y
-	`.Client`, sin referencia de proyecto.
-  - Desbloquea 2.1 (añadir APIs `Span`/`IBufferWriter` a `RpcBuffer` sin versionar un paquete externo)
-	y evita filtrar `RpcBuffer` al consumidor.
-  - ⚠️ Ojo con duplicar los tipos en dos ensamblados si ambos comparten memoria en el mismo proceso;
-	valorar un tercer proyecto `internal` compartido o `InternalsVisibleTo`.
+- [x] **5.7 SharedMemory interno**
+  - `StartMemoryServer*` y el host generado devuelven `IDisposable`; ningún tipo del fork aparece en la API pública.
+  - Client/Server enlazan 6 fuentes del fork (`MemChannel`, `CircularBuffer`, `SharedBuffer`, `SharedHeader`,
+	`FastStructure`, `MemoryHelpers`) compiladas `internal` con `SG_CONTEXT`; sin `ProjectReference`, sin DLL
+	publicada y sin `InternalsVisibleTo`. `RpcBuffer.cs` ya no se enlaza (solo lo usa `MemChannelPoc` como baseline).
+  - Tipos duplicados en Client y Server: inocuo, ambos extremos se encuentran por el nombre de la MMF/EWH, no por
+	identidad de tipo; los tests in-process de Memory lo cubren.
+  - Los tests del fork viven en `SharedMemory.Tests` (repo aparte), no en `LiteSpeedLink.Tests`.
 
 - [ ] **5.8 Configuración de endpoints** *(de tus descartes)* — **Pospuesto** por decisión del usuario; hoy la dirección/nombre se pasa por constructor.
   - El diseño es compile-time, pero **host/puerto/nombre de canal no pueden serlo**: cambian por entorno.
@@ -874,7 +885,7 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - Hallazgo: varios writers sin serializar sobre el mismo anillo se duermen en `NodeAvailable` (AutoReset) hasta el timeout -> lock por anillo (igual que `lock_sendQ`).
 - Self-checks (`dotnet run -c Release`): unario sync/async, 400 concurrentes en 2 clientes, 100 KB multi-packet, streams (1000 items, 8 concurrentes + 50 unarios), error, doble reply, timeout, cancelacion, respuestas tardias, host caido, dispose storm x30. 6/6 corridas OK.
 - Unario int, 20k llamadas (mediana de 6 corridas): c=1 9.6 -> 6.2 us, 808 -> 0 B; c=8 22 -> 9.5 us, 808 -> 0 B; c=64 165 -> 75 us, 809 -> 1 B; sync c=1 23 -> 14.5 us, 756 -> 0 B.
-- [ ] Decidir si sustituir `RpcBuffer` en `MemoryConnection`/`Server.Memory` por este canal (protocolo `[op][body]`/`[status][body]` encima, sin cambios en el generador).
+- [x] Sustituir `RpcBuffer` en `MemoryConnection`/`Server.Memory` por este canal: hecho (ver *Integracion MemChannel*).
 
 #### Modos de stream en MemChannel (mismo canal, ruta propia)
 

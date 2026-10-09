@@ -1,26 +1,24 @@
-﻿using System.Text;
-using SourceCrafter.DependencyInjection;
-using SourceCrafter.LiteSpeedLink;
+﻿using System;
 
-namespace LiteSpeedLink.Abstractions.Internals;
+namespace SourceCrafter.LiteSpeedLink;
 
 
 #pragma warning disable CS9113 // Parameter is unread.
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-internal sealed class ServiceHostAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
+public sealed class ServiceHostAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-internal sealed class ServiceClientAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
+public sealed class ServiceClientAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
 
 /// <summary>Servicio expuesto por un [ServiceClient] como propiedad (IAuth -> Auth).</summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-internal sealed class ServiceUnitAttribute<TService> : Attribute where TService : IServiceUnit;
+public sealed class ServiceUnitAttribute<TService> : Attribute where TService : IServiceUnit;
 
 [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
-internal sealed class ServiceAttribute(string? name = null) : Attribute;
+public sealed class ServiceAttribute(string? name = null) : Attribute;
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-internal sealed class ServiceHandlerAttribute : Attribute;
+public sealed class ServiceHandlerAttribute : Attribute;
 
 //[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 //internal sealed class PipelineAttribute<TPipeline>(SourceCrafter.DependencyInjection.Constants.Lifetime lifetime = SourceCrafter.DependencyInjection.Constants.Lifetime.Scoped, string nameOrFormat = "GetPipeline{0}") : Attribute where TPipeline : IPipeline;

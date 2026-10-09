@@ -5,12 +5,19 @@ Objetivo: todo lo que se conoce al compilar (contrato, transporte, forma del met
 **Premisa de red:** el objetivo es perder menos paquetes y que, si se pierden, sea un problema de la red y no de cliente/servidor. Los PoC entran primero como **opción** (opt-in), no como reemplazo; solo pasan a defecto si el benchmark lo justifica. Predecibilidad y rendimiento antes que adivinar en runtime.
 Evidencia: codigo en `SourceCrafter.LiteSpeedLink.Server/Client`, salida en `LiteSpeedLink/obj/gen/SourceCrafter.DependencyInjection/ServiceProviders/*.host.g.cs` y `*.client.g.cs`, y los benchmarks de `PLAN.md`.
 
+## Generadores
+
+- Dos ensamblados parciales, descubiertos por el DI por prefijo `SourceCrafter.DependencyInjection.Partial`: `...LiteSpeedLink.Server` (`ServiceHostGenerator`, proyecto `ServerGenerator`) y `...LiteSpeedLink.Client` (`ServiceClientGenerator`, proyecto `ClientGenerator`, `CLIENT_PARTIAL`).
+- Ambos heredan de la base abstracta `ServiceHandlersGenerator` (`AnalyzeContainer`, `GetServiceId`); lo común (raw, pipelines, helpers) se enlaza desde `Helpers/Generator.props`. Cada lado solo compila su emisión (`GenerateServiceHost.cs` / `GenerateServiceClient.cs`).
+- Nombres de clase distintos: el registro de parciales desduplica por nombre de tipo. Test: `GeneratorHarness` carga los dos.
+
 ## Qué emite hoy el generador
 
 - **Host:** `HandleRequestsAsync(long id, ctx, token)` con `switch(id)` sobre el hash FNV-1a de la firma. Cada caso crea un scope, lee los argumentos y llama al servicio.
   - **Argumentos:** en operaciones unarias los lee con un lector raw emitido (`__ReqM{id}(ctx.Body.Span)`); en las demás, con `ctx.Get<T>()`.
   - **Respuesta:** `ctx.Return(...)`, `ReturnAsync`, o `EnumerateAsync<T, TPolicy>(___result)` con la política de lote como tipo (#1).
   - **Transporte:** TCP, UDS y QUIC reciben `new __Handler(provider)`, un `readonly struct : IRequestHandler` (#3); Memory y UDP siguen con el delegado `RequestHandler`.
+  - **Memory:** `MemChannel` (fuentes del fork SharedMemory enlazadas `internal` con `SG_CONTEXT`, sin `RpcBuffer`); la respuesta se escribe con `IBufferWriter<byte>` directo al nodo compartido y los streams del cliente van por `MemPull` (sin `Channel`).
 - **Cliente:** clase por interfaz atada a la conexión concreta (`TcpConnection`, `QuicConnection`...).
   - **Operaciones unarias, sin retorno (void o `Task`) y con pipelines:** van por raw (#12), con `GetRaw`/`GetRawAsync(opId, __Req{n}(...), token).ConfigureAwait(false)` y el lector `__Res{n}`.
   - **Streams:** siguen por la API tipada (`EnumerateAsync<TIn,TOut>`): raw diferido por POC (#12, 6d).
@@ -34,12 +41,12 @@ El generador decide la forma de cada operación (Get, Enumerate o Send), el tran
 | 9 | `[CallerMemberName] name` en `IConnection`/`IAsyncConnection` | Client | Nombre del método | Quitar el parámetro | Limpieza de API | **Descartado**: constante de compilación, sin coste en runtime |
 | 10 | `DynamicallyAccessedMembers` en genéricos | Client | — | Quitarlo | Ninguno | **Descartado**: lo impone MemoryPack (trimming, PLAN 1.2); no tocar |
 | 11 | `EnumerateAsync` abre un stream QUIC por llamada | `Client.QuicConnection` | Operación de stream | Reutilizar stream (pool, como unarias) | Menos coste fijo por stream (suelo medido: stream crudo 86 µs frente a RPC 110 µs tras el arreglo del FIN) | **Descartado como defecto**: se mantiene stream propio por `EnumerateAsync` para aislar el bloqueo de cabeza de línea. El lote por política (#1) ya aplica en QUIC (−35 %). Reabrir solo si QUIC pasa a transporte principal |
-Test `UdsTest.TestRawRoundtrip`. Streams **diferidos** por POC (`StreamRawDecodePoc`): un `MemoryPackReader` con métodos específicos frente a `Deserialize(span, ref item)` por item cuesta +125 % con 1 item (alquiler del estado, ~15 ns) y ahorra −29 % (strings) / −17 % (packables) con 64, ~3,6 ns/item: ~2 % de `Lsl_Stream` (196 µs), a cambio de una API `EnumerateRawAsync` en 5 transportes. Reabrir si un perfil de stream señala la decodificación |
+| 12 | Parámetros y respuesta por `ctx.Get<T>()`/`Serialize` genéricos | Client/Host | Tipos de cada parámetro y del retorno | Escritor `__Req{n}` y lector `__Res{n}`/`__ReqM{id}` por operación (raw) | Medio en unarias | **Hecho** en unarias, `void`/`Task` y pipelines (`ParamEncodingPoc`, `RawCapacityTest`, POC `IAuth.TouchAsync`); test `UdsTest.TestRawRoundtrip`. Streams **diferidos** por POC (`StreamRawDecodePoc`): un `MemoryPackReader` con métodos específicos frente a `Deserialize(span, ref item)` por item cuesta +125 % con 1 item (alquiler del estado, ~15 ns) y ahorra −29 % (strings) / −17 % (packables) con 64, ~3,6 ns/item: ~2 % de `Lsl_Stream` (196 µs), a cambio de una API `EnumerateRawAsync` en 5 transportes. Reabrir si un perfil de stream señala la decodificación |
 | 13 | Buffer de respuesta de tamaño variable | Host | Respuesta de tamaño fijo | Buffer exacto | Menos reservas y ramas | **Descartado** por POC (`FixedSizeResponsePoc`): 8,37 vs 8,86 ns (−0,5 ns, 0 B ambos); por debajo del ruido de cualquier transporte |
-≤64 KB empate. **Hecho** como opt-in: `[DedicatedStream]` → `QuicConnection.Dedicated`; ignorado fuera de QUIC. Test `DedicatedStreamTest` |
+| 14 | Unaria grande en el pool QUIC bloquea a las pequeñas (HOL) | `Client.QuicConnection` | Operación marcada por el desarrollador | Ruta a stream propio por operación | Latencia de las pequeñas con cargas grandes | POC `QuicPoolContentionPoc`: el stream propio gana desde ~1 MB (p99 de las pequeñas −66 %); ≤64 KB empate. **Hecho** como opt-in: `[DedicatedStream]` → `QuicConnection.Dedicated`; ignorado fuera de QUIC. Test `DedicatedStreamTest` |
 | 15 | Coalescing de streams en el cliente | `StreamConnection`/`MultiplexedChannel` | — | No aplica: depende de lo que traiga cada `ReadAsync` | — | **Hecho como defecto** (`coalesceStreams = true` en TCP/UDS), sin cambio de cable. `Lsl_Stream` 274 → 196 µs (AspNetSlim 229 µs). Tests `StreamBatchingTest`, `StreamBatchConcurrencyTest` |
 
-Las columnas 2 a 5 de las filas 5, 7, 9 y 10 se perdieron en una edición anterior y aquí están **inferidas** del código y de las conclusiones que sí quedaron (beneficio y estado). Las filas 4, 6, 8, 12 y 13 se reconstruyeron a partir de sus POCs. Revisar las inferidas si se retoman.
+Las columnas 2 a 5 de las filas 5, 7, 9, 10, 12 y 14 se perdieron en ediciones anteriores y aquí están **inferidas** del código y de las conclusiones que sí quedaron (beneficio y estado). Las filas 4, 6, 8 y 13 se reconstruyeron a partir de sus POCs. Revisar las inferidas si se retoman.
 
 ## Qué no conviene generar
 
@@ -60,10 +67,9 @@ Las columnas 2 a 5 de las filas 5, 7, 9 y 10 se perdieron en una edición anteri
 | 2, 9, 10, 13 | Descartados | Ver inventario |
 | 5, 6, 7 | Diferidos | Solo si un perfil muestra la rama en el camino caliente |
 | 14 | Hecho (opt-in) | `QuicPoolContentionPoc`, `DedicatedStreamTest` |
+| — | Hecho: generador dividido host/cliente | `GeneratorHarness`, suite 94/94 |
 
-**Siguiente en el generador:**
-1. POC de raw (#12) para streams: decide si `Enumerate*` pasa a raw.
-3. —
+**Siguiente en el generador:** nada abierto con ganancia medida. Candidatos solo con perfil: raw en streams (#12), #5/#6/#7, y modos de stream de `MemChannel` (`Take`/`Window`/`IdleTimeoutMs` como atributos, ver PLAN *Modos de stream en MemChannel*) cuando haya un caso real.
 
 ## ConfigureAwait(false) en cada await
 
@@ -78,5 +84,5 @@ Matiz práctico:
 
 ## Principio
 
-Pendientes: el POC de streams raw (#12).
+Si el dato se conoce al compilar, lo decide el generador; si no hay medida que lo justifique, se queda como está.
 

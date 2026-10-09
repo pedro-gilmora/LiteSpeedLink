@@ -47,6 +47,9 @@ public enum Suite
     /// <summary>Par de Comparison sobre QUIC: LiteSpeedLink QUIC vs ASP.NET Core slim HTTP/3.</summary>
     QuicComparison = 1 << 11,
 
+    /// <summary>Cada funcionalidad generada (processors, retry, caches, CacheKey, single-flight) vs ASP.NET Core slim.</summary>
+    Features = 1 << 12,
+
     /// <summary>La ruta de request/response completa, sin red.</summary>
     Wire = RequestBuilding | ServerParsing | ResponseStatus,
 
@@ -69,6 +72,7 @@ public static class SuiteMap
         (Suite.StreamBatchBreakdown, typeof(StreamBatchBreakdownBenchmarks)),
         (Suite.SourceGenPoc, typeof(SourceGenPocBenchmarks)),
         (Suite.QuicComparison, typeof(Comparison.QuicComparisonBenchmarks)),
+        (Suite.Features, typeof(FeatureBenchmarks)),
     ];
 
     public static Type[] Resolve(Suite suite) =>

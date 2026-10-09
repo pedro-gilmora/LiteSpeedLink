@@ -99,6 +99,15 @@ public sealed class MemoryRequestContext
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ResponseStatus Return<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(TIn @in) => Reply(ResponseStatus.Success, @in);
 
+    /// <summary>Responde <see cref="ResponseStatus.Success"/> con un cuerpo ya serializado ([ServerCache]).</summary>
+    public ResponseStatus ReturnRaw(ReadOnlyMemory<byte> body)
+    {
+        if (_replied) return ResponseStatus.Success;
+        request.Reply(body, WriteRaw);
+        _replied = true;
+        return ResponseStatus.Success;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ResponseStatus NotFound() => Reply(ResponseStatus.NotFound);
 
@@ -133,6 +142,12 @@ public sealed class MemoryRequestContext
     {
         writer.GetSpan(Framing.StatusSize)[0] = (byte)status;
         writer.Advance(Framing.StatusSize);
+    }
+
+    private static void WriteRaw(IBufferWriter<byte> writer, ReadOnlyMemory<byte> body)
+    {
+        WriteStatus(writer, ResponseStatus.Success);
+        writer.Write(body.Span);
     }
 
     private static void WriteValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(IBufferWriter<byte> writer, (ResponseStatus status, T value) state)

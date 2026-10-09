@@ -41,9 +41,7 @@ public partial class ServiceHandlersGenerator
             ? ac.Name
             : "";
 
-        return name is "ProcessorAttribute" or "PreProcessorAttribute" or "PostProcessorAttribute"
-            or "ClientPreProcessorAttribute" or "ServerPreProcessorAttribute"
-            or "ClientPostProcessorAttribute" or "ServerPostProcessorAttribute";
+        return name is "ClientProcessorAttribute" or "ServerProcessorAttribute";
     }
 
     private static bool HasProcessors(ImmutableArray<AttributeData> attrs) => attrs.Any(a => IsProcessorAttribute(a, out _));
@@ -247,11 +245,11 @@ public partial class ServiceHandlersGenerator
             contractArgs = string.Join(", ", method.Parameters.Select(p => p.Name)),
             explicitHead = "\n\n    " + method.ReturnType.GlobalNamespaced + " " + iFace.GlobalNamespaced + "." + name + "(" + contractParams + ")";
 
-        // ponytail: los streams exigen el Enumerate raw (6d): SCLSL012 hasta que haga falta.
+        // ponytail: procesar un stream seria desempaquetar y reempaquetar cada elemento; SCLSL012 hasta que un caso lo pague.
         if (hasRet && retType.GlobalNonGenericNamespace is "global::System.Collections.Generic.IAsyncEnumerable" or "global::System.Collections.Generic.IEnumerable")
         {
             contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, location,
-                $"{method.Name}: processors don't support streamed results yet"));
+                $"{method.Name}: processors aren't applied to streamed results (per-item unpack/repack)"));
 
             code.Append(explicitHead).Append(" => throw new global::System.InvalidOperationException(\"Processors not supported on ").Append(name).Append("\");");
             return true;
@@ -292,7 +290,7 @@ public partial class ServiceHandlersGenerator
         var clientPost = GetStages(retAttrs, false, container, contribution, location);
 
         if (!hasRet && (serverPost.Count > 0 || clientPost.Count > 0))
-            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, location, name + ": post-processors need a return value"));
+            contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, location, name + ": return processors need a return value"));
 
         var wireRet = serverPost.Count > 0 ? serverPost[^1].Out : retType;
         var finalRet = clientPost.Count > 0 ? clientPost[^1].Out : wireRet;
@@ -321,29 +319,37 @@ public partial class ServiceHandlersGenerator
 
         static string Wire((IParameterSymbol Param, ITypeSymbol ClientType, ITypeSymbol Wire, List<Stage> Stages) i) => i.Stages.Count > 0 ? StageVar(i.Param.Name, i.Stages.Count - 1) : i.Param.Name;
 
+        var retry = GetRetry(method, false);
+
+        // Clave = argumentos originales (antes de los processors); valor = resultado final (tras los return processors).
+        string? cacheKey = null;
+
+        if (GetCache(method, false, contribution) is { } cache
+            && GetCacheKey(method, [.. inputs.Select(i => (i.Param, i.ClientType))], compilation, true, contribution) is { } key)
+        {
+            // Sin param processors la peticion son los argumentos originales: con clave por bytes se reutiliza.
+            bool reuse = key.Bytes && inputs.All(i => i.Stages.Count == 0);
+            cacheKey = DeclareClientCache(helpers, n, cache, key, finalType!, reuse ? reqArgs : null);
+            if (reuse) reqArgs = "__cacheKey";
+        }
+
         void Body(bool isAsync, string? token)
         {
             code.Append("\n        ");
 
+            int cacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, token, isAsync) : 0;
+
             foreach (var i in inputs.Where(i => i.Stages.Count > 0))
                 code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        ", ClientReject));
 
-            if (hasRet) code.Append("var __r = ");
-
-            if (reads) code.Append(resName).Append("((");
-
-            if (isAsync) code.Append("await ");
-
-            code.Append(conn).Append(".GetRaw").Append(isAsync ? "Async" : null).Append('(').Append(serviceId).Append(", ").Append(reqArgs);
-
-            if (token != null) code.Append(", ").Append(token);
-
-            code.Append(isAsync ? ").ConfigureAwait(false)" : ")");
+            // Solo la llamada al transporte se reintenta: los processors de parametros ya corrieron una vez.
+            EmitCall(code, retry, (isAsync ? "await " : null) + conn + ".GetRaw" + (isAsync ? "Async" : null) + "(" + serviceId + ", " + reqArgs
+                + (token != null ? ", " + token : null) + (isAsync ? ").ConfigureAwait(false)" : ")"), reads ? "__body" : null, token, isAsync);
 
             // sync: el lector escribe directo en los ref/out del llamador; async: en locales que vuelven en la tupla.
-            if (reads) code.Append(").Span").Append(string.Concat(outs.Select((p, k) => isAsync ? ", out var __o" + k : ", out " + p.Name))).Append(')');
-
-            code.Append(';');
+            if (reads)
+                code.Append("\n\n        ").Append(hasRet ? "var __r = " : null).Append(resName).Append("(__body.Span")
+                    .Append(string.Concat(outs.Select((p, k) => isAsync ? ", out var __o" + k : ", out " + p.Name))).Append(");");
 
             List<string> rets = [];
 
@@ -355,7 +361,8 @@ public partial class ServiceHandlersGenerator
 
             if (isAsync) rets.AddRange(outs.Select((_, k) => "__o" + k));
 
-            if (rets.Count > 0)
+            if (cacheKey != null) CloseClientCache(code, cacheStart, rets[0]);
+            else if (rets.Count > 0)
                 code.Append(hasRet ? null : "\n\n        ").Append("return ").Append(rets.Count == 1 ? rets[0] : "(" + string.Join(", ", rets) + ")").Append(';');
 
             code.Append("\n    }");

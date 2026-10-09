@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 
@@ -168,11 +168,14 @@ public partial class ").Append(typeShortName).Append(@"
                     string conn = connectionType == 3 && method.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == DedicatedStreamAttr)
                         ? "__connection.Dedicated" : "__connection";
 
+                    ReportRetryDiagnostics(method, contribution);
+                    ReportCacheKeyIgnored(method, contribution);
+
                     if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, conn, ref rawIndex)) continue;
 
                     if (TryGenerateStreamClientMethod(clientCode, method)) continue;
 
-                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex)) continue;
+                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex, compilation, contribution)) continue;
 
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,
@@ -541,11 +544,10 @@ public partial class ").Append(typeShortName).Append(@"
     /// </summary>
     private static bool TryGenerateStreamClientMethod(StringBuilder code, IMethodSymbol method)
     {
-        if (method.ReturnType is not INamedTypeSymbol { IsGenericType: true } rt
-            || rt.ConstructedFrom.ToDisplayString() is not ("System.Collections.Generic.IAsyncEnumerable<T>" or "System.Collections.Generic.IEnumerable<T>")
-            || method.Parameters.Any(p => p.RefKind is not RefKind.None))
+        if (!IsStream(method.ReturnType) || method.Parameters.Any(p => p.RefKind is not RefKind.None))
             return false;
 
+        var rt = (INamedTypeSymbol)method.ReturnType;
         bool isAsync = rt.Name == "IAsyncEnumerable";
         var token = method.Parameters.FirstOrDefault(p => p.Type.GlobalNamespaced == cancelTokenFullTypeName);
         var request = method.Parameters.Where(p => !SymbolEqualityComparer.Default.Equals(p, token)).ToList();

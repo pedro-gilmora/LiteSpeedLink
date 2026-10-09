@@ -1,6 +1,6 @@
 using Application.Contracts;
 
-using LiteSpeedLink.Abstractions.Internals;
+using SourceCrafter.LiteSpeedLink;
 
 using SourceCrafter.DependencyInjection.Attributes;
 

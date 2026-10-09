@@ -1,8 +1,12 @@
 # Copilot Instructions
-
+Just use 2 models: 
+- `claude-opus-5.5` for planning, reasoning profoundly, and generating code with deep understanding of the problem.
+- `claude-haiku-5.5` for fast and straight implementation coding
+- 
 ## General Guidelines
 - Responder de forma lacónica, directa y concisa; no repetir información ya dicha (principios ponytail).
-- Compilar siempre por separado (nunca encadenado con tests/benchmarks) y esperar procesos con carrera fin-del-proceso vs timeout (p.ej. Start-Job + Wait-Job -Timeout), lo primero que ocurra.
+- Compilar siempre por separado (nunca encadenado con tests/benchmarks).
+- OBLIGATORIO: todo comando de duración desconocida (build, pack, restore, tests, benchmarks, ejecutar apps/POC) se lanza como PowerShell job y se espera con carrera fin-del-proceso vs timeout, retornando en cuanto termine: `$j = Start-Job { ... }; Wait-Job $j -Timeout 600 | Out-Null; Receive-Job $j; Remove-Job $j -Force`. Prohibido usar esperas fijas estimadas (sleep/waitMs) para comandos que pueden acabar antes o después.
 - Nunca encadenar diferentes operaciones en un solo comando de terminal (p.ej., escribir un archivo y compilar); ejecutar cada operación como un comando separado.
 
 ## Directrices del proyecto
@@ -11,6 +15,7 @@
 - LiteSpeedLink: everything known at compile time (contract, transport, operation shape, types, batch/coalesce/correlation choices) must be decided by the source generator; avoid runtime branching/guessing in hot paths.
 - LiteSpeedLink: every plan item implemented must ship with a test or a POC demonstrating its purpose.
 - LiteSpeedLink: consume SharedMemory sources as linked files (<Compile Include ... Link>) compiled internal (SG_CONTEXT) inside Client/Server assemblies; never use InternalsVisibleTo. SharedMemory's own tests/benchmarks live in separate SharedMemory projects (SharedMemory.Tests), not in LiteSpeedLink.Tests.
+- LiteSpeedLink: los wrappers (I(Async)WrapperPipeline) deben ser readonly struct; no generar structs intermedios por capa (anidar con AsyncWrappedCall<> de librería). En ejemplos/tests de wrappers usar la variante async.
 
 # Ponytail, lazy senior dev mode
 

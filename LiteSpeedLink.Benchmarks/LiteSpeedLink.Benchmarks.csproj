@@ -9,6 +9,7 @@
 		<Configurations>Debug;Release;DEBUG_SG</Configurations>
 		<ServerGarbageCollection>false</ServerGarbageCollection>
 		<Optimize>true</Optimize>
+		<DefineConstants>$(DefineConstants);DISG_META</DefineConstants>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -18,6 +19,8 @@
 		<PackageReference Include="Grpc.Net.Client" Version="2.71.0" />
 		<PackageReference Include="Google.Protobuf" Version="3.31.1" />
 		<PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="All" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.5" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.282.5" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -29,9 +32,8 @@
 		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
-		<Compile Include="..\Internals\*.cs">
-			<Link>InternalsShared\%(Filename)%(Extension)</Link>
-		</Compile>
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.ServerGenerator\SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.ClientGenerator\SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 	</ItemGroup>
 
 </Project>

@@ -1,4 +1,6 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\Package.props" />
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
@@ -9,13 +11,12 @@
 		<OutputType>Library</OutputType>
 		<IsAotCompatible>true</IsAotCompatible>
 		<IsTrimmable>true</IsTrimmable>
+		<PackageId>SourceCrafter.LiteSpeedLink.Abstractions</PackageId>
+		<Description>LiteSpeedLink contracts: IServiceUnit, response status, processors, retry and cache attributes.</Description>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.CodeAnalysis.Common" Version="5.3.0" />
-		<Compile Include="D:\Code\SourceCrafter.DependencyInjection\Solution\Metadata\Constants.cs">
-			<Link>DISG\%(RecursiveDir)%(Filename)%(Extension)</Link>
-		</Compile>
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.282.5" />
 	</ItemGroup>
 
 </Project>

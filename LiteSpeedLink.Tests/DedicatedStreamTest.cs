@@ -10,7 +10,6 @@ namespace LiteSpeedLink.Tests;
 public class DedicatedStreamTest
 {
     static string Source(string transport) => $$"""
-        using LiteSpeedLink.Abstractions.Internals;
         using SourceCrafter.DependencyInjection.Attributes;
         using SourceCrafter.LiteSpeedLink;
 

@@ -297,7 +297,7 @@ public class ComparisonBenchmarks
         return ((IPEndPoint)l.LocalEndpoint).Port;
     }
 
-    private static HttpClient Http(int port, Version version) => new(new SocketsHttpHandler { UseProxy = false, UseCookies = false, AllowAutoRedirect = false })
+    internal static HttpClient Http(int port, Version version) => new(new SocketsHttpHandler { UseProxy = false, UseCookies = false, AllowAutoRedirect = false })
     {
         BaseAddress = new Uri($"http://127.0.0.1:{port}"),
         DefaultRequestVersion = version,

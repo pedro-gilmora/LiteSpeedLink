@@ -4,7 +4,9 @@
 
 	<PropertyGroup>
 		<AssemblyName>SourceCrafter.DependencyInjection.Partial.LiteSpeedLink.Server</AssemblyName>
+		<PackageId>SourceCrafter.LiteSpeedLink.ServerGenerator</PackageId>
 		<Description>Host generator for LiteSpeedLink services using Memory, UDS, QUIC, TCP and UDP</Description>
 	</PropertyGroup>
+
 
 </Project>

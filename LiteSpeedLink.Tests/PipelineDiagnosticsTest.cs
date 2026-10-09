@@ -6,7 +6,6 @@ namespace LiteSpeedLink.Tests;
 public class PipelineDiagnosticsTest
 {
     const string Prelude = """
-        using LiteSpeedLink.Abstractions.Internals;
         using SourceCrafter.DependencyInjection.Attributes;
         using SourceCrafter.LiteSpeedLink;
 
@@ -44,8 +43,8 @@ public class PipelineDiagnosticsTest
         GeneratorHarness.Run(Prelude + "public sealed class Impl : IContract { " + impl + " }\n" + contract);
 
     [Theory]
-    [InlineData("string Op([ServerPreProcessor<Trim>] string value);", "public string Op(string value) => value;")]
-    [InlineData("void Op([ServerPreProcessor<Trim>] ref string value, out int length);", "public void Op(ref string value, out int length) => length = value.Length;")]
+    [InlineData("string Op([ServerProcessor<Trim>] string value);", "public string Op(string value) => value;")]
+    [InlineData("void Op([ServerProcessor<Trim>] ref string value, out int length);", "public void Op(ref string value, out int length) => length = value.Length;")]
     public void ValidPipelineCompilesClean(string member, string impl)
     {
         var r = Run("public interface IContract : IServiceUnit { " + member + " }", impl);
@@ -55,12 +54,12 @@ public class PipelineDiagnosticsTest
     }
 
     [Theory]
-    [InlineData("SCLSL010", "string Op([ServerPreProcessor<NotPipe>] string value);")]
-    [InlineData("SCLSL011", "string Op([ServerPreProcessor<ParseInt>] string value);")]
-    [InlineData("SCLSL012", "void Op([ServerPreProcessor<Trim>] out string value);")]
-    [InlineData("SCLSL012", "void Op([ServerPreProcessor<ParseInt>] ref string value);")]
-    [InlineData("SCLSL013", "string Op([ServerPreProcessor<Upper>] string value); } public sealed class Upper : IPipeline<string> { public (ResponseStatus, string) Process(string i) => (ResponseStatus.Success, i);")]
-    [InlineData("SCLSL014", "string Op([ServerPreProcessor<Explicit>] string value);")]
+    [InlineData("SCLSL010", "string Op([ServerProcessor<NotPipe>] string value);")]
+    [InlineData("SCLSL011", "string Op([ServerProcessor<ParseInt>] string value);")]
+    [InlineData("SCLSL012", "void Op([ServerProcessor<Trim>] out string value);")]
+    [InlineData("SCLSL012", "void Op([ServerProcessor<ParseInt>] ref string value);")]
+    [InlineData("SCLSL013", "string Op([ServerProcessor<Upper>] string value); } public sealed class Upper : IPipeline<string> { public (ResponseStatus, string) Process(string i) => (ResponseStatus.Success, i);")]
+    [InlineData("SCLSL014", "string Op([ServerProcessor<Explicit>] string value);")]
     public void ReportsDiagnostic(string id, string member)
     {
         Run("public interface IContract : IServiceUnit { " + member + " }").HasDiagnostic(id).Should().BeTrue();

@@ -6,7 +6,6 @@ namespace LiteSpeedLink.Tests;
 public class LocalConnectionTest
 {
     const string Source = """
-        using LiteSpeedLink.Abstractions.Internals;
         using SourceCrafter.DependencyInjection.Attributes;
         using SourceCrafter.LiteSpeedLink;
 

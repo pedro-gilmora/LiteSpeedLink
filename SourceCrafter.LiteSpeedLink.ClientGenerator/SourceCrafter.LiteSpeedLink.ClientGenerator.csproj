@@ -4,8 +4,10 @@
 
 	<PropertyGroup>
 		<AssemblyName>SourceCrafter.DependencyInjection.Partial.LiteSpeedLink.Client</AssemblyName>
+		<PackageId>SourceCrafter.LiteSpeedLink.ClientGenerator</PackageId>
 		<Description>Client generator for LiteSpeedLink services using Memory, UDS, QUIC, TCP and UDP</Description>
 		<DefineConstants>$(DefineConstants);CLIENT_PARTIAL</DefineConstants>
 	</PropertyGroup>
+
 
 </Project>

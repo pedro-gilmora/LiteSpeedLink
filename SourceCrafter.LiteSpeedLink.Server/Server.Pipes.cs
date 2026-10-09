@@ -435,6 +435,14 @@ public sealed class RequestContext
         return _responses.WriteAsync(_correlationId, ResponseStatus.Success, payload, _token);
     }
 
+    /// <summary>Responde <see cref="ResponseStatus.Success"/> con un cuerpo ya serializado ([ServerCache]).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<ResponseStatus> ReturnRawAsync(ReadOnlyMemory<byte> body)
+    {
+        Complete();
+        return _responses.WriteRawAsync(_correlationId, ResponseStatus.Success, body, _token);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<ResponseStatus> YieldAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(TData item) =>
         _responses.WriteAsync(_correlationId, ResponseStatus.Success, item, _token, deferFlush: true);

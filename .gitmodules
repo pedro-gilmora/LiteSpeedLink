@@ -1,0 +1,8 @@
+[submodule "external/SharedMemory"]
+	path = external/SharedMemory
+	url = https://github.com/pedro-gilmora/SharedMemory
+	branch = migrating-to-modern-memory-management
+[submodule "external/SourceCrafter.DependencyInjection"]
+	path = external/SourceCrafter.DependencyInjection
+	url = https://github.com/pedro-gilmora/SourceCrafter.DependencyInjection.git
+	branch = dev

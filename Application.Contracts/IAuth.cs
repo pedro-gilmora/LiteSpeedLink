@@ -10,21 +10,21 @@ public interface IAuth : IServiceUnit
 {
     bool TryAuthenticate(Credentials credentials, out string token);
     bool TryAuth(string user, string password, out string token);
-    [return: ClientPostProcessor<Exclaim>]
-    string Greet([ServerPreProcessor<TrimName>] string name);
+    [return: ClientProcessor<Exclaim>]
+    string Greet([ServerProcessor<TrimName>] string name);
 
-    // Cliente: ClientPre, Pre, Processor -> red -> Servidor: ServerPre, Pre, Processor -> Echo
-    // Servidor: ServerPost, Post, Processor -> red -> Cliente: ClientPost, Post, Processor
-    [return: ServerPostProcessor<Bracket>, PostProcessor<Upper>, ClientPostProcessor<Exclaim>, Processor<Tag>]
-    string Echo([ClientPreProcessor<TrimName>, PreProcessor<Upper>, ServerPreProcessor<Bracket>, Processor<Tag>] string text);
+    // Cliente: TrimName, Upper, Tag -> red -> Servidor: Upper, Bracket, Tag -> Echo
+    // Servidor: Bracket, Upper, Tag -> red -> Cliente: Upper, Exclaim, Tag
+    [return: ServerProcessor<Bracket>, ServerProcessor<Upper>, ClientProcessor<Upper>, ClientProcessor<Exclaim>, ServerProcessor<Tag>, ClientProcessor<Tag>]
+    string Echo([ClientProcessor<TrimName>, ClientProcessor<Upper>, ServerProcessor<Upper>, ServerProcessor<Bracket>, ClientProcessor<Tag>, ServerProcessor<Tag>] string text);
 
     // Servidor cambia tipos: red string -> ParseInt -> int Square(int) -> IntToString -> red string. Cliente: string Square(string)
-    [return: ServerPostProcessor<IntToString>]
-    int Square([ServerPreProcessor<ParseInt>] int value);
+    [return: ServerProcessor<IntToString>]
+    int Square([ServerProcessor<ParseInt>] int value);
 
     // Cliente cambia tipos: int -> IntToString -> red string -> string Twice(string) -> red string -> ParseInt -> int. Cliente: int Twice(int)
-    [return: ClientPostProcessor<ParseInt>]
-    string Twice([ClientPreProcessor<IntToString>] string value);
+    [return: ClientProcessor<ParseInt>]
+    string Twice([ClientProcessor<IntToString>] string value);
 
     // Task sin resultado: raw (#12), el cuerpo de respuesta se ignora.
     Task TouchAsync(string user);
@@ -33,11 +33,11 @@ public interface IAuth : IServiceUnit
     void Bump(ref int counter, out string label);
 
     // 'in' con procesadores en ambos lados: cliente TrimName, servidor Upper.
-    string Shout([ClientPreProcessor<TrimName>, ServerPreProcessor<Upper>] in string text);
+    string Shout([ClientProcessor<TrimName>, ServerProcessor<Upper>] in string text);
 
     // ref con procesadores que preservan el tipo (ida) + out (vuelta) + post en el retorno.
-    [return: ClientPostProcessor<Exclaim>]
-    string Normalize([ClientPreProcessor<TrimName>, ServerPreProcessor<Upper>] ref string text, out int length);
+    [return: ClientProcessor<Exclaim>]
+    string Normalize([ClientProcessor<TrimName>, ServerProcessor<Upper>] ref string text, out int length);
 
     // Respuesta grande: en QUIC va por stream propio y no bloquea las unarias del pool (#14); otros transportes lo ignoran.
     [DedicatedStream]

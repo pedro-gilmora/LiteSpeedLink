@@ -138,6 +138,15 @@ public sealed class UdpRequestContext
         return SendAsync(ResponseStatus.Success, payload, true);
     }
 
+    /// <summary>Responde <see cref="ResponseStatus.Success"/> con un cuerpo ya serializado ([ServerCache]).</summary>
+    public ValueTask<ResponseStatus> ReturnRawAsync(ReadOnlyMemory<byte> body)
+    {
+        Complete();
+        var writer = Header(ResponseStatus.Success, -1);
+        writer.Write(body.Span);
+        return FlushAsync(writer, ResponseStatus.Success);
+    }
+
     public ValueTask<ResponseStatus> YieldAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(TData item) =>
         SendAsync(ResponseStatus.Success, item, true, _seq++);
 
@@ -177,7 +186,14 @@ public sealed class UdpRequestContext
         return await EndStreamingAsync().ConfigureAwait(false);
     }
 
-    private async ValueTask<ResponseStatus> SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(ResponseStatus status, T? body, bool hasBody, int seq = -1)
+    private ValueTask<ResponseStatus> SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(ResponseStatus status, T? body, bool hasBody, int seq = -1)
+    {
+        var writer = Header(status, seq);
+        if (hasBody) Serialize(writer, body);
+        return FlushAsync(writer, status);
+    }
+
+    private ArrayBufferWriter<byte> Header(ResponseStatus status, int seq)
     {
         var writer = new ArrayBufferWriter<byte>(64);
         var header = writer.GetSpan(HeaderSize + sizeof(int));
@@ -192,8 +208,11 @@ public sealed class UdpRequestContext
         }
         else writer.Advance(HeaderSize);
 
-        if (hasBody) Serialize(writer, body);
+        return writer;
+    }
 
+    private async ValueTask<ResponseStatus> FlushAsync(ArrayBufferWriter<byte> writer, ResponseStatus status)
+    {
         if (Interlocked.Add(ref _budget, -writer.WrittenCount) < 0) return status;
 
         await _client.SendAsync(writer.WrittenMemory, _endpoint, _token).ConfigureAwait(false);

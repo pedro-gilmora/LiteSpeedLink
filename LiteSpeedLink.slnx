@@ -6,7 +6,9 @@
   </Configurations>
   <Folder Name="/Generals/">
     <File Path="PLAN.md" />
+    <Folder Name="/docs/" />
   </Folder>
+  <Folder Name="/Generators/" />
   <Folder Name="/Generators/Shared/">
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/Generator.props" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/Helpers.cs" />
@@ -14,18 +16,31 @@
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlers.Raw.cs" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlersGenerator.cs" />
   </Folder>
+  <Folder Name="/test/" />
+  <Folder Name="/test/POC/">
+    <Project Path="test/POC/RetryPolicyIsolated/RetryPolicyIsolated.csproj">
+      <BuildType Solution="DEBUG_SG|*" Project="Debug" />
+    </Project>
+  </Folder>
   <Folder Name="/Tests/">
     <Project Path="Application.Contracts/Application.Contracts.csproj" />
     <Project Path="LiteSpeedLink.Benchmarks/LiteSpeedLink.Benchmarks.csproj" />
     <Project Path="LiteSpeedLink.Tests/LiteSpeedLink.Tests.csproj" />
     <Project Path="LiteSpeedLink/LiteSpeedLink.csproj" />
+    <Project Path="test/POC/AuthRetryPoc/AuthRetryPoc.csproj">
+      <BuildType Solution="DEBUG_SG|*" Project="Debug" />
+    </Project>
+    <Project Path="test/POC/PipelineWrapperPoc/PipelineWrapperPoc.csproj">
+      <BuildType Solution="DEBUG_SG|*" Project="Debug" />
+    </Project>
   </Folder>
   <Folder Name="/Workspace/">
-    <Project Path="D:\Code\SourceCrafter.DependencyInjection\SharedMemory\SharedMemory\SharedMemory.csproj" />
+    <Project Path="external/SharedMemory/SharedMemory/SharedMemory.csproj" />
     <Project Path="LiteSpeedLink.Abstractions/LiteSpeedLink.Abstractions.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.ClientGenerator/SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" />
+    <Project Path="SourceCrafter.LiteSpeedLink.Core/SourceCrafter.LiteSpeedLink.Core.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj" />
   </Folder>
 </Solution>

@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
+using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
-
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -129,13 +130,121 @@ public partial class ServiceHandlersGenerator
             .Append(indent).Append('}');
     }
 
+    private const string ClientRetryAttr = "SourceCrafter.LiteSpeedLink.ClientRetryAttribute", ServerRetryAttr = "SourceCrafter.LiteSpeedLink.ServerRetryAttribute";
+
+    private static readonly DiagnosticDescriptor RetryOnBothSides = new("SCLSL015", "Retry on both client and server",
+        "'{0}' has [ClientRetry] and [ServerRetry]: attempts multiply (up to {1}) and so does worst-case latency", "LiteSpeedLink", DiagnosticSeverity.Warning, true);
+
+    private static readonly DiagnosticDescriptor RetryOnStream = new("SCLSL016", "Retry ignored on streams",
+        "'{0}' streams its result: [ClientRetry]/[ServerRetry] are ignored because retrying would replay items already delivered", "LiteSpeedLink", DiagnosticSeverity.Warning, true);
+
+    /// <summary>IEnumerable&lt;T&gt;/IAsyncEnumerable&lt;T&gt; devuelto tal cual: se emite elemento a elemento.</summary>
+    private static bool IsStream(ITypeSymbol type) =>
+        type is INamedTypeSymbol { IsGenericType: true } n
+            && n.ConstructedFrom.ToDisplayString() is "System.Collections.Generic.IAsyncEnumerable<T>" or "System.Collections.Generic.IEnumerable<T>";
+
+    private const string ClientCacheAttr = "SourceCrafter.LiteSpeedLink.ClientCacheAttribute", ServerCacheAttr = "SourceCrafter.LiteSpeedLink.ServerCacheAttribute";
+
+    private static readonly DiagnosticDescriptor CacheIgnored = new("SCLSL017", "Cache ignored",
+        "'{0}': [{1}] is ignored because {2}", "LiteSpeedLink", DiagnosticSeverity.Warning, true);
+
     /// <summary>
-    /// Cliente unario raw: la peticion se construye en bytes con escritores especificos y se envia con
+    /// [ClientCache]/[ServerCache](durationMs, capacity) efectivo (lectura posicional, como <see cref="ReadRetry"/>);
+    /// null si no lo lleva o no aplica, con SCLSL017: stream, sin resultado (comando), out/ref, o argumentos no positivos.
+    /// </summary>
+    private static (int DurationMs, int Capacity)? GetCache(IMethodSymbol method, bool server, PartialContribution contribution)
+    {
+        var attrName = server ? ServerCacheAttr : ClientCacheAttr;
+
+        if (method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == attrName) is not { } attr) return null;
+
+        bool hasRet = method.ReturnType.TryGetAsyncType(out _, out var awaitedHasRet, out _) ? awaitedHasRet : !method.ReturnsVoid;
+        int duration = attr.ConstructorArguments is [{ Value: int d }, ..] ? d : 0,
+            capacity = attr.ConstructorArguments is [_, { Value: int c }] ? c : 0;
+
+        string? why = IsStream(method.ReturnType) ? "streamed results have no single response"
+            : !hasRet ? "it has no result (a command: caching would suppress its effects)"
+            : method.Parameters.Any(p => p.RefKind is RefKind.Out or RefKind.Ref) ? "out/ref parameters are part of the result"
+            : duration <= 0 || capacity <= 0 ? "durationMs and capacity must be positive"
+            : null;
+
+        if (why is null) return (duration, capacity);
+
+        contribution.ReportDiagnostic(Diagnostic.Create(CacheIgnored, attr.ApplicationSyntaxReference?.GetSyntax().GetLocation() ?? method.Locations.FirstOrDefault(),
+            method.Name, server ? "ServerCache" : "ClientCache", why));
+        return null;
+    }
+
+    /// <summary>
+    /// [ClientRetry]/[ServerRetry](attempts, intervalMs) leido del simbolo: Roslyn ya normaliza ConstructorArguments al orden
+    /// del constructor (argumentos con nombre reubicados y defaults rellenados), asi que la lectura es posicional.
+    /// </summary>
+    private static (int Attempts, int IntervalMs)? ReadRetry(IMethodSymbol method, bool server) =>
+        method.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == (server ? ServerRetryAttr : ClientRetryAttr))
+            is { ConstructorArguments: [{ Value: int attempts }, { Value: int interval }] } && attempts > 1
+                ? (attempts, interval)
+                : null;
+
+    /// <summary>
+    /// Reintento efectivo; null si no lo lleva, no reintenta (attempts &lt; 2) o es un stream: el fallo llega a mitad de la
+    /// enumeracion y repetir reenviaria lo ya entregado (reanudar exigiria un checkpoint en el contrato).
+    /// </summary>
+    private static (int Attempts, int IntervalMs)? GetRetry(IMethodSymbol method, bool server) =>
+        IsStream(method.ReturnType) ? null : ReadRetry(method, server);
+
+    /// <summary>SCLSL015 (ambos lados) y SCLSL016 (stream); lo emiten cliente y host (suelen compilarse en proyectos distintos).</summary>
+    private static void ReportRetryDiagnostics(IMethodSymbol method, PartialContribution contribution)
+    {
+        var location = method.Locations.FirstOrDefault();
+
+        if (IsStream(method.ReturnType))
+        {
+            if (ReadRetry(method, false) != null || ReadRetry(method, true) != null)
+                contribution.ReportDiagnostic(Diagnostic.Create(RetryOnStream, location, method.Name));
+        }
+        else if (GetRetry(method, false) is { } c && GetRetry(method, true) is { } s)
+            contribution.ReportDiagnostic(Diagnostic.Create(RetryOnBothSides, location, method.Name, c.Attempts * s.Attempts));
+    }
+
+    /// <summary>
+    /// Sentencia de llamada al transporte (<paramref name="call"/>), con la respuesta en <paramref name="target"/> si no es null.
+    /// Con [ClientRetry]/[ServerRetry] va en un bucle inline que repite solo esa llamada ante TimeoutException, nunca si el
+    /// llamante cancelo: sin structs ni delegados por operacion; processors y lectores quedan fuera y se ejecutan una vez.
+    /// </summary>
+    private static void EmitCall(StringBuilder code, (int Attempts, int IntervalMs)? retry, string call, string? target, string? token, bool isAsync,
+        string targetType = "global::System.ReadOnlyMemory<byte>")
+    {
+        if (retry is not { } r)
+        {
+            code.Append(target is null ? null : "var " + target + " = ").Append(call).Append(';');
+            return;
+        }
+
+        if (target != null) code.Append(targetType).Append(' ').Append(target).Append(";\n\n        ");
+
+        code.Append("for (var __attempt = 1; ; __attempt++)\n        {\n            try { ").Append(target is null ? null : target + " = ").Append(call)
+            .Append("; break; }\n            catch (global::System.TimeoutException) when (__attempt < ").Append(r.Attempts)
+            .Append(token is null ? null : " && !" + token + ".IsCancellationRequested").Append(") { }");
+
+        if (r.IntervalMs > 0)
+            code.Append("\n\n            ").Append(isAsync
+                ? $"await global::System.Threading.Tasks.Task.Delay({r.IntervalMs}, {token}).ConfigureAwait(false);"
+                : token is null
+                    ? $"global::System.Threading.Thread.Sleep({r.IntervalMs});"
+                    // GetResult y no Wait(): la cancelacion sale como TaskCanceledException, igual que en async.
+                    : $"global::System.Threading.Tasks.Task.Delay({r.IntervalMs}, {token}).GetAwaiter().GetResult();");
+
+        code.Append("\n        }");
+    }
+
+    /// <summary>
+    /// Cliente unario raw:
     /// <c>GetRaw</c>/<c>GetRawAsync</c>; la respuesta se lee con lectores especificos. Streams y operaciones
     /// sin retorno se envian igual; el cuerpo de respuesta se ignora salvo out/ref. Streams y Task sin
     /// resultado siguen por la API tipada.
     /// </summary>
-    private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, INamedTypeSymbol iFace, IMethodSymbol method, string conn, ref int rawIndex)
+    private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, INamedTypeSymbol iFace, IMethodSymbol method, string conn, ref int rawIndex,
+        Compilation compilation, PartialContribution contribution)
     {
         bool isTask = method.ReturnType.TryGetAsyncType(out var retType, out var hasRet, out var isValueTask);
         hasRet = isTask ? hasRet : !method.ReturnsVoid;
@@ -159,12 +268,23 @@ public partial class ServiceHandlersGenerator
 
         int n = rawIndex++;
         string reqName = $"__Req{n}", resName = $"__Res{n}", serviceId = GetServiceId(method.GlobalNamespaced).ToString();
+        var retry = GetRetry(method, false);
 
         if (request.Count > 0) EmitWriter(helpers, reqName, [.. request.Select(p => p.Type)], "");
-        // Firma del contrato: retorno por valor y out/ref por out (un ref se puede pasar como out).
+        // Firma del contrato:
         if (readsResponse) EmitReader(helpers, resName, responseTypes, "", hasRet ? 1 : 0);
 
         string reqArgs = request.Count > 0 ? $"{reqName}({string.Join(", ", request.Select(p => p.Name))})" : "default";
+
+        // GetCache descarta out/ref: con cache el unico resultado es el retorno.
+        string? cacheKey = null;
+
+        if (GetCache(method, false, contribution) is { } cache && GetCacheKey(method, [.. request.Select(p => (p, p.Type))], compilation, true, contribution) is { } key)
+        {
+            cacheKey = DeclareClientCache(helpers, n, cache, key, retType.GlobalNamespaced, reqArgs);
+            // Clave por bytes = la peticion: en un fallo se envia tal cual, sin serializar dos veces.
+            if (key.Bytes) reqArgs = "__cacheKey";
+        }
         string outVars = string.Concat(response.Select((_, i) => $", out var __o{i}"));
         string outNames = string.Join(", ", response.Select((_, i) => $"__o{i}"));
 
@@ -178,10 +298,14 @@ public partial class ServiceHandlersGenerator
         if (tokenName is null)
             code.Append(asyncParams.Length > 0 ? ", " : null).Append(cancelTokenFullTypeName).Append(" @__token = default");
 
-        code.Append(")\n    {\n        ").Append(readsResponse ? "var __res = " : null).Append("await ").Append(conn).Append(".GetRawAsync(").Append(serviceId).Append(", ").Append(reqArgs).Append(", ").Append(tokenName ?? "@__token")
-            .Append(").ConfigureAwait(false);");
+        string token = tokenName ?? "@__token";
+        code.Append(")\n    {\n        ");
+        int cacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, token, true) : 0;
+        EmitCall(code, retry, $"await {conn}.GetRawAsync({serviceId}, {reqArgs}, {token}).ConfigureAwait(false)", readsResponse ? "__res" : null, token, true);
 
-        if (!readsResponse) { }
+        if (cacheKey != null)
+            CloseClientCache(code.Append("\n\n        var __v = ").Append(resName).Append("(__res.Span);"), cacheStart, "__v");
+        else if (!readsResponse) { }
         else if (response.Count == 0)
             code.Append("\n\n        return ").Append(resName).Append("(__res.Span);");
         else if (hasRet)
@@ -200,12 +324,16 @@ public partial class ServiceHandlersGenerator
 
         if (!isTask)
         {
-            string raw = $"{conn}.GetRaw({serviceId}, {reqArgs}" + (tokenName is null ? "" : $", {tokenName}") + ")";
+            code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ");
+            int syncCacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, tokenName, false) : 0;
+            EmitCall(code, retry, $"{conn}.GetRaw({serviceId}, {reqArgs}" + (tokenName is null ? "" : $", {tokenName}") + ")", readsResponse ? "__res" : null, tokenName, false);
 
-            code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ")
-                .Append(hasRet ? "return " : null)
-                .Append(readsResponse ? $"{resName}({raw}.Span{string.Concat(response.Select(p => ", out " + p.Name))})" : raw)
-                .Append(";\n    }");
+            if (cacheKey != null)
+                CloseClientCache(code.Append("\n\n        var __v = ").Append(resName).Append("(__res.Span);"), syncCacheStart, "__v");
+            else if (readsResponse)
+                code.Append("\n\n        ").Append(hasRet ? "return " : null).Append(resName).Append("(__res.Span").Append(string.Concat(response.Select(p => ", out " + p.Name))).Append(");");
+
+            code.Append("\n    }");
         }
 
         return true;

@@ -311,6 +311,7 @@ public partial class ").Append(typeName).Append(@"
 
                 int requestParamsCount = 0, outCount = 0;
                 List<ITypeSymbol> requestWireTypes = [];
+                List<(IParameterSymbol Param, ITypeSymbol Type)> keyRoots = [];
 
                 bool separateParams = false,
                     separateRequestParams = false,
@@ -321,6 +322,14 @@ public partial class ").Append(typeName).Append(@"
                 var methodLocation = method.Locations.FirstOrDefault();
                 var serverPost = GetStages(method.GetReturnTypeAttributes(), true, container, contribution, methodLocation);
                 Action? applyPreStages = null;
+
+                // Procesar un stream seria desempaquetar y reempaquetar cada elemento: no se aplica (igual que en el cliente).
+                if (serverPost.Count > 0 && IsStream(method.ReturnType))
+                {
+                    contribution.ReportDiagnostic(Diagnostic.Create(PipelineUnsupported, methodLocation,
+                        methodName + ": return processors aren't applied to streamed results (per-item unpack/repack)"));
+                    serverPost.Clear();
+                }
 
                 if (returnsType)
                 {
@@ -401,6 +410,7 @@ public partial class ").Append(typeName).Append(@"
                             var wireName = serverPre.Count > 0 ? "__w_" + param.Name : param.Name;
                             var wireType = serverPre.Count > 0 ? serverPre[0].In.GlobalNamespaced : paramType;
                             requestWireTypes.Add(serverPre.Count > 0 ? serverPre[0].In : param.Type);
+                            keyRoots.Add((param, param.Type));
 
                             if (serverPre.Count > 0)
                             {
@@ -480,9 +490,38 @@ public partial class ").Append(typeName).Append(@"
                     }
                 }
 
+                var serverCache = GetCache(method, true, contribution);
+                // Sin [CacheKey] la clave son los bytes de la peticion; con el, la clave tipada tras leer los argumentos.
+                var serverKey = serverCache is null ? null : GetCacheKey(method, keyRoots, compilation, false, contribution);
+                if (serverKey is null) serverCache = null;
+                bool typedKey = serverKey is { Explicit: true };
+                var opSuffix = serviceId < 0 ? "M" + (-serviceId) : serviceId.ToString();
+
+                if (serverCache is { } sc)
+                {
+                    var manager = typedKey
+                        ? "global::SourceCrafter.LiteSpeedLink.CacheManager<" + serverKey!.Type + ", global::System.ReadOnlyMemory<byte>>"
+                        : "global::SourceCrafter.LiteSpeedLink.ServerCacheManager";
+
+                    // Por metodo, creado al primer uso (thread-safe): sin coste de memoria para operaciones nunca llamadas.
+                    policyTypes.Append(@"
+
+    private ").Append(manager).Append(" __cache").Append(opSuffix).Append(@";
+
+    private ").Append(manager).Append(" __Cache").Append(opSuffix).Append(@" =>
+        global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache").Append(opSuffix)
+                        .Append(", static () => new ").Append(manager).Append('(').Append(sc.DurationMs).Append(", ").Append(sc.Capacity).Append("));");
+
+                    EmitWriter(policyTypes, "__Res" + opSuffix,
+                        [serverPost.Count > 0 ? serverPost[serverPost.Count - 1].Out : isAwaitable ? awaitedType! : method.ReturnType], "    ");
+                }
+
+                // Con param processors (p.ej. autorizacion) la consulta va despues: un acierto no puede saltarselos.
+                int cacheStart = serverCache != null && applyPreStages == null && !typedKey ? OpenServerCache(hostCode, opSuffix, "__context.Body", connectionType > 0) : 0;
+
                 if (requestParamsCount > 0 && requestTypes != null && requestDeconstruct != null)
                 {
-                    var readerName = "__Req" + (serviceId < 0 ? "M" + (-serviceId) : serviceId.ToString());
+                    var readerName = "__Req" + opSuffix;
 
                     EmitReader(policyTypes, readerName, requestWireTypes, "    ");
 
@@ -501,10 +540,12 @@ public partial class ").Append(typeName).Append(@"
 
                 applyPreStages?.Invoke();
 
-                if (returnsType)
-                {
-                    hostCode.Append(@"var ___result = ");
-                }
+                if (serverCache != null && (applyPreStages != null || typedKey)) cacheStart = OpenServerCache(hostCode, opSuffix, typedKey ? serverKey!.Expr : "__context.Body", connectionType > 0);
+
+                var serverRetry = GetRetry(method, true);
+                ReportRetryDiagnostics(method, contribution);
+                ReportCacheKeyIgnored(method, contribution);
+                int callStart = hostCode.Length;
 
                 bool awaitCall = isAwaitable && connectionType > 0;
 
@@ -521,16 +562,42 @@ public partial class ").Append(typeName).Append(@"
                 invokeParams?.Invoke();
 
                 // Memory es sync: el host no puede await; se bloquea como hacen las etapas async ahi.
-                hostCode.Append(awaitCall ? ").ConfigureAwait(false);" : isAwaitable ? ").GetAwaiter().GetResult();" : ");").Append(@"
+                hostCode.Append(awaitCall ? ").ConfigureAwait(false)" : isAwaitable ? ").GetAwaiter().GetResult()" : ")");
+
+                var call = hostCode.ToString(callStart, hostCode.Length - callStart);
+                hostCode.Length = callStart;
+
+                int emitStart = hostCode.Length;
+
+                if (serverRetry != null)
+                {
+                    // Los out se declaran fuera del bucle: un 'out var' dentro del try no seria visible al responder.
+                    foreach (var p in method.Parameters.Where(p => p.RefKind == RefKind.Out))
+                        hostCode.Append(p.Type.GlobalNamespaced).Append(' ').Append(p.Name).Append(";\n        ");
+
+                    call = call.Replace("out var ", "out ");
+                }
+
+                // Solo la invocacion al handler se reintenta: los server processors ya corrieron una vez.
+                EmitCall(hostCode, serverRetry, call, returnsType ? "___result" : null, "__token", connectionType > 0,
+                    (isAwaitable ? awaitedType! : method.ReturnType).GlobalNamespaced);
+                // EmitCall sangra para el cuerpo de un metodo de cliente (8); aqui es el de un case (12).
+                hostCode.Replace("\n        ", "\n            ", emitStart, hostCode.Length - emitStart);
+
+                hostCode.Append(@"
 
             ");
 
                 if (returnsType && serverPost.Count > 0)
                     hostCode.Append(ApplyStages("___result", serverPost, connectionType > 0, provider, "            ", HostReject(connectionType > 0)));
 
-                bool isStream = connectionType > 1 && returnsType
-                    && method.ReturnType is INamedTypeSymbol { IsGenericType: true } rt
-                    && rt.ConstructedFrom.ToDisplayString() is "System.Collections.Generic.IAsyncEnumerable<T>" or "System.Collections.Generic.IEnumerable<T>";
+                if (serverCache != null)
+                {
+                    CloseServerCache(hostCode, cacheStart, opSuffix, serverPost.Count > 0 ? StageVar("___result", serverPost.Count - 1) : "___result", connectionType > 0);
+                    continue;
+                }
+
+                bool isStream = connectionType > 1 && returnsType && IsStream(method.ReturnType);
 
                 hostCode.Append("return ").Append(connectionType == 0 ? "__context.Return(" : isStream ? "await __context.EnumerateAsync(" : "await __context.ReturnAsync(");
 
@@ -627,6 +694,58 @@ public partial class ").Append(typeName).Append(@"
         });
 
         contribution.AddSource(hintName + ".host", hostCode.ToString());
+    }
+
+    /// <summary>
+    /// [ServerCache]: acierto -> bytes guardados; fallo -> single-flight (un solo handler por peticion identica en curso,
+    /// el resto espera sus bytes). Ningun lock abarca el await del handler.
+    /// </summary>
+    // ponytail: Memory es sync: el seguidor bloquea su hilo esperando al lider (igual que las etapas async ahi).
+    /// Devuelve el inicio del cuerpo del try, que <see cref="CloseServerCache"/> indenta.
+    private static int OpenServerCache(StringBuilder code, string suffix, string key, bool canAwait)
+    {
+        code.Append(@"var __cache = __Cache").Append(suffix).Append(@";
+            var __cacheKey = ").Append(key).Append(@";
+
+            if (!__cache.TryGet(__cacheKey, out var __cached))
+            {
+                if (!__cache.TryLead(__cacheKey, out var __flight))
+                    __cached = ").Append(canAwait ? "await __flight.Task.WaitAsync(__token).ConfigureAwait(false)" : "__flight.Task.WaitAsync(__token).GetAwaiter().GetResult()").Append(@";
+                else try
+                {");
+
+        int start = code.Length;
+        code.Append(@"
+            ");
+        return start;
+    }
+
+    /// <summary>Guarda los bytes tras los return processors; fallo o rechazo no se cachean (Fail es idempotente).</summary>
+    private static void CloseServerCache(StringBuilder code, int start, string suffix, string result, bool canAwait)
+    {
+        while (char.IsWhiteSpace(code[code.Length - 1])) code.Length--;
+
+        code.Append(@"
+
+            __cached = __Res").Append(suffix).Append('(').Append(result).Append(@");
+            __cache.Complete(__cacheKey, __flight, __cached);")
+            .Replace("\n            ", "\n                    ", start, code.Length - start)
+            .Append(@"
+                }
+                catch (global::System.Exception __cacheError)
+                {
+                    __cache.Fail(__cacheKey, __flight, __cacheError);
+                    throw;
+                }
+                finally
+                {
+                    __cache.Fail(__cacheKey, __flight, null);
+                }
+            }
+
+            return ").Append(canAwait ? "await __context.ReturnRawAsync(__cached).ConfigureAwait(false);" : "__context.ReturnRaw(__cached);").Append(@"
+        }
+");
     }
 
     /// <summary>
