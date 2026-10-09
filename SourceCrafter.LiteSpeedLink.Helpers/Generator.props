@@ -28,7 +28,7 @@
 			<PrivateAssets>all</PrivateAssets>
 		</PackageReference>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" PrivateAssets="all" />
-		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.5" PrivateAssets="none" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.142" PrivateAssets="none" />
 		<Compile Include="$(DISolutionDir)Interop\PartialGenerationContracts.cs">
 			<Link>Interop\%(Filename)%(Extension)</Link>
 		</Compile>
