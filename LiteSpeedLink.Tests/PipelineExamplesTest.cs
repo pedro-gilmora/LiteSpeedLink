@@ -61,7 +61,11 @@ public class PipelineExamplesTest
         auth.Process("forged").Item1.Should().Be(ResponseStatus.Failed);
     }
 
+    #if NO_POSTGRES
+    [Fact(Skip = "NO_POSTGRES: no PostgreSQL server available")]
+#else
     [Fact]
+#endif
     public async Task PostgresAuthorization()
     {
         await using var db = NpgsqlDataSource.Create(PgConn);

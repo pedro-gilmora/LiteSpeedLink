@@ -8,6 +8,8 @@
 		<IsPackable>false</IsPackable>
 		<IsTestProject>true</IsTestProject>
 		<Configurations>Debug;Release;DEBUG_SG</Configurations>
+		<!-- dotnet test -p:TestConstants=NO_POSTGRES (sin pisar DefineConstants de los generadores). -->
+		<DefineConstants>$(DefineConstants);$(TestConstants)</DefineConstants>
 	</PropertyGroup>
 
 	<ItemGroup>
