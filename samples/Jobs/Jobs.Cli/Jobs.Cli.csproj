@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
@@ -9,7 +9,7 @@
 		<ProjectReference Include="..\Jobs.Contracts\Jobs.Contracts.csproj" />
 		<!--<PackageReference Include="SourceCrafter.LiteSpeedLink.Client" Version="$(LiteSpeedLinkVersion)" />
 		<PackageReference Include="SourceCrafter.LiteSpeedLink.ClientGenerator" Version="$(LiteSpeedLinkVersion)" PrivateAssets="all" />-->
-		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.142" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.289" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
 		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.ClientGenerator\SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 	</ItemGroup>

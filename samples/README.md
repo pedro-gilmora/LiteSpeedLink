@@ -4,6 +4,7 @@ Proyectos independientes que consumen los paquetes publicados en nuget.org (`Lit
 
 | Sample | Plantilla | Transporte | Muestra |
 |---|---|---|---|
+| [Hello](Hello) | File-based app (`dotnet run hello.cs`) | Shared memory | boilerplate mínimo: contrato, handler, host y cliente |
 | [Chat](Chat) | Console | TCP | streams en vivo, pipeline de servidor (moderación), estado compartido entre conexiones |
 | [Jobs](Jobs) | Worker Service + CLI | Local (shared memory / UDS) | contrato compartido, agente en segundo plano, CLI que habla con él |
 

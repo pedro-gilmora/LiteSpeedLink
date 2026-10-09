@@ -1,0 +1,12 @@
+<Project>
+
+	<Import Project="..\Directory.Build.props" />
+
+	<!-- Las directivas #: no admiten metadatos: los generadores (analyzers) se referencian aqui. -->
+	<ItemGroup>
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.289" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\..\SourceCrafter.LiteSpeedLink.ServerGenerator\SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\..\SourceCrafter.LiteSpeedLink.ClientGenerator\SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+	</ItemGroup>
+
+</Project>

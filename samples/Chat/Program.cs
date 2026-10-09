@@ -33,34 +33,32 @@ switch (args)
 
 async Task<int> Demo()
 {
-    var server = ChatServer.Start(port);
-    try
-    {
-        var alice = new ChatServerClient(port).Chat;
-        var bob = new ChatServerClient(port).Chat;
+    using var server = ChatServer.Start(port);
 
-        using var stop = new CancellationTokenSource();
-        var bobInbox = Listen(bob, "bob", "lobby", stop.Token);
-        var aliceInbox = Listen(alice, "alice", "lobby", stop.Token);
-        await WaitUntil(async () => await alice.OnlineAsync("lobby") == 2);
+    var alice = new ChatServerClient(port).Chat;
+    var bob = new ChatServerClient(port).Chat;
 
-        await alice.PostAsync(new("lobby", "alice", "hi bob! no spam here"));
-        await bob.PostAsync(new("lobby", "bob", "hey alice"));
+    using var stop = new CancellationTokenSource();
+    var bobInbox = Listen(bob, "bob", "lobby", stop.Token);
+    var aliceInbox = Listen(alice, "alice", "lobby", stop.Token);
+    await WaitUntil(async () => await alice.OnlineAsync("lobby") == 2);
 
-        try { await bob.PostAsync(new("lobby", "bob", "   ")); }
-        catch (Exception ex) { Console.WriteLine($"[moderation] empty message rejected by the server: {ex.Message}"); }
+    await alice.PostAsync(new("lobby", "alice", "hi bob! no spam here"));
+    await bob.PostAsync(new("lobby", "bob", "hey alice"));
 
-        await Task.Delay(300);
-        stop.Cancel();
-        var received = (await bobInbox).Concat(await aliceInbox).ToList();
+    try { await bob.PostAsync(new("lobby", "bob", "   ")); }
+    catch (Exception ex) { Console.WriteLine($"[moderation] empty message rejected by the server: {ex.Message}"); }
 
-        var ok = received.Any(m => m.User == "alice" && m.Text == "hi bob! no **** here")
-              && received.Any(m => m.User == "bob" && m.Text == "hey alice")
-              && received.All(m => !string.IsNullOrWhiteSpace(m.Text));
-        Console.WriteLine(ok ? "OK" : "FAIL");
-        return ok ? 0 : 1;
-    }
-    finally { server.Dispose(); }
+    await Task.Delay(300);
+    stop.Cancel();
+    var received = (await bobInbox).Concat(await aliceInbox).ToList();
+
+    var ok = received.Any(m => m.User == "alice" && m.Text == "hi bob! no **** here")
+          && received.Any(m => m.User == "bob" && m.Text == "hey alice")
+          && received.All(m => !string.IsNullOrWhiteSpace(m.Text));
+    Console.WriteLine(ok ? "OK" : "FAIL");
+
+    return ok ? 0 : 1;
 }
 
 static async Task<List<ChatMessage>> Listen(ChatServerClient.ChatClient chat, string user, string room, CancellationToken token)

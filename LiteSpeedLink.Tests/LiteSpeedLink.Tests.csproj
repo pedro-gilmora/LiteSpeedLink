@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
@@ -45,8 +45,8 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
-		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.142" GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
-		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.282.142" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.282.289" GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.282.289" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.ServerGenerator\SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" ReferenceOutputAssembly="false" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.ClientGenerator\SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" ReferenceOutputAssembly="false" />
 		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
