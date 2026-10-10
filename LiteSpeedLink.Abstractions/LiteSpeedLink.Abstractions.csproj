@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<Import Project="..\Package.props" />
 
@@ -16,7 +16,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.282.289" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.283.228" />
 	</ItemGroup>
 
 </Project>

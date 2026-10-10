@@ -4,11 +4,15 @@ using LiteSpeedLink;
 using SourceCrafter.LiteSpeedLink;
 
 using SourceCrafter.DependencyInjection.Attributes;
+using SourceCrafter.DependencyInjection.MsConfiguration.Metadata;
 
 namespace SourceCrafter.LiteSpeedLink;
 
+
 [ServiceHost]
 [ServiceProvider]
+[JsonConfiguration]
+[JsonSetting<LocalOptions>("TextService")]
 [Singleton<TrimName>]
 [Singleton<Upper>]
 [Singleton<Bracket>]

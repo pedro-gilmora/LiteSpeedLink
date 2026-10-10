@@ -60,7 +60,7 @@ public static partial class Server
 
                     await slots.WaitAsync(token).ConfigureAwait(false);
 
-                    var request = DispatchAsync(handlers, op, new(correlationId, body.AsMemory(0, length), responses, token), body, slots, token);
+                    var request = DispatchAsync(handlers, op, RequestContext.Rent(correlationId, body.AsMemory(0, length), responses, token), body, slots, token);
 
                     if (!request.IsCompleted && inflight.TryAdd(request, 0))
                         _ = request.ContinueWith(static (t, s) => ((ConcurrentDictionary<Task, byte>)s!).TryRemove(t, out _), inflight, TaskScheduler.Default);
@@ -102,6 +102,7 @@ public static partial class Server
         }
         finally
         {
+            ctx.Return();
             ArrayPool<byte>.Shared.Return(body);
             slots?.Release();
         }
@@ -405,18 +406,37 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
 /// </summary>
 public sealed class RequestContext
 {
-    private readonly int _correlationId;
-    private readonly ReadOnlyMemory<byte> _body;
-    private readonly ResponseChannel _responses;
-    private readonly CancellationToken _token;
+    // ponytail: pool sin limite (= pico de peticiones concurrentes), mismo patron que _batches. El contexto solo es valido
+    // mientras el handler no ha terminado; retenerlo despues (fire-and-forget) es un uso indebido.
+    private static readonly System.Collections.Concurrent.ConcurrentBag<RequestContext> _pool = [];
+    private int _correlationId;
+    private ReadOnlyMemory<byte> _body;
+    private ResponseChannel _responses = null!;
+    private CancellationToken _token;
     private int _completed;
 
-    internal RequestContext(int correlationId, ReadOnlyMemory<byte> body, ResponseChannel responses, CancellationToken token)
+    private RequestContext() { }
+
+    internal static RequestContext Rent(int correlationId, ReadOnlyMemory<byte> body, ResponseChannel responses, CancellationToken token)
     {
-        _correlationId = correlationId;
-        _body = body;
-        _responses = responses;
-        _token = token;
+        var ctx = _pool.TryTake(out var pooled) ? pooled : new();
+        ctx._correlationId = correlationId;
+        ctx._body = body;
+        ctx._responses = responses;
+        ctx._token = token;
+        ctx._completed = 0;
+        return ctx;
+    }
+
+    /// <summary>Fin de la peticion: libera el lote y vuelve al pool.</summary>
+    internal void Return()
+    {
+        Complete();
+        _batched = 0;
+        _body = default;
+        _responses = null!;
+        _token = default;
+        _pool.Add(this);
     }
 
     /// <summary>Ya se envio la respuesta final (valor, fin de stream o error).</summary>

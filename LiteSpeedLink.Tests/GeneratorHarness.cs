@@ -39,6 +39,9 @@ static class GeneratorHarness
         return (IIncrementalGenerator)Activator.CreateInstance(type)!;
     });
 
+    static readonly Lazy<IIncrementalGenerator> MsConfigGenerator = new(() => (IIncrementalGenerator)Activator.CreateInstance(
+        Assembly.LoadFrom(Meta("MsConfigGenerator")).GetTypes().First(t => typeof(IIncrementalGenerator).IsAssignableFrom(t) && !t.IsAbstract))!);
+
     static readonly Lazy<IReadOnlyList<MetadataReference>> References = new(() =>
     {
         List<MetadataReference> refs = [];
@@ -50,7 +53,9 @@ static class GeneratorHarness
         }
 
         foreach (var name in (string[])["LiteSpeedLink.Abstractions", "SourceCrafter.LiteSpeedLink.Server", "SourceCrafter.LiteSpeedLink.Client",
-            "SourceCrafter.DependencyInjection.Metadata", "MemoryPack.Core"])
+            "SourceCrafter.DependencyInjection.Metadata", "MemoryPack.Core", "SourceCrafter.DependencyInjection.MsConfiguration.Metadata",
+            "Microsoft.Extensions.Configuration", "Microsoft.Extensions.Configuration.Abstractions", "Microsoft.Extensions.Configuration.Binder",
+            "Microsoft.Extensions.Configuration.Json", "Microsoft.Extensions.Configuration.FileExtensions", "Microsoft.Extensions.Primitives"])
             refs.Add(MetadataReference.CreateFromFile(Path.Combine(AppContext.BaseDirectory, name + ".dll")));
 
         return refs;
@@ -61,7 +66,7 @@ static class GeneratorHarness
 
     const string GlobalUsings = "global using System; global using System.Threading; global using System.Threading.Tasks; global using System.Collections.Generic;";
 
-    internal static Result Run(string source, IReadOnlyDictionary<string, string>? globalOptions = null)
+    internal static Result Run(string source, IReadOnlyDictionary<string, string>? globalOptions = null, bool msConfig = false)
     {
         var compilation = CSharpCompilation.Create(
             "Probe",
@@ -72,7 +77,11 @@ static class GeneratorHarness
             References.Value,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable, allowUnsafe: true));
 
-        var driver = CSharpGeneratorDriver.Create([Generator.Value.AsSourceGenerator()], parseOptions: ParseOptions,
+        ISourceGenerator[] generators = msConfig
+            ? [Generator.Value.AsSourceGenerator(), MsConfigGenerator.Value.AsSourceGenerator()]
+            : [Generator.Value.AsSourceGenerator()];
+
+        var driver = CSharpGeneratorDriver.Create(generators, parseOptions: ParseOptions,
                 optionsProvider: globalOptions is null ? null : new Options(globalOptions))
             .RunGeneratorsAndUpdateCompilation(compilation, out var output, out _);
 

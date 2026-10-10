@@ -34,10 +34,10 @@ public class QuicComparisonBenchmarks
 
         _lslServer = await Server.StartQuicServerAsync(0, static (op, ctx, _) => op == 0
             ? ctx.ReturnAsync(ctx.Get<(int, int)>().Item1 + ctx.Get<(int, int)>().Item2)
-            : ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { }, cert);
+            : ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { }, cert);
         _lsl = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert);
 
-        _lslBatchServer = await Server.StartQuicServerAsync(0, static (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { }, cert, default, StreamBatch);
+        _lslBatchServer = await Server.StartQuicServerAsync(0, static (op, ctx, _) => ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { }, cert, default, StreamBatch);
         _lslBatched = new DnsEndPoint("localhost", _lslBatchServer.LocalEndPoint.Port).AsQuicConnection(cert);
 
         int p;

@@ -93,7 +93,13 @@ POC `test/POC/AuthRetryPoc` (Memory, fallos inyectados en el host, 8 checks en v
     - [x] Retry generado: `[ClientRetry(attempts, intervalMs)]` (alrededor del transporte) y `[ServerRetry(attempts, intervalMs)]` (alrededor del handler), bucle inline sin structs ni delegados, solo `TimeoutException`, nunca tras cancelación; processors fuera del bucle. Ambos a la vez → SCLSL015 (intentos multiplicados). Argumentos con nombre: Roslyn normaliza `ConstructorArguments` al orden del constructor, la lectura por símbolo es posicional. Plazo por intento = el del transporte. Tests `RetryAttributeTest`; POC `Fetch` con `[ServerRetry(3)]`.
 14. [x] **Generadores separados**: `ServerGenerator` (`ServiceHostGenerator`) y `ClientGenerator` (`ServiceClientGenerator`, `CLIENT_PARTIAL`) heredan de la base abstracta `ServiceHandlersGenerator`; el código común se enlaza desde `Helpers` vía `Generator.props`. Clases con nombre distinto porque el registro de DI desduplica parciales por nombre de tipo. `GeneratorHarness` carga ambos ensamblados. Suite 94/94 (commit `9f31c34`).
 
-Pospuestos: 5.8 (endpoints por configuración), estudio #5/#6/#7 (solo con perfil), cookie anti-amplificación UDP, test de servidor falso byte a byte.
+Pendientes reales (refinados):
+
+- [x] **5.8 Endpoints por DI Configuration**: `RemoteOptions` (Host/Port, TCP/UDP/QUIC) y `LocalOptions` (Name, Memory/UDS/Local) con `Timeout` comun. MsConfiguration ya enlaza `[JsonSetting<T>]`; el parcial solo detecta el atributo en el contenedor (con su `JsonConfiguration` por `configKey`) y deriva el nombre del miembro (`nameFormat` + `key`). Con setting: host `Start()` sin endpoint (QUIC sigue pidiendo certificado) y cliente con parametros opcionales (`hostname ?? Settings.Host`, `port ?? Settings.Port`, `name ??= Settings.Name`; Memory usa `Timeout`); el explicito gana. Sin setting: API intacta. Test `EndpointSettingsTest` (compila con ambos generadores). Nota: MsConfiguration con `[JsonConfiguration]` sobre un contenedor sin servicios DI emite `EnvironmentName` sin declarar (CS0103) — fallo del paquete, no de LSL.
+- [ ] **5.2-R `[ClientRetry]` E2E en `AuthRetryPoc`**: sustituir `Retry.RunAsync` por el bucle generado con timeout corto configurado (5.8); checks B2-B5 contra el cliente generado.
+- [x] **Cola por stream reutilizable en el cliente**: ya existia (`StreamSink` pooled en `MultiplexedChannel`). Lo que quedaba era `RequestContext` por peticion (servidor) y la clausura del handler del benchmark: `RequestContext` ahora pooled (`Rent`/`Return` en `DispatchAsync`, mismo patron que `_batches`) y el benchmark usa `EnumerateAsync(secuencia)` como el host generado. `--alloc cmp` (5000 llamadas, misma maquina): Lsl_Stream 544 -> 356 B/op; Lsl_StreamBatched ~1360 -> ~1200 B/op (varia con el timing: si el productor no espera no hay cajas de flush). Tests 121/121.
+
+Descartados/aparcados: SCLSL012 en streams (decision), test byte a byte (framing compartido ya cubierto), `Pipe` + bombeo por conexion (el `TaskNode` ya no aparece), cookie UDP (solo si UDP se expone a Internet; hoy `maxAmplification`), coste de `RpcBuffer` (sustituido por MemChannel), estudio #5/#6/#7 (solo con perfil).
 
 ---
 
@@ -312,7 +318,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Diagnóstico del generador si dos métodos colisionan (compile-time, coherente con P1).
 
 - [x] **3.3 Framing por longitud en TCP** *(acordado)* — `Framing.TryReadFrame` en `MultiplexedChannel`/`ServePipeAsync`. Test `TestTcpFragmentedFrames` (2 peticiones byte a byte, respuestas por `corrId`).
-  - [ ] Test de cliente con servidor falso que responda byte a byte (bucle de `MultiplexedChannel`). Hoy de bajo valor: mismo `TryReadFrame` y bucle calcado de `ServePipeAsync`. Hacerlo cuando el bucle del cliente diverja (TLS 3.8, streaming 4.2).
+  - [-] Test de cliente con servidor falso que responda byte a byte: descartado. Cliente y servidor comparten `Framing.TryReadFrame` (ya cubierto por `TestTcpFragmentedFrames`) y TLS/streaming ya divergieron sin regresiones.
   - `TcpConnection.cs:108-112` asume `1 ReadAsync == 1 mensaje`. Falso por definición en TCP (P4).
   - Formato: `[int32 length][int64 opId][payload]`, lectura con `SequenceReader<byte>` en bucle.
   - **Prerrequisito de 3.6** (sin delimitación no hay demultiplexación).
@@ -404,10 +410,10 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 ---
 
-- [~] **3.8 Seguridad en la frontera de red**
+- [x] **3.8 Seguridad en la frontera de red** (UDP sin cifrar por diseno: solo red de confianza)
   - [x] `Framing.MaxFrameSize` (16 MiB): TCP y QUIC cortan la conexión ante longitudes hostiles. Test `TestTcpRejectsOversizedFrame`.
   - [x] TCP valida trama < `opId`; `Failed` envía `Message`, no la traza.
-  - [~] Confidencialidad/integridad: QUIC ya usa TLS. TCP → `SslStream` opcional (`cert`): hecho, mTLS con pinning por hash del
+  - [x] Confidencialidad/integridad: QUIC ya usa TLS. TCP → `SslStream` opcional (`cert`): hecho, mTLS con pinning por hash del
     certificado configurado (antes fallaba con autofirmados: `UntrustedRoot`). Test `TestTcpTls`. UDP → sin cifrar (DTLS no está en .NET); solo red de confianza.
   - [x] Autenticación: pipeline de servidor (5.2), no transporte. Cubierta por los pipelines actuales (`[ServerProcessor<Authenticate>]`, etapa con dependencias de DI); POC `test/POC/AuthRetryPoc` (paso 13).
   - [x] Límite de peticiones en vuelo por conexión TCP: `Server.MaxInFlightPerConnection` (256). Al
@@ -434,7 +440,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - Opciones:
     1. Canal propio por cliente: un `RpcBuffer` por `MemoryConnection`, streams multiplexados por `streamId` dentro. Aísla clientes; coste por cliente en vez de por stream.
     2. **(elegida)** En el fork, `MessageType.StreamItem` con `ResponseId` = `MsgId` de la petición que abrió el stream; solo lo entrega quien la hizo. Fin = la propia respuesta (`StreamEnd`). Sin `RpcBuffer`/eventos/`Guid` por stream ni ack por item.
-    3. Dejarlo pendiente: coste actual = un `RpcBuffer` nombrado por stream, sin medir si importa.
+    3. ~~Dejarlo pendiente~~: obsoleto, `RpcBuffer` sustituido por MemChannel.
   - `MemoryConnection.cs:93-111, 123-141`: cada `Enumerate` crea memoria compartida + eventos
 	nombrados + `Guid.NewGuid()` formateado a string.
   - → multiplexar sobre el canal principal con `streamId` en la cabecera.
@@ -487,7 +493,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   - [x] **Early-return**: el host ya no lanza al rechazar; emite `return __context.Fail[Async](string)` (sobrecargas nuevas en los 4 contextos). El cliente lanza (no hay respuesta que devolver).
   - [x] **`in` con procesadores** (cliente y host). `IAuth.Shout`.
   - [x] **Arnés Roslyn** (`GeneratorHarness.cs`) y `PipelineDiagnosticsTest`: SCLSL010-014.
-  - [x] `ref`/`out` con procesadores (POC `Normalize` en `Program.cs`). [ ] Pendiente: streams con procesadores (hoy SCLSL012).
+  - [x] `ref`/`out` con procesadores (POC `Normalize` en `Program.cs`). [-] Streams con procesadores: se quedan en SCLSL012 por decision.
 
   `Pipeline.cs` actual: 4 interfaces sin uso, y `IPipelineAsync.ProcessAsync` devuelve `TOut` en vez
   de `Task<TOut>`. Se reemplaza entero.
@@ -495,7 +501,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
   **Objetivo**: interceptores (auth, logging, validación, retry) **compuestos por el generador**,
   sin delegados encadenados, sin `IEnumerable<IMiddleware>`, sin asignaciones por request.
 
-  - [ ] **5.2-R Retry como pipeline de cliente** *(para después)*: opt-in, registrado en DI, solo
+  - [~] **5.2-R Retry como pipeline de cliente**: generado (ver abajo); falta el E2E de `[ClientRetry]`. Opt-in, solo
 	útil en UDP (TCP/QUIC ya retransmiten). Timeout + reintento por corrId; en streams re-pide
 	los `seq` faltantes (4.3). Requiere handlers idempotentes.
 	POC `test/POC/AuthRetryPoc` (paso 13, sobre Memory): semántica validada; el envoltorio por llamada cuesta +432 B, así que la versión generada debe usar el plazo del transporte.
@@ -507,7 +513,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 		- [x] 4. Cliente: consulta/single-flight/guardado en la ruta raw (clave por bytes = la propia petición) y en la de processors (clave = argumentos originales, consulta antes de processors y retry). Test `CacheKeyGeneratorTest`.
 		Campos `__cacheN` sin `?` (el código generado no tiene contexto nullable: CS8669).
 				- [x] 6. Benchmark `FeatureBenchmarks` (suite `Features` = 4096): contrato generado TCP vs ASP.NET Core slim (HTTP/1.1, binario, `OutputCache` nativo). Setup valida por deltas que los aciertos no ejecutan handler (`MemoryRandomization` repite `GlobalSetup` en el mismo proceso). Arnés de publicación (`4097`, control incluido; Processor reejecutado aparte por `SocketException 10048` de puertos efímeros): Plain 37,8 vs 50,1 µs · 1,2 vs 2,9 KB; Processor 34,6 vs 45,3 µs · 1,4 vs 6,0 KB; ClientRetry 37,8 vs 42,5 µs (±7 µs en Slim); ServerRetry 37,5 vs 47,2 µs; ClientCacheHit **15 ns / 72 B** vs 52,4 µs (Slim acierta en servidor: sí viaja); ServerCacheHit 46,5 vs 51,3 µs · 1,2 vs 4,2 KB; CacheKeyHit 44,4 vs 50,4 µs · 1,4 vs 4,3 KB; SingleFlight (16 concurrentes en frío) 39,5 vs 228 µs · 4,9 vs 45 KB.
-	- [ ] POC `AuthRetryPoc` E2E con el retry generado
+	- [~] POC `AuthRetryPoc` E2E con el retry generado: `[ServerRetry]` cubierto (D1/D2). `[ClientRetry]` no: B usa el envoltorio manual `Retry.RunAsync` porque el cliente generado no expone el timeout (5000 ms fijo) y el bucle generado solo reintenta `TimeoutException`. Depende de 5.8.
 
   **Contrato** — comportamientos como `struct` para que el JIT los desvirtualice e inline:
 
@@ -599,7 +605,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 	contexto**, ignorando el argumento.~~ Resuelto: `Yield` ya no recibe token; usa el del contexto.
   - ~~Pendiente: timeouts por defecto divergentes (cliente 5000 ms, `AsMemoryConnection` 100000 ms, servidor 1000 ms).~~ Resuelto (paso 7).
 
-- [~] **5.6 Unix Domain Sockets como equivalente local de memoria compartida** *(acordado)* — Hecho: `Server.StartUdsServer` + `UdsConnection` reutilizando `ServePipeAsync`/`MultiplexedChannel` (framing 3.3). Test: `UdsTest.TestUdsRoundtrip`. `MultiplexedChannel.DisposeAsync` no cuelga aunque el socket siga abierto (`CancelPendingRead`, `DisposeTest`). Pendiente: selección automática `LocalConnection` (RpcBuffer/UDS) en el generador.
+- [x] **5.6 Unix Domain Sockets como equivalente local de memoria compartida** *(acordado)* — Hecho: `Server.StartUdsServer` + `UdsConnection` reutilizando `ServePipeAsync`/`MultiplexedChannel` (framing 3.3). Test: `UdsTest.TestUdsRoundtrip`. `MultiplexedChannel.DisposeAsync` no cuelga aunque el socket siga abierto (`CancelPendingRead`, `DisposeTest`). `ServiceConnectionType.Local` lo resuelve el generador en compilacion (RID/TFM, si no el SO que compila): Memory en Windows, UDS en otro caso. Test `LocalConnectionTest`; POC `samples/Jobs` (Agent/Cli con `Local`).
   - `MemoryConnection` es `[SupportedOSPlatform("windows")]` por `RpcBuffer`.
   - Nuevo transporte `LocalConnection`: `RpcBuffer` en Windows, UDS (`UnixDomainSocketEndPoint`)
 	en Linux/macOS, seleccionado por el generador o en runtime vía `OperatingSystem.IsWindows()`.
@@ -615,13 +621,17 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 	identidad de tipo; los tests in-process de Memory lo cubren.
   - Los tests del fork viven en `SharedMemory.Tests` (repo aparte), no en `LiteSpeedLink.Tests`.
 
-- [ ] **5.8 Configuración de endpoints** *(de tus descartes)* — **Pospuesto** por decisión del usuario; hoy la dirección/nombre se pasa por constructor.
+- [ ] **5.8 Configuración de endpoints** *(de tus descartes)* — hoy la dirección/nombre se pasa por constructor. Siguiente pendiente (via DI Configuration, abajo).
   - El diseño es compile-time, pero **host/puerto/nombre de canal no pueden serlo**: cambian por entorno.
   - Propuesta: mantener el *contrato* en compile-time y externalizar solo la *dirección*, vía variables
 	de entorno o `appsettings`, leídas en el constructor generado.
   - `Program.cs:11` ya lo hace a mano (`rpcName` generado y pasado a ambos extremos) — formalizarlo.
   - **Pendiente de diseño**: ¿el generador emite un constructor adicional que lee configuración,
 	o se deja al llamante como ahora?
+  - Via DI Configuration (`SourceCrafter.DependencyInjection.MsConfiguration`, ya referenciado): la direccion
+	(host/puerto/nombre, timeout) como opciones inyectadas en el contenedor generado; el generador solo emite
+	la lectura de la seccion del cliente/host (nombre fijado en compilacion), sin reflexion ni binding dinamico.
+  - Desbloquea el E2E de `[ClientRetry]` (5.2-R): hoy el timeout del cliente Memory generado es fijo (5000 ms).
 
 ---
 
@@ -788,7 +798,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 
 - [Stream(Batch, MaxDelayMs)] -> el host emite EnumerateAsync<T, TPolicy> con struct __Policy_B{n}_D{ms} (uno por configuracion) o Unbatched; sin atributo, politica del servidor.
 - [x] [Stream(IdleTimeoutMs)] -> el cliente de memoria generado pasa el watchdog como constante a `MemoryConnection.EnumerateAsync(op, payload, idleTimeoutMs, token)`; 0 = timeout de la conexion, -1 = suscripciones silenciosas (Chat.Join). Antes un Join callado 5 s moria con TimeoutException. Test: `MemoryStreamHostTest.IdleTimeoutFromContractReachesMemoryClient`.
-- [x] Proveedores en el namespace global (apps de un solo archivo): el generador DI emitia `namespace <global namespace>;`. Corregido en el submodulo DI (`ServiceProviders.Parser`); los generadores de host/cliente ya lo omitian. Test: `GlobalNamespaceTests`; POC: `samples/Hello/hello.cs` sin namespace. Pendiente publicar un paquete DI > 2.26.282.142 (Hello usa el proyecto DI local mientras tanto).
+POC: `samples/Hello/hello.cs` sin namespace. Publicado en DI 2.26.282.289 (LSL y Hello lo consumen).
 - POC SourceGenPocBenchmarks.Policy_* (1000 int): campo runtime 15.1 us -> tipo 3.0 us (sin plazo, el JIT elimina Stopwatch); con plazo 14.2 -> 13.9 us (manda el reloj). 0 B ambos.
 - Cobertura: IStreams/StreamService (8 formas sync/async x default/unbatched/batched/timed) + StreamPolicyTypeTest.
 - Cliente: sin cambios; solo decodifica Batch, no decide politica.
@@ -815,7 +825,7 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
 | RawPipes | 178.7 us | 4452 B |
 | Lsl | 118.1 us | 7537 B |
 
-Ganancia real (~45% latencia, ~85% memoria en crudo). Pendiente de decision: multiplexar sobre un stream (como TCP) pierde el aislamiento head-of-line entre llamadas propio de QUIC; alternativa: pool de N streams multiplexados.
+Ganancia real (~45% latencia, ~85% memoria en crudo). Decidido: pool de N streams multiplexados (opcion 2, abajo) + `[DedicatedStream]` opt-in para respuestas grandes.
 
 
 ### QUIC opcion 2: pool de streams multiplexados para unarias (por defecto, DefaultUnaryStreams=4)
@@ -860,7 +870,7 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - [x] `--alloc cmp` (AllocProbe sobre las filas de Comparison) mostro que el 54 % de Lsl_Stream era `FlushLaterAsync`: caja async por flush (`_ = ...` nunca se awaitaba, el pool no la reciclaba) + `TaskNode` al esperar el candado del productor.
 - `ResponseChannel` es su propio `IThreadPoolWorkItem`: flush sincrono si el candado esta libre; si esta ocupado marca `_flushWanted` y quien lo suelta (`Release()`) reencola; async solo si `FlushAsync` no completa.
 - BenchmarkDotNet (Comparison): Lsl_Stream 4891 -> 3352 B (slim 4535 B), Lsl_StreamPerItem 5684 -> 3443 B, Lsl_StreamBatched 3766 -> 3537 B (slim 3067 B); tiempos sin cambio (163 / 255 / 90 us). Tests 89/89.
-- Pendiente: Lsl_StreamBatched aun +470 B vs slim por las cajas async de `FlushBatchAsync`/`WriteRawAsync` por lote.
+- ~~Pendiente: Lsl_StreamBatched aun +470 B vs slim por las cajas async de `FlushBatchAsync`/`WriteRawAsync` por lote.~~ Bajado a ~215 B (ver *Lotes sin maquina de estados*).
 
 ### Lotes sin maquina de estados (rama fix/batched-alloc)
 
@@ -868,7 +878,7 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - `FlushAndReleaseAsync` comprueba `IsCompleted` antes de esperar (tambien beneficia a `WriteAsync`).
 - El lote solo se resetea tras completar la copia al `PipeWriter` (vida del buffer intacta).
 - BenchmarkDotNet (Comparison, 1000 items): `Lsl_StreamBatched` 3537 B -> ~3287 B (3.21 KB), 87.7 us; `AspNetSlim_StreamBatched` ~3072 B (3 KB), 103.8 us. Brecha ~470 B -> ~215 B.
-- Resto: `Channel<Response>` por stream en el cliente (segmento `Response[]` + `Segment`). Siguiente paso posible: reutilizar el canal/cola por stream.
+- ~~Resto: `Channel<Response>` por stream en el cliente.~~ Resuelto con `StreamSink` pooled; ver pendiente cerrado de cola por stream.
 - Tests: 88/89; `MemoryOwnerClosePoc` (RpcBuffer, conteo de hilos) falla solo en la suite completa y pasa aislado; no toca `ResponseChannel`.
 
 ### Memory RPC directo (RpcBuffer <-> MemoryConnection/Server.Memory)
@@ -931,6 +941,13 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - [x] Lotes por defecto en TCP/UDS (como Memory), conservando el flush cuando el productor va a esperar. `Server.DefaultStreamBatch = int.MaxValue` (lote limitado por 32 KB o por espera del productor); `streamBatch: 0` sigue desactivandolo.
 - [x] `StreamConnection.EnumerateAsync` sin iterador propio si el canal ya esta conectado; el iterador `async` solo queda para la primera llamada antes de conectar.
 - [x] Enumerador manual en `MultiplexedChannel` (`StreamEnumerable`): un objeto por llamada, perezoso (envio en el primer `MoveNextAsync`), lotes decodificados sin esperar, `MoveNextSlowAsync` con caja pooled solo para envio/espera; si `TryRead` deja el sink armado se espera antes de releer. Test: `UdsTest.TestEarlyExitReenumerateAndReuse` (salida temprana, reenumeracion, sink pooled reutilizado, conexion sana).
-- [ ] Solo si tras el lote sigue el `TaskNode`: escritura via `Pipe` + bombeo por conexion para que el flush al socket no retenga el candado del productor (afecta tambien a TCP). Tras los cambios el `TaskNode` no aparece en `--alloc uds`: aparcado.
+- [-] Escritura via `Pipe` + bombeo por conexion para que el flush al socket no retenga el candado del productor: aparcado, el `TaskNode` ya no aparece en `--alloc uds` tras los lotes.
 - Resultado `--alloc uds` (B/llamada, antes -> despues): 1 item 1052 -> 553; 1000 items 3416 -> 549; 100000 items 82886 -> 3239 (resto: `byte[]` del pool). Lo que queda a 1 item es harness + `RequestContext` + el propio enumerador.
 - Resultado BDN `--fast`, 1000 int (us / B): UDS lote por defecto 89 / 1.01 KB -> 79 / 642 B; TCP 112 / 1.01 KB -> 101 / 670 B; UDS Batch 0 coalesce 120 / 1.97 KB -> 166 / 1.09 KB (tiempo ruidoso en modo rapido). Tests: 94/94.
+
+### Liberacion de la conexion del cliente via proveedor DI
+- Contrato de parciales: `PartialContribution.AddDisposer(member, disposability)` (Item3 del resultado; los parciales viejos siguen valiendo). El emisor DI lo encadena al `Dispose`/`DisposeAsync` raiz y emite el proveedor aunque no tenga servicios.
+- ClientGenerator registra `__connection` (Memory/UDP: `IDisposable`; TCP/QUIC/Local: `IAsyncDisposable`). Sin `IAsyncDisposable` manual en el cliente.
+- Root `Dispose` solo es `virtual` si hay `Scoped` (CS0549 en contenedores sellados).
+- DI empaquetado localmente (2.26.283.31, `nuget.config` -> `external/SourceCrafter.DependencyInjection/publish`) hasta publicarlo.
+- Test: `ClientDisposalTest` (4 transportes) + `LocalConnectionTest` ajustado.

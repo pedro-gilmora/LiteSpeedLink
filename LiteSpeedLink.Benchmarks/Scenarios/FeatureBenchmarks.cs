@@ -344,14 +344,14 @@ public sealed class FeaturesImpl : IFeatures
     }
 }
 
-[ServiceHost(ServiceConnectionType.Tcp)]
-[ServiceProvider]
-[Singleton<FeatureTokens>]
-[Singleton<FeatureAuth>]
-[Scoped<IFeatures, FeaturesImpl>]
+[ServiceHost(ServiceConnectionType.Tcp),
+ ServiceProvider,
+ Singleton<FeatureTokens>,
+ Singleton<FeatureAuth>,
+ Scoped<IFeatures, FeaturesImpl>]
 public partial class FeatureService;
 
-[ServiceClient(ServiceConnectionType.Tcp)]
-[ServiceUnit<IFeatures>]
-[ServiceProvider]
+[ServiceClient(ServiceConnectionType.Tcp),
+ ServiceUnit<IFeatures>,
+ ServiceProvider]
 public sealed partial class FeatureServiceClient;

@@ -35,28 +35,11 @@ public partial class ServiceHandlersGenerator
 
         string nsStr = "";
 
-        // Local: la superficie es IAsyncDisposable en cualquier destino. Si el contenedor de DI ya
-        // es liberable, se encadena su propia liberacion antes de cerrar la conexion.
-        string? localDispose = !isLocal ? null : container.ContainerDisposability switch
-        {
-            PartialDisposability.AsyncDisposable => @"
-
-    async global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync()
-    {
-        await DisposeAsync().ConfigureAwait(false);
-        await __connection.DisposeAsync().ConfigureAwait(false);
-    }",
-            PartialDisposability.Disposable => @"
-
-    global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync()
-    {
-        Dispose();
-        return __connection.DisposeAsync();
-    }",
-            _ => @"
-
-    global::System.Threading.Tasks.ValueTask global::System.IAsyncDisposable.DisposeAsync() => __connection.DisposeAsync();"
-        };
+        // La conexion la libera el Dispose/DisposeAsync raiz que emite el generador de DI.
+        // Local es IAsyncDisposable en cualquier destino (Memory en Windows, UDS fuera).
+        contribution.AddDisposer("__connection", connectionType is 0 or 1 && !isLocal
+            ? PartialDisposability.Disposable
+            : PartialDisposability.AsyncDisposable);
 
         var connTypeName = connectionType switch
         {
@@ -80,30 +63,30 @@ namespace ").Append(nsStr = nss.ToDisplayString()).Append(@";
 
         string typeShortName = serviceClient.TypeNameFormat;
 
+        // Con [JsonSetting<RemoteOptions|LocalOptions>] los parametros del constructor son opcionales:
+        // el explicito gana, el omitido sale del setting generado por MsConfiguration.
+        var settings = EndpointSettings(container, connectionType is 1 or 2 or 3);
+        string Or(string arg, string member) => settings is null ? arg : arg + " ?? " + settings + "." + member;
+        string Param(string type, string name) => settings is null ? type + " " + name : type + (type is "int" ? "?" : null) + " " + name + " = null";
+
         clientCode.Append(PlatformAttributes(connectionType)).Append(@"
-public partial class ").Append(typeShortName).Append(isLocal ? " : global::System.IAsyncDisposable" : null).Append(@"
+public partial class ").Append(typeShortName).Append(@"
 {
     private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
-    public ").Append(typeShortName).Append(isLocal
-            // Local: mismo constructor en cualquier destino
-            ? connectionType is 0
-                ? @"(string name)
-    {
-        __connection = name.AsMemoryConnection();"
-                : @"(string name)
-    {
-        __connection = new global::SourceCrafter.LiteSpeedLink.Client.UdsConnection(" + LocalUdsPath + ");"
-            : connectionType > 0
+    public ").Append(typeShortName).Append(connectionType > 0 && !isLocal
             // QUIC, TCP, UDP
-            ? @"(string hostname, int port)
+            ? @"(" + Param("string", "hostname") + ", " + Param("int", "port") + @")
     {
-        __connection = new global::System.Net.DnsEndPoint(hostname, port).As" + connTypeName + "Connection();"
-            // Memory
-            : @"(string rpcName)
-    {
-        __connection = rpcName.AsMemoryConnection();").Append(@"
-    }").Append(localDispose).Append(@"
+        __connection = new global::System.Net.DnsEndPoint(" + Or("hostname", "Host") + ", " + Or("port", "Port") + ").As" + connTypeName + "Connection();"
+            : "(" + Param("string", isLocal ? "name" : "rpcName") + @")
+    {" + (settings is null ? null : @"
+        " + (isLocal ? "name" : "rpcName") + " ??= " + settings + ".Name;") + (connectionType is 0
+                ? @"
+        __connection = " + (isLocal ? "name" : "rpcName") + ".AsMemoryConnection(" + (settings is null ? null : "(int)" + settings + ".Timeout.TotalMilliseconds") + ");"
+                : @"
+        __connection = new global::SourceCrafter.LiteSpeedLink.Client.UdsConnection(" + LocalUdsPath + ");")).Append(@"
+    }").Append(@"
 
     private readonly global::System.Threading.Lock __servicesLock = new();");
 

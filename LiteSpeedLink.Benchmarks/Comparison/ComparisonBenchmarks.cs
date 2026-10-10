@@ -51,12 +51,12 @@ public class ComparisonBenchmarks
         // LiteSpeedLink TCP: opId 0 = suma, opId 1 = rango.
         _lslServer = Server.StartTcpServer(0, static (op, ctx, _) => op == 0
             ? ctx.ReturnAsync(ctx.Get<(int, int)>().Item1 + ctx.Get<(int, int)>().Item2)
-            : ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { });
+            : ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { });
         _lsl = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslServer.LocalEndpoint).Port));
 
         // Referencia: cliente sin agrupar en el lector (entrega item a item) y servidor opt-in que emite tramas Batch.
         _lslPerItem = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslServer.LocalEndpoint).Port), coalesceStreams: false);
-        _lslBatchServer = Server.StartTcpServer(0, static (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>())), () => { }, streamBatch: StreamBatch);
+        _lslBatchServer = Server.StartTcpServer(0, static (op, ctx, _) => ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { }, streamBatch: StreamBatch);
         _lslBatched = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslBatchServer.LocalEndpoint).Port));
 
         // ASP.NET Core completo: CreateBuilder + minimal API + JSON source-gen, HTTP/1.1.

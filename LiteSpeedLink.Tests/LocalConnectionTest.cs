@@ -66,7 +66,10 @@ public class LocalConnectionTest
         var host = r.Sources.Single(s => s.Key.Contains("Host.host")).Value;
         var client = r.Sources.Single(s => s.Key.Contains("Client.client")).Value;
         host.Should().Contain(hostApi).And.Contain("global::System.IAsyncDisposable Start(");
-        client.Should().Contain(clientApi).And.Contain(": global::System.IAsyncDisposable");
+        client.Should().Contain(clientApi);
+        // La interfaz la aporta el proveedor de DI, que libera __connection.
+        r.Sources.Single(s => s.Key.EndsWith("Client.g.cs") && !s.Key.Contains(".client")).Value
+            .Should().Contain(": global::System.IAsyncDisposable").And.Contain("__connection.DisposeAsync()");
         host.Contains(attr).Should().Be(isWindows);
         client.Contains(attr).Should().Be(isWindows);
     }

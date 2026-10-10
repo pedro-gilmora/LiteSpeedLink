@@ -7,10 +7,11 @@ using System.Net.Quic;
 using System.Runtime.Versioning;
 
 // Memory: el único transporte con miembros sync nativos.
-var rpcName = $"Test{Guid.CreateVersion7()}";
-using (TextService.Start(rpcName))
+//var rpcName = $"Test{Guid.CreateVersion7()}";
+using (TextService.Start())
 {
-    var auth = new TextServiceClient(rpcName).Auth;
+    using TextServiceClient textServiceClient = new();
+    var auth = textServiceClient.Auth;
     await Demo.RunAsync("Memory", auth, auth.GreetAsync);
 
     Console.WriteLine($"[Memory] TryAuth (async): {await auth.TryAuthAsync("pedro", "test!123")}");
@@ -23,14 +24,16 @@ using (TextService.Start(rpcName))
 // Red: mismo contrato; los miembros sync son sync-over-async.
 using (UdpTextService.Start(5101))
 {
-    var auth = new UdpTextServiceClient("localhost", 5101).Auth;
+    using var udpClient = new UdpTextServiceClient("localhost", 5101);
+    var auth = udpClient.Auth;
     await Demo.RunAsync("Udp", auth, auth.GreetAsync);
 }
 
 var tcpHost = TcpTextService.Start(5102, null);
 try
 {
-    var auth = new TcpTextServiceClient("localhost", 5102).Auth;
+    await using var tcpClient = new TcpTextServiceClient("localhost", 5102);
+    var auth = tcpClient.Auth;
     await Demo.RunAsync("Tcp", auth, auth.GreetAsync);
 }
 finally { tcpHost.Stop(); }
@@ -38,7 +41,8 @@ finally { tcpHost.Stop(); }
 if (QuicListener.IsSupported)
 {
     await using var quicHost = await QuicTextService.StartAsync(5103, Constants.GetDevCert());
-    var auth = new QuicTextServiceClient("localhost", 5103).Auth;
+    await using var quicClient = new QuicTextServiceClient("localhost", 5103);
+    var auth = quicClient.Auth;
     await Demo.RunAsync("Quic", auth, auth.GreetAsync);
 
     // [DedicatedStream]: 1 MB por su propio stream mientras las unarias pequeñas siguen en el pool.
@@ -51,7 +55,8 @@ if (QuicListener.IsSupported)
 var streamHost = StreamService.Start(5104, null);
 try
 {
-    var streams = new StreamServiceClient("localhost", 5104).Streams;
+    await using var streamClient = new StreamServiceClient("localhost", 5104);
+    var streams = streamClient.Streams;
     await Demo.StreamsAsync("Tcp", streams);
 }
 finally { streamHost.Stop(); }

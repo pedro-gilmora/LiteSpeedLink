@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SourceCrafter.DependencyInjection.Generation;
+using SourceCrafter.LiteSpeedLink.Helpers;
 
 using System;
 using System.Collections.Generic;
@@ -149,6 +150,42 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
             return tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase);
 
         return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+    }
+
+    private const string JsonSettingAttr = "SourceCrafter.DependencyInjection.MsConfiguration.Metadata.JsonSettingAttribute<T>";
+    private const string JsonConfigAttr = "SourceCrafter.DependencyInjection.MsConfiguration.Metadata.JsonConfigurationAttribute";
+
+    /// <summary>
+    /// Miembro que MsConfiguration genera en el contenedor para <c>[JsonSetting&lt;RemoteOptions|LocalOptions&gt;]</c>,
+    /// o <c>null</c> si no lo emitira (sin setting, sin <c>JsonConfiguration</c> con su <c>configKey</c> o sin
+    /// <c>Microsoft.Extensions.Configuration</c>). Nombre con las mismas reglas: <c>nameFormat</c> con <c>key</c> en Pascal.
+    /// </summary>
+    private static string? EndpointSettings(ServiceProviderInfo container, bool remote)
+    {
+        if (container.Compilation.GetTypeByMetadataName("Microsoft.Extensions.Configuration.IConfiguration") is null) return null;
+
+        var type = container.ContainerType;
+        var optionsType = remote ? "SourceCrafter.LiteSpeedLink.RemoteOptions" : "SourceCrafter.LiteSpeedLink.LocalOptions";
+
+        foreach (var attr in type.GetAttributes())
+        {
+            if (attr.AttributeClass is not { IsGenericType: true } ac
+                || ac.ConstructedFrom.ToDisplayString() != JsonSettingAttr
+                || ac.TypeArguments[0].ToDisplayString() != optionsType
+                || attr.ConstructorArguments is not [{ Value: string { Length: > 0 } }, _, { Value: var key }, { Value: string nameFormat }, { Value: var configKey }, ..])
+                continue;
+
+            var cfgKey = (configKey?.ToString() ?? "").Trim();
+
+            return type.ContainingAssembly.GetAttributes().Concat(type.GetAttributes()).Any(a =>
+                    a.AttributeClass?.ToDisplayString() == JsonConfigAttr
+                    && a.ConstructorArguments is [{ Value: string { Length: > 0 } }, { Value: var k }, ..]
+                    && (k?.ToString() ?? "").Trim() == cfgKey)
+                ? nameFormat.Replace("{0}", (key?.ToString() ?? "").Pascalize()).RemoveDuplicates()
+                : null;
+        }
+
+        return null;
     }
 
     private static bool TryGetConnectionType(

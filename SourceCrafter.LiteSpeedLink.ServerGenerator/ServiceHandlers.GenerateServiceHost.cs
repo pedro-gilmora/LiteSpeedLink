@@ -127,14 +127,34 @@ public partial class ").Append(typeName).Append(@"
 		// Local: misma firma (nombre) y misma superficie (IAsyncDisposable) en cualquier destino.
 		if (isLocal) returnType = "global::System.IAsyncDisposable";
 
+		var (endpointParam, endpointArg) = isLocal ? ("string name", "name") : connectionType is 0 ? ("string memoryRpcName", "memoryRpcName") : ("int port", "port");
+
 		hostCode.Append(@"
-	public static ").Append(asyncKeyword).Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(
-		").Append(isLocal ? "string name" : connectionType is 0 ? "string memoryRpcName" : "int port").Append(certParam).Append(@",
-		global::System.Threading.CancellationToken cancelToken = default)
+	public static ").Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(
+		").Append(endpointParam).Append(certParam).Append(@",
+		global::System.Threading.CancellationToken cancelToken = default) => __Start").Append(asyncSuffix).Append(@"(new ").Append(typeName).Append(@"(), ").Append(endpointArg).Append(certArg).Append(@", cancelToken);
+");
+
+		// Endpoint omitido: el de [JsonSetting<RemoteOptions|LocalOptions>] del contenedor (MsConfiguration).
+		if (EndpointSettings(container, connectionType is 1 or 2 or 3) is { } settings)
+			hostCode.Append(@"
+	public static ").Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(").Append(certParam is null ? null : connectionType is 2
+				? "global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = default, "
+				: "global::System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, ").Append(@"global::System.Threading.CancellationToken cancelToken = default)
 	{
 		var provider = new ").Append(typeName).Append(@"();
+		return __Start").Append(asyncSuffix).Append(@"(provider, provider.").Append(settings).Append(connectionType is 1 or 2 or 3 ? ".Port" : ".Name").Append(certArg).Append(@", cancelToken);
+	}
+");
+
+		hostCode.Append(@"
+	private static ").Append(asyncKeyword).Append(returnType).Append(@" __Start").Append(asyncSuffix).Append(@"(
+		").Append(typeName).Append(@" provider,
+		").Append(endpointParam).Append(certParam).Append(@",
+		global::System.Threading.CancellationToken cancelToken)
+	{
 		return ").Append(awaitKeyword).Append(isLocal ? "new global::SourceCrafter.LiteSpeedLink.LocalHost(" : null).Append(@"global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append(@"(
-			").Append(isLocal ? (connectionType is 0 ? "name" : LocalUdsPath) : connectionType is 0 ? "memoryRpcName" : "port").Append(@", 
+			").Append(isLocal ? (connectionType is 0 ? "name" : LocalUdsPath) : endpointArg).Append(@", 
 			").Append(connectionType > 1 ? "new __Handler(provider)" : "provider.HandleRequestsAsync").Append(@", 
 			");
 
