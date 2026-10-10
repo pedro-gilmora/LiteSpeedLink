@@ -25,6 +25,7 @@
 
 	<ItemGroup>
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+		<None Include="obj\gen-probe.snippet" />
 		<Protobuf Include="Comparison\bench.proto" GrpcServices="Both" />
 	</ItemGroup>
 

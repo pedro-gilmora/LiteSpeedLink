@@ -112,11 +112,11 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
         await call.ReadValueAsync<byte>(token, expectBody: false).ConfigureAwait(false);
     }
 
-    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default)
+    public async ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default)
     {
-        if (_mux.Length > 0) return await (await GetMuxAsync(token).ConfigureAwait(false)).GetRawAsync(op, request, token).ConfigureAwait(false);
-        await using var call = await StartAsync(op, new RawBody(request), true, token).ConfigureAwait(false);
-        return await call.ReadRawAsync(token).ConfigureAwait(false);
+        if (_mux.Length > 0) return await (await GetMuxAsync(token).ConfigureAwait(false)).GetRawAsync(op, state, write, read, token).ConfigureAwait(false);
+        await using var call = await StartAsync(op, new RawBody<TState>(state, write), true, token).ConfigureAwait(false);
+        return await call.ReadRawAsync(read, token).ConfigureAwait(false);
     }
 
     public async ValueTask SendAsync(long op, CancellationToken token = default, [CallerMemberName] string name = "")
@@ -165,7 +165,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
             {
                 try
                 {
-                    if (typeof(TIn) == typeof(RawBody)) writer.Write(Unsafe.As<TIn, RawBody>(ref payload!).Bytes.Span);
+                    if (payload is IRawBody) ((IRawBody)payload).WriteTo(writer);
                     else Serialize(writer, payload);
                 }
                 catch (Exception ex) { throw new ArgumentException("Invalid parameters", ex); }
@@ -214,7 +214,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
             }
         }
 
-        public async ValueTask<ReadOnlyMemory<byte>> ReadRawAsync(CancellationToken token)
+        public async ValueTask<TOut> ReadRawAsync<TOut>(RawReader<TOut> read, CancellationToken token)
         {
             while (true)
             {
@@ -226,7 +226,18 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
                     try
                     {
                         EnsureSuccess(frame);
-                        return frame.Slice(Framing.StatusSize).ToArray();
+                        var body = frame.Slice(Framing.StatusSize);
+
+                        // Contiguo: se lee sobre el buffer del pipe; partido entre segmentos: buffer del pool.
+                        if (body.IsSingleSegment) return read(body.FirstSpan);
+
+                        var rented = ArrayPool<byte>.Shared.Rent((int)body.Length);
+                        try
+                        {
+                            body.CopyTo(rented);
+                            return read(rented.AsSpan(0, (int)body.Length));
+                        }
+                        finally { ArrayPool<byte>.Shared.Return(rented); }
                     }
                     finally
                     {

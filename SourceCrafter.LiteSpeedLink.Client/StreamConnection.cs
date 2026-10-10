@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 
@@ -54,23 +55,45 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
         return channel;
     }
 
-    public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+    // Canal ya conectado: se devuelve la llamada del canal sin maquina de estados propia (como EnumerateAsync).
+    public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        await (await GetChannelAsync(token).ConfigureAwait(false)).GetAsync<TIn, TOut>(op, payload, true, token).ConfigureAwait(false);
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.GetAsync<TIn, TOut>(op, payload, true, token)
+            : ConnectThenGetAsync<TIn, TOut>(op, payload, true, token);
 
-    public async ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+    public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        await (await GetChannelAsync(token).ConfigureAwait(false)).GetAsync<byte, TOut>(op, default, false, token).ConfigureAwait(false);
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.GetAsync<byte, TOut>(op, default, false, token)
+            : ConnectThenGetAsync<byte, TOut>(op, default, false, token);
 
-    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
-        await (await GetChannelAsync(token).ConfigureAwait(false)).GetRawAsync(op, request, token).ConfigureAwait(false);
+    public ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default) =>
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.GetRawAsync(op, state, write, read, token)
+            : ConnectThenGetRawAsync(op, state, write, read, token);
 
-    public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
+    public ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        await (await GetChannelAsync(token).ConfigureAwait(false)).SendAsync(op, payload, true, token).ConfigureAwait(false);
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.SendAsync(op, payload, true, token)
+            : ConnectThenSendAsync(op, payload, true, token);
 
-    public async ValueTask SendAsync(long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        await (await GetChannelAsync(token).ConfigureAwait(false)).SendAsync<byte>(op, default, false, token).ConfigureAwait(false);
+    public ValueTask SendAsync(long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
+        Volatile.Read(ref _channel) is { } channel
+            ? channel.SendAsync<byte>(op, default, false, token)
+            : ConnectThenSendAsync<byte>(op, default, false, token);
+
+    // Solo antes de conectar (una vez por conexion).
+    private async ValueTask<TOut?> ConnectThenGetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn? payload, bool hasPayload, CancellationToken token) =>
+        await (await GetChannelAsync(token).ConfigureAwait(false)).GetAsync<TIn, TOut>(op, payload, hasPayload, token).ConfigureAwait(false);
+
+    private async ValueTask<TOut> ConnectThenGetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token) =>
+        await (await GetChannelAsync(token).ConfigureAwait(false)).GetRawAsync(op, state, write, read, token).ConfigureAwait(false);
+
+    private async ValueTask ConnectThenSendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn? payload, bool hasPayload, CancellationToken token) =>
+        await (await GetChannelAsync(token).ConfigureAwait(false)).SendAsync(op, payload, hasPayload, token).ConfigureAwait(false);
 
     public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>

@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using SourceCrafter.LiteSpeedLink;
 using SourceCrafter.LiteSpeedLink.Client;
 using Xunit;
@@ -53,6 +53,34 @@ public class UdsTest
         (await connection.GetAsync<int, int>(0, 21, token)).Should().Be(42);
     }
 
+    /// <summary>
+    /// S1-S3: handler que termina asincrono (exito y fallo tras await) sin DispatchAsync ni registro inflight. Mas peticiones
+    /// que huecos por conexion: si el contexto no liberase cuerpo/hueco, la conexion se bloquearia.
+    /// </summary>
+    [Fact]
+    public async Task TestAsyncHandlerCompletionReleasesSlots()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"lsl-{Guid.NewGuid():N}.sock");
+        using var uds = Server.StartUdsServer(path, async (id, ctx, token) =>
+        {
+            await Task.Yield();
+            int n = ctx.Get<int>();
+            return n % 3 == 0 ? throw new ArgumentException($"boom{n}") : await ctx.ReturnAsync(n * 2);
+        }, () => { });
+
+        await using var connection = new UdsConnection(path);
+        var token = new CancellationTokenSource(10_000).Token;
+
+        var calls = Enumerable.Range(1, Server.MaxInFlightPerConnection * 4).Select(async n =>
+        {
+            try { return (await connection.GetAsync<int, int>(0, n, token)) == n * 2 && n % 3 != 0; }
+            catch (InvalidOperationException ex) { return n % 3 == 0 && ex.Message.Contains($"boom{n}"); }
+        });
+
+        (await Task.WhenAll(calls)).Should().AllBeEquivalentTo(true);
+    }
+
+
     private readonly struct Doubler : IRequestHandler
     {
         public ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token) => ctx.ReturnAsync(ctx.Get<int>() * 2);
@@ -69,7 +97,7 @@ public class UdsTest
         (await connection.GetAsync<int, int>(0, 21, new CancellationTokenSource(3000).Token)).Should().Be(42);
     }
 
-    /// <summary>Raw: el cliente construye los bytes de la petición y recibe los bytes de la respuesta.</summary>
+    /// <summary>Raw: el cliente escribe la petición en la trama y decodifica la respuesta sobre el buffer del transporte (sin copias).</summary>
     [Fact]
     public async Task TestRawRoundtrip()
     {
@@ -77,7 +105,8 @@ public class UdsTest
         using var uds = Server.StartUdsServer(path, new Doubler(), () => { });
 
         await using var connection = new UdsConnection(path);
-        var body = await connection.GetRawAsync(0, MemoryPack.MemoryPackSerializer.Serialize(21), new CancellationTokenSource(3000).Token);
-        MemoryPack.MemoryPackSerializer.Deserialize<int>(body.Span).Should().Be(42);
+        var result = await connection.GetRawAsync(0, 21, static (w, v) => MemoryPack.MemoryPackSerializer.Serialize(w, v),
+            static b => MemoryPack.MemoryPackSerializer.Deserialize<int>(b), new CancellationTokenSource(3000).Token);
+        result.Should().Be(42);
     }
 }

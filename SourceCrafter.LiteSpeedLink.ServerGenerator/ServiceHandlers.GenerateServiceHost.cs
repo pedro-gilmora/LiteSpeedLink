@@ -83,7 +83,7 @@ public partial class ServiceHandlersGenerator
                   null,
                   null),
             _ => ("global::SourceCrafter.LiteSpeedLink.MemoryRequestContext",
-                  "StartMemoryServer",
+                  "StartMemoryServerAsync",
                   "global::System.IDisposable",
                   "global::System.IDisposable",
                   null,
@@ -177,18 +177,15 @@ public partial class ").Append(typeName).Append(@"
 	}
 ");
 
+		// Async (pooled) en cuanto algo del camino de la peticion espera; Memory sin nada que esperar pasa a sync al final.
 		hostCode.Append(@"    	
-	private ");
+	");
 
-        int? handlerResultType = null;
-        bool isMemoryAsync = false;
+		int signatureStart = hostCode.Length;
 
-        if (connectionType > 0)
-            hostCode.Append("async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
-        else
-        {
-            handlerResultType = hostCode.Length;
-        }
+		hostCode.Append(PooledBuilder(true)).Append("private async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
+
+		int signatureEnd = hostCode.Length;
 
         hostCode.Append(@" HandleRequestsAsync(
         long id,
@@ -255,8 +252,6 @@ public partial class ").Append(typeName).Append(@"
 
             var dependencyIsAsync = dependency.AsyncKind is not PartialAsyncKind.None;
 
-            if (!isMemoryAsync && (dependencyIsAsync || dependency.Disposability is PartialDisposability.AsyncDisposable)) isMemoryAsync = true;
-
             // El tipo expuesto ya viene resuelto en la propia fila: no hace falta el mapa
             // lateral que antes evitaba retener ISymbol.
             if (dependency.ExportType is not { } exportType) continue;
@@ -275,13 +270,7 @@ public partial class ").Append(typeName).Append(@"
                     methodName = method.NameOnly,
                     globalizedMethodName = method.GlobalNamespaced;
 
-                bool isMethodAsync = (method.ReturnType.Name.EndsWith("Task")
-                        && method.ReturnType.ToDisplayString().StartsWith("System.Threading.Tasks"))
-                        || dependency.Lifetime is PartialLifetime.Scoped;
-
                 var serviceId = GetServiceId(globalizedMethodName);
-
-                if (!isMemoryAsync && isMethodAsync) isMemoryAsync = true;
 
 
 
@@ -378,8 +367,6 @@ public partial class ").Append(typeName).Append(@"
                             if (!TryResolveAnnotatedParameter(services, paramAttr, param, out var paramDependency))
                                 continue; //check next attribute
 
-                            if (!isMemoryAsync && paramDependency.AsyncKind is not PartialAsyncKind.None) isMemoryAsync = true;
-
                             invokeParams += () =>
                                 {
                                     if (Exchange(ref separateParams)) hostCode.Append(", ");
@@ -436,7 +423,7 @@ public partial class ").Append(typeName).Append(@"
                             {
                                 ValidateChain(compilation, null, serverPre, param.Type, methodName + "(" + param.Name + ") server request", contribution, methodLocation);
 
-                                applyPreStages += () => hostCode.Append(ApplyStages(wireName, serverPre, connectionType > 0, provider, "            ", HostReject(connectionType > 0), param.Name));
+                                applyPreStages += () => hostCode.Append(ApplyStages(wireName, serverPre, true, provider, "            ", HostReject(connectionType > 0), param.Name));
                             }
 
                             //Register params to deconstruct request from deserialization
@@ -537,7 +524,7 @@ public partial class ").Append(typeName).Append(@"
                 }
 
                 // Con param processors (p.ej. autorizacion) la consulta va despues: un acierto no puede saltarselos.
-                int cacheStart = serverCache != null && applyPreStages == null && !typedKey ? OpenServerCache(hostCode, opSuffix, "__context.Body", connectionType > 0) : 0;
+                int cacheStart = serverCache != null && applyPreStages == null && !typedKey ? OpenServerCache(hostCode, opSuffix, "__context.Body") : 0;
 
                 if (requestParamsCount > 0 && requestTypes != null && requestDeconstruct != null)
                 {
@@ -560,16 +547,14 @@ public partial class ").Append(typeName).Append(@"
 
                 applyPreStages?.Invoke();
 
-                if (serverCache != null && (applyPreStages != null || typedKey)) cacheStart = OpenServerCache(hostCode, opSuffix, typedKey ? serverKey!.Expr : "__context.Body", connectionType > 0);
+                if (serverCache != null && (applyPreStages != null || typedKey)) cacheStart = OpenServerCache(hostCode, opSuffix, typedKey ? serverKey!.Expr : "__context.Body");
 
                 var serverRetry = GetRetry(method, true);
                 ReportRetryDiagnostics(method, contribution);
                 ReportCacheKeyIgnored(method, contribution);
                 int callStart = hostCode.Length;
 
-                bool awaitCall = isAwaitable && connectionType > 0;
-
-                if (awaitCall) hostCode.Append("await ");
+                if (isAwaitable) hostCode.Append("await ");
 
                 if (dependencyIsAsync) hostCode.Append("(await ");
 
@@ -581,8 +566,7 @@ public partial class ").Append(typeName).Append(@"
 
                 invokeParams?.Invoke();
 
-                // Memory es sync: el host no puede await; se bloquea como hacen las etapas async ahi.
-                hostCode.Append(awaitCall ? ").ConfigureAwait(false)" : isAwaitable ? ").GetAwaiter().GetResult()" : ")");
+                hostCode.Append(isAwaitable ? ").ConfigureAwait(false)" : ")");
 
                 var call = hostCode.ToString(callStart, hostCode.Length - callStart);
                 hostCode.Length = callStart;
@@ -599,7 +583,7 @@ public partial class ").Append(typeName).Append(@"
                 }
 
                 // Solo la invocacion al handler se reintenta: los server processors ya corrieron una vez.
-                EmitCall(hostCode, serverRetry, call, returnsType ? "___result" : null, "__token", connectionType > 0,
+                EmitCall(hostCode, serverRetry, call, returnsType ? "___result" : null, "__token", true,
                     (isAwaitable ? awaitedType! : method.ReturnType).GlobalNamespaced);
                 // EmitCall sangra para el cuerpo de un metodo de cliente (8); aqui es el de un case (12).
                 hostCode.Replace("\n        ", "\n            ", emitStart, hostCode.Length - emitStart);
@@ -609,7 +593,7 @@ public partial class ").Append(typeName).Append(@"
             ");
 
                 if (returnsType && serverPost.Count > 0)
-                    hostCode.Append(ApplyStages("___result", serverPost, connectionType > 0, provider, "            ", HostReject(connectionType > 0)));
+                    hostCode.Append(ApplyStages("___result", serverPost, true, provider, "            ", HostReject(connectionType > 0)));
 
                 if (serverCache != null)
                 {
@@ -618,10 +602,10 @@ public partial class ").Append(typeName).Append(@"
                 }
 
                 bool isStream = connectionType != 1 && returnsType && IsStream(method.ReturnType),
-                    // ponytail: el host de memoria es sync; un stream async bloquea un hilo del pool mientras dure. Mejora: handler async (StartMemoryServerAsync).
-                    blockOnStream = isStream && connectionType == 0 && ((INamedTypeSymbol)method.ReturnType).Name == "IAsyncEnumerable";
+                    // Memory responde escribiendo en memoria compartida (sync); solo su stream async se espera.
+                    awaitReply = connectionType > 0 || isStream && ((INamedTypeSymbol)method.ReturnType).Name == "IAsyncEnumerable";
 
-                hostCode.Append("return ").Append(connectionType == 0 ? isStream ? "__context.Yield(" : "__context.Return(" : isStream ? "await __context.EnumerateAsync(" : "await __context.ReturnAsync(");
+                hostCode.Append("return ").Append(awaitReply ? "await " : null).Append(connectionType == 0 ? isStream ? "__context.Yield(" : "__context.Return(" : isStream ? "__context.EnumerateAsync(" : "__context.ReturnAsync(");
 
                 if (isStream)
                 {
@@ -672,7 +656,7 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append("false");
                 }
 
-                hostCode.Append(connectionType > 0 ? ").ConfigureAwait(false);" : blockOnStream ? ").GetAwaiter().GetResult();" : ");").Append(@"
+                hostCode.Append(awaitReply ? ").ConfigureAwait(false);" : ");").Append(@"
         }
 ");
             }
@@ -701,12 +685,15 @@ public partial class ").Append(typeName).Append(@"
         }
     }
 }");
-        hostCode.Insert(hostCode.Length - 1, policyTypes.ToString());
+        // Memory responde sin I/O: si ningun metodo, etapa, dependencia, retry, cache ni stream espera, el handler es sync
+        // (mismo cuerpo: sus return ya son ResponseStatus). Basta un await para que todo el handler sea async.
+        // ponytail: se detecta por el texto emitido ("await "); los nombres que se emiten (metodos/pipelines) no lo contienen.
+        var syncMemory = connectionType == 0 && hostCode.ToString(signatureEnd, hostCode.Length - signatureEnd).IndexOf("await ", StringComparison.Ordinal) < 0;
 
-        if (handlerResultType.HasValue)
-        {
-            hostCode.Insert(handlerResultType.Value, handlerReturnType);
-        }
+        if (syncMemory)
+            hostCode.Remove(signatureStart, signatureEnd - signatureStart).Insert(signatureStart, "private " + handlerReturnType);
+
+        hostCode.Insert(hostCode.Length - 1, policyTypes.ToString());
 
         hostCode.Insert(onFinalizePoint, containerDisposability switch
         {
@@ -715,6 +702,9 @@ public partial class ").Append(typeName).Append(@"
             _ => "() => {}"
         });
 
+        if (syncMemory)
+            hostCode.Replace("Server.StartMemoryServerAsync(", "Server.StartMemoryServer(");
+
         contribution.AddSource(hintName + ".host", hostCode.ToString());
     }
 
@@ -722,9 +712,8 @@ public partial class ").Append(typeName).Append(@"
     /// [ServerCache]: acierto -> bytes guardados; fallo -> single-flight (un solo handler por peticion identica en curso,
     /// el resto espera sus bytes). Ningun lock abarca el await del handler.
     /// </summary>
-    // ponytail: Memory es sync: el seguidor bloquea su hilo esperando al lider (igual que las etapas async ahi).
     /// Devuelve el inicio del cuerpo del try, que <see cref="CloseServerCache"/> indenta.
-    private static int OpenServerCache(StringBuilder code, string suffix, string key, bool canAwait)
+    private static int OpenServerCache(StringBuilder code, string suffix, string key)
     {
         code.Append(@"var __cache = __Cache").Append(suffix).Append(@";
             var __cacheKey = ").Append(key).Append(@";
@@ -732,7 +721,7 @@ public partial class ").Append(typeName).Append(@"
             if (!__cache.TryGet(__cacheKey, out var __cached))
             {
                 if (!__cache.TryLead(__cacheKey, out var __flight))
-                    __cached = ").Append(canAwait ? "await __flight.Task.WaitAsync(__token).ConfigureAwait(false)" : "__flight.Task.WaitAsync(__token).GetAwaiter().GetResult()").Append(@";
+                    __cached = await __flight.Task.WaitAsync(__token).ConfigureAwait(false);
                 else try
                 {");
 

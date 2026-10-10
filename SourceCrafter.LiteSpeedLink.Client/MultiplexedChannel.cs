@@ -45,6 +45,7 @@ internal sealed class MultiplexedChannel
         _readLoop = ReadLoopAsync();
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<TOut?> GetAsync<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn,
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(long op, TIn? payload, bool hasPayload, CancellationToken token)
@@ -56,16 +57,18 @@ internal sealed class MultiplexedChannel
         return Deserialize<TOut>(response.Span);
     }
 
-    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token)
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token)
     {
-        using var response = await UnaryAsync(op, new RawBody(request), true, token).ConfigureAwait(false);
+        using var response = await UnaryAsync(op, new RawBody<TState>(state, write), true, token).ConfigureAwait(false);
 
         EnsureSuccess(response);
 
-        // Copia unica: el cuerpo vive en un buffer del pool que se devuelve al salir.
-        return response.Span.ToArray();
+        // Se decodifica sobre el buffer del pool antes de devolverlo: sin copia.
+        return read(response.Span);
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn? payload, bool hasPayload, CancellationToken token)
     {
         using var response = await UnaryAsync(op, payload, hasPayload, token).ConfigureAwait(false);
@@ -73,6 +76,7 @@ internal sealed class MultiplexedChannel
         EnsureSuccess(response);
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<Response> UnaryAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn? payload, bool hasPayload, CancellationToken token)
     {
         var sink = _sinks.TryTake(out var pooled) ? pooled : new();
@@ -212,19 +216,35 @@ internal sealed class MultiplexedChannel
         => new StreamEnumerable<TIn, TOut>(this, op, payload, hasPayload, token);
 
     /// <summary>
-    /// Unico objeto por llamada (antes: dos iteradores async con su caja); el sink es pooled. Perezoso como el iterador:
-    /// la peticion sale en el primer <c>MoveNextAsync</c>. Los items de un lote se decodifican sin esperar; solo se entra
-    /// en un metodo async (caja pooled) para enviar o cuando el sink esta vacio.
+    /// Enumerable ligero sin pool (el consumidor puede guardarlo y reenumerarlo): cada <c>GetAsyncEnumerator</c> alquila un
+    /// <see cref="StreamEnumerator{TIn, TOut}"/> del pool. Perezoso como el iterador: la peticion sale en el primer <c>MoveNextAsync</c>.
     /// </summary>
     private sealed class StreamEnumerable<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn,
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(
         MultiplexedChannel channel, long op, TIn? payload, bool hasPayload, CancellationToken token)
-        : IAsyncEnumerable<TOut?>, IAsyncEnumerator<TOut?>
+        : IAsyncEnumerable<TOut?>
     {
-        private bool _opened, _done, _held;
-        private readonly CancellationToken _origin = token;
-        private CancellationToken _token = token;
+        public IAsyncEnumerator<TOut?> GetAsyncEnumerator(CancellationToken enumeratorToken = default)
+            => StreamEnumerator<TIn, TOut>.Rent(channel, op, payload, hasPayload, token, enumeratorToken);
+    }
+
+    /// <summary>
+    /// Estado de una enumeracion; vuelve al pool (por tipo) en <c>DisposeAsync</c>. Los items de un lote se decodifican sin
+    /// esperar; solo se entra en un metodo async (caja pooled) para enviar o cuando el sink esta vacio.
+    /// </summary>
+    // ponytail: usar el enumerador tras DisposeAsync toca la enumeracion que lo reutilice; await foreach nunca lo hace.
+    private sealed class StreamEnumerator<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut> : IAsyncEnumerator<TOut?>
+    {
+        private static readonly ConcurrentBag<StreamEnumerator<TIn, TOut>> s_pool = [];
+
+        private MultiplexedChannel channel = null!;
+        private long op;
+        private TIn? payload;
+        private bool hasPayload, _rented, _done, _held;
+        private CancellationToken _token;
         private CancellationTokenSource? _linked;
         private StreamSink? _sink;
         private int _id;
@@ -233,21 +253,21 @@ internal sealed class MultiplexedChannel
         private int _offset;
         private TOut? _current;
 
-        public IAsyncEnumerator<TOut?> GetAsyncEnumerator(CancellationToken enumeratorToken = default)
+        public static StreamEnumerator<TIn, TOut> Rent(MultiplexedChannel channel, long op, TIn? payload, bool hasPayload, CancellationToken token, CancellationToken enumeratorToken)
         {
-            // Re-enumeracion: peticion nueva, como un iterador async.
-            if (_opened) return new StreamEnumerable<TIn, TOut>(channel, op, payload, hasPayload, _origin).GetAsyncEnumerator(enumeratorToken);
-
-            _opened = true;
+            var e = s_pool.TryTake(out var pooled) ? pooled : new();
+            (e.channel, e.op, e.payload, e.hasPayload, e._token) = (channel, op, payload, hasPayload, token);
+            e._rented = true;
+            e._done = false;
 
             // Mismo criterio que [EnumeratorCancellation]: se enlazan solo si ambos pueden cancelar.
             if (enumeratorToken.CanBeCanceled)
             {
-                if (!_token.CanBeCanceled) _token = enumeratorToken;
-                else if (_token != enumeratorToken) _token = (_linked = CancellationTokenSource.CreateLinkedTokenSource(_token, enumeratorToken)).Token;
+                if (!token.CanBeCanceled) e._token = enumeratorToken;
+                else if (token != enumeratorToken) e._token = (e._linked = CancellationTokenSource.CreateLinkedTokenSource(token, enumeratorToken)).Token;
             }
 
-            return this;
+            return e;
         }
 
         public TOut? Current => _current;
@@ -342,6 +362,9 @@ internal sealed class MultiplexedChannel
 
         public ValueTask DisposeAsync()
         {
+            // Idempotente: un segundo Dispose no devuelve dos veces la instancia al pool.
+            if (!_rented) return default;
+            _rented = false;
             _done = true;
 
             if (_held)
@@ -361,10 +384,13 @@ internal sealed class MultiplexedChannel
 
             _linked?.Dispose();
             _linked = null;
+            (channel, payload, _current, _token) = (null!, default, default, default);
+            s_pool.Add(this);
             return default;
         }
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<int> SendRequestAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(
         long op, TIn? payload, bool hasPayload, object sink, CancellationToken token)
     {
@@ -390,7 +416,7 @@ internal sealed class MultiplexedChannel
                 {
                     try
                     {
-                        if (typeof(TIn) == typeof(RawBody)) _frames.Write(Unsafe.As<TIn, RawBody>(ref payload!).Bytes.Span);
+                        if (payload is IRawBody) ((IRawBody)payload).WriteTo(_frames);
                         else Serialize(_frames, payload);
                     }
                     catch (Exception ex)

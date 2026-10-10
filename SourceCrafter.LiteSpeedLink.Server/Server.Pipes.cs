@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
@@ -37,7 +37,7 @@ public static partial class Server
         where THandler : struct, IRequestHandler
     {
         var responses = new ResponseChannel(writer, batch: batch);
-        var inflight = new ConcurrentDictionary<Task, byte>();
+        var inflight = new Inflight();
         using var slots = new SemaphoreSlim(maxInFlight);
 
         try
@@ -60,10 +60,12 @@ public static partial class Server
 
                     await slots.WaitAsync(token).ConfigureAwait(false);
 
-                    var request = DispatchAsync(handlers, op, RequestContext.Rent(correlationId, body.AsMemory(0, length), responses, token), body, slots, token);
-
-                    if (!request.IsCompleted && inflight.TryAdd(request, 0))
-                        _ = request.ContinueWith(static (t, s) => ((ConcurrentDictionary<Task, byte>)s!).TryRemove(t, out _), inflight, TaskScheduler.Default);
+                    var ctx = RequestContext.Rent(correlationId, body.AsMemory(0, length), responses, token);
+                    ctx.Track(body, slots, inflight);
+                    ValueTask<ResponseStatus> request;
+                    try { request = handlers.HandleAsync(op, ctx, token); }
+                    catch (Exception ex) { request = ValueTask.FromException<ResponseStatus>(ex); }
+                    ctx.Observe(request);
                 }
 
                 reader.AdvanceTo(buffer.Start, buffer.End);
@@ -76,14 +78,15 @@ public static partial class Server
         }
         finally
         {
-            try { await Task.WhenAll(inflight.Keys).ConfigureAwait(false); } catch { }
+            await inflight.DrainAsync().ConfigureAwait(false);
 
             await reader.CompleteAsync().ConfigureAwait(false);
             await writer.CompleteAsync().ConfigureAwait(false);
         }
     }
 
-    private static async Task DispatchAsync<THandler>(THandler handlers, long op, RequestContext ctx, byte[] body, SemaphoreSlim? slots, CancellationToken token)
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    private static async ValueTask DispatchAsync<THandler>(THandler handlers, long op, RequestContext ctx, byte[] body, SemaphoreSlim? slots, CancellationToken token)
         where THandler : struct, IRequestHandler
     {
         try
@@ -400,8 +403,29 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true,
     }
 }
 
+/// <summary>Peticiones en curso de una conexion: contador (la lectura cuenta como una) y una unica senal de vaciado por conexion.</summary>
+internal sealed class Inflight
+{
+    private int _count = 1;
+    private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void Enter() => Interlocked.Increment(ref _count);
+
+    public void Exit()
+    {
+        if (Interlocked.Decrement(ref _count) == 0) _drained.TrySetResult();
+    }
+
+    /// <summary>Suelta la referencia de la lectura y espera a que terminen los handlers pendientes.</summary>
+    public Task DrainAsync()
+    {
+        Exit();
+        return _drained.Task;
+    }
+}
+
 /// <summary>
-/// Peticion en curso sobre una conexion multiplexada. Todas las respuestas salen con el corrId de
+/// Peticion en curso sobre una conexion multiplexada.
 /// la peticion y usan el token de cancelacion del servidor.
 /// </summary>
 public sealed class RequestContext
@@ -414,8 +438,85 @@ public sealed class RequestContext
     private ResponseChannel _responses = null!;
     private CancellationToken _token;
     private int _completed;
+    private byte[]? _rented;
+    private SemaphoreSlim? _slots;
+    private Inflight? _inflight;
+    private ValueTask<ResponseStatus> _pending;
+    private Action? _onCompleted;
 
     private RequestContext() { }
+
+    /// <summary>Recursos de la conexion que se liberan al terminar el handler (cuerpo alquilado, hueco y contador).</summary>
+    internal void Track(byte[] body, SemaphoreSlim slots, Inflight inflight)
+    {
+        _rented = body;
+        _slots = slots;
+        _inflight = inflight;
+        inflight.Enter();
+    }
+
+    /// <summary>
+    /// Espera al handler sin caja ni Task propios: el contexto (ya pooled) es la continuacion, con delegado cacheado.
+    /// Sustituye a DispatchAsync (caja por peticion) y al registro inflight con ContinueWith.
+    /// </summary>
+    internal void Observe(ValueTask<ResponseStatus> request)
+    {
+        if (request.IsCompleted)
+        {
+            Finish(request);
+            return;
+        }
+
+        _pending = request;
+        request.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(_onCompleted ??= OnCompleted);
+    }
+
+    private void OnCompleted()
+    {
+        var request = _pending;
+        _pending = default;
+        Finish(request);
+    }
+
+    private void Finish(ValueTask<ResponseStatus> request)
+    {
+        try
+        {
+            request.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) when (_token.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (!IsCompleted)
+        {
+            _ = FailAndReleaseAsync(ex);
+            return;
+        }
+        catch
+        {
+        }
+
+        Release();
+    }
+
+    private async Task FailAndReleaseAsync(Exception ex)
+    {
+        try { await FailAsync(ex).ConfigureAwait(false); }
+        catch { }
+        finally { Release(); }
+    }
+
+    private void Release()
+    {
+        var (body, slots, inflight) = (_rented!, _slots, _inflight);
+        _rented = null;
+        _slots = null;
+        _inflight = null;
+        Return();
+        ArrayPool<byte>.Shared.Return(body);
+        slots?.Release();
+        inflight?.Exit();
+    }
 
     internal static RequestContext Rent(int correlationId, ReadOnlyMemory<byte> body, ResponseChannel responses, CancellationToken token)
     {

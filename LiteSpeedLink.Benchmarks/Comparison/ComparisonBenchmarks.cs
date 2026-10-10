@@ -106,7 +106,7 @@ public class ComparisonBenchmarks
         _grpcSlimClient = new(_grpcSlimChannel);
 
         // Calentar todo (y validar) antes de medir.
-        await Lsl_Unary(); await AspNet_Unary(); await AspNetSlim_Unary(); await Grpc_Unary(); await GrpcSlim_Unary();
+        await Lsl_Unary(); await Lsl_UnaryRaw(); await AspNet_Unary(); await AspNetSlim_Unary(); await Grpc_Unary(); await GrpcSlim_Unary();
         await Lsl_Stream(); await AspNet_Stream(); await AspNetSlim_Stream(); await Grpc_Stream(); await GrpcSlim_Stream();
         await Lsl_StreamPerItem(); await Lsl_StreamBatched(); await AspNetSlim_StreamBatched();
     }
@@ -123,6 +123,30 @@ public class ComparisonBenchmarks
 
     [Benchmark(Baseline = true), BenchmarkCategory("Unary")]
     public async Task<int> Lsl_Unary() => Sum(await _lsl.GetAsync<(int, int), int>(0, (1, 2)));
+
+    /// <summary>Igual que el cliente generado: escritor directo a la trama + lector especifico de la respuesta.</summary>
+    [Benchmark, BenchmarkCategory("Unary")]
+    public async Task<int> Lsl_UnaryRaw()
+    {
+        int a = 1, b = 2;
+        return Sum(await _lsl.GetRawAsync(0, (a, b), static (__rw, __rs) => __Req0(__rw, __rs.Item1, __rs.Item2), static __b => __Res0(__b)).ConfigureAwait(false));
+    }
+
+    private static void __Req0(global::System.Buffers.IBufferWriter<byte> __out, int __p0, int __p1)
+    {
+        using var __s = global::MemoryPack.MemoryPackWriterOptionalStatePool.Rent(null);
+        var __w = new global::MemoryPack.MemoryPackWriter<global::System.Buffers.IBufferWriter<byte>>(ref __out, __s);
+        __w.WriteUnmanaged(__p0);
+        __w.WriteUnmanaged(__p1);
+        __w.Flush();
+    }
+
+    private static int __Res0(global::System.ReadOnlySpan<byte> __b)
+    {
+        using var __s = global::MemoryPack.MemoryPackReaderOptionalStatePool.Rent(null);
+        var __r = new global::MemoryPack.MemoryPackReader(__b, __s);
+        return __r.ReadUnmanaged<int>();
+    }
 
     [Benchmark, BenchmarkCategory("Unary")]
     public async Task<int> AspNet_Unary()

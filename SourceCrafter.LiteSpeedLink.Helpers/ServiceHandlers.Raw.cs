@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 using System;
@@ -69,51 +69,67 @@ public partial class ServiceHandlersGenerator
     }
 
     /// <summary>
-    /// Lector estatico: <c>ReadOnlySpan&lt;byte&gt;</c> -> valor o tupla, con los metodos especificos de cada tipo.
-    /// Con <paramref name="outFrom"/> (0 o 1) tiene la firma del contrato: los tipos desde ese indice salen por <c>out __o{k}</c>.
+    /// Lector estatico: <c>ReadOnlySpan&lt;byte&gt;</c> -> valor o tupla (orden del cable: retorno, luego out/ref), con los metodos
+    /// especificos de cada tipo. El transporte lo invoca sobre su propio buffer: la respuesta nunca se copia.
     /// </summary>
-    private static void EmitReader(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent, int outFrom = -1)
+    private static void EmitReader(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent)
     {
-        bool outs = outFrom >= 0 && outFrom < types.Count;
-
-        code.Append("\n\n").Append(indent).Append("private static ").Append(!outs ? TupleOf(types) : outFrom == 0 ? "void" : types[0].GlobalNamespaced)
-            .Append(' ').Append(name).Append("(global::System.ReadOnlySpan<byte> __b");
-
-        for (int i = outs ? outFrom : types.Count; i < types.Count; i++)
-            code.Append(", out ").Append(types[i].GlobalNamespaced).Append(" __o").Append(i - outFrom);
-
-        code.Append(")\n")
+        code.Append("\n\n").Append(indent).Append("private static ").Append(TupleOf(types))
+            .Append(' ').Append(name).Append("(global::System.ReadOnlySpan<byte> __b)\n")
             .Append(indent).Append("{\n")
             .Append(indent).Append("    using var __s = global::MemoryPack.MemoryPackReaderOptionalStatePool.Rent(null);\n")
-            .Append(indent).Append("    var __r = new global::MemoryPack.MemoryPackReader(__b, __s);\n");
-
-        if (!outs)
-        {
-            code.Append(indent).Append("    return ")
-                .Append(types.Count == 1 ? ReadCall(types[0]) : "(" + string.Join(", ", types.Select(ReadCall)) + ")")
-                .Append(";\n");
-        }
-        else
-        {
-            // Orden del cable: retorno primero, luego out/ref.
-            if (outFrom == 1) code.Append(indent).Append("    var __v = ").Append(ReadCall(types[0])).Append(";\n");
-
-            for (int i = outFrom; i < types.Count; i++)
-                code.Append(indent).Append("    __o").Append(i - outFrom).Append(" = ").Append(ReadCall(types[i])).Append(";\n");
-
-            if (outFrom == 1) code.Append(indent).Append("    return __v;\n");
-        }
-
-        code.Append(indent).Append('}');
+            .Append(indent).Append("    var __r = new global::MemoryPack.MemoryPackReader(__b, __s);\n")
+            .Append(indent).Append("    return ")
+            .Append(types.Count == 1 ? ReadCall(types[0]) : "(" + string.Join(", ", types.Select(ReadCall)) + ")")
+            .Append(";\n")
+            .Append(indent).Append('}');
     }
 
-    /// <summary>Escritor estatico: argumentos -> bytes de la peticion (cuerpo sin cabecera).</summary>
-    private static void EmitWriter(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent)
+    /// <summary>Argumento lector de <c>GetRaw(Async)</c>: lambda <c>static</c> (cacheada) sobre el lector generado, o descarte sin respuesta.</summary>
+    private static string RawReaderArg(string? reader) => reader is null ? "static _ => true" : "static __b => " + reader + "(__b)";
+
+    /// <summary>Peticion ya materializada (clave de cache por bytes): se escribe tal cual en la trama.</summary>
+    private const string BytesWriter = "static (__rw, __rs) => global::System.Buffers.BuffersExtensions.Write(__rw, __rs.Span)";
+
+    /// <summary>Peticion sin argumentos: cuerpo vacio.</summary>
+    private const string NoRequest = "(byte)0, static (_, _) => { }";
+
+    /// <summary>
+    /// Reparte la respuesta <c>__res</c> (valor o tupla) en <paramref name="targets"/>, uno por tipo del cable
+    /// (p. ej. <c>var __r</c>, un parametro out/ref o <c>var __o0</c>).
+    /// </summary>
+    private static void Unpack(StringBuilder code, IReadOnlyList<string> targets)
     {
+        for (int i = 0; i < targets.Count; i++)
+            code.Append("\n        ").Append(targets[i]).Append(" = __res").Append(targets.Count == 1 ? null : ".Item" + (i + 1)).Append(';');
+    }
+
+    /// <summary>
+    /// Escritor estatico: argumentos -> bytes de la peticion (cuerpo sin cabecera). Con <paramref name="direct"/> escribe en el
+    /// <c>IBufferWriter</c> del transporte (su trama), sin buffer intermedio ni copia; si no, materializa (claves de cache por bytes).
+    /// </summary>
+    private static void EmitWriter(StringBuilder code, string name, IReadOnlyList<ITypeSymbol> types, string indent, bool direct = false)
+    {
+        string parameters = string.Join(", ", types.Select((t, i) => t.GlobalNamespaced + " __p" + i));
+
+        if (direct)
+        {
+            code.Append("\n\n").Append(indent).Append("private static void ").Append(name).Append("(global::System.Buffers.IBufferWriter<byte> __out, ").Append(parameters).Append(")\n")
+                .Append(indent).Append("{\n")
+                .Append(indent).Append("    using var __s = global::MemoryPack.MemoryPackWriterOptionalStatePool.Rent(null);\n")
+                .Append(indent).Append("    var __w = new global::MemoryPack.MemoryPackWriter<global::System.Buffers.IBufferWriter<byte>>(ref __out, __s);\n");
+
+            for (int i = 0; i < types.Count; i++)
+                code.Append(indent).Append("    ").Append(WriteCall(types[i], "__p" + i)).Append('\n');
+
+            code.Append(indent).Append("    __w.Flush();\n").Append(indent).Append('}');
+            return;
+        }
+
         code.Append("\n\n").Append(indent).Append("private static global::System.ReadOnlyMemory<byte> ").Append(name).Append('(')
-            .Append(string.Join(", ", types.Select((t, i) => t.GlobalNamespaced + " __p" + i))).Append(")\n")
+            .Append(parameters).Append(")\n")
             .Append(indent).Append("{\n")
-            // ponytail: un ArrayBufferWriter por llamada; el cuerpo debe sobrevivir a los await del transporte. Upgrade: buffer del pool devuelto por el transporte.
+            // ponytail: un ArrayBufferWriter por llamada; solo para bytes que deben sobrevivir a la llamada (claves de cache).
             // Primitivos exactos; strings con cota UTF-8 (cabecera 8 + 3/char, sin recorrer el string: nunca crece); packables/valores parten de 64 y crecen.
             .Append(indent).Append("    var __buf = new global::System.Buffers.ArrayBufferWriter<byte>(")
             .Append(CapacityOf(types)).Append(");\n")
@@ -129,6 +145,15 @@ public partial class ServiceHandlersGenerator
             .Append(indent).Append("    return __buf.WrittenMemory;\n")
             .Append(indent).Append('}');
     }
+
+    /// <summary>
+    /// Argumentos de <c>GetRaw(Async)</c> para un escritor directo: estado (valor o tupla, sin box) y lambda <c>static</c>
+    /// (delegado cacheado por el compilador) que lo desempaqueta hacia <paramref name="writer"/>.
+    /// </summary>
+    private static string DirectRequest(string writer, IReadOnlyList<string> args) =>
+        (args.Count == 1 ? args[0] : "(" + string.Join(", ", args) + ")")
+        + ", static (__rw, __rs) => " + writer + "(__rw, "
+        + (args.Count == 1 ? "__rs" : string.Join(", ", args.Select((_, i) => "__rs.Item" + (i + 1)))) + ")";
 
     private const string ClientRetryAttr = "SourceCrafter.LiteSpeedLink.ClientRetryAttribute", ServerRetryAttr = "SourceCrafter.LiteSpeedLink.ServerRetryAttribute";
 
@@ -212,7 +237,7 @@ public partial class ServiceHandlersGenerator
     /// llamante cancelo: sin structs ni delegados por operacion; processors y lectores quedan fuera y se ejecutan una vez.
     /// </summary>
     private static void EmitCall(StringBuilder code, (int Attempts, int IntervalMs)? retry, string call, string? target, string? token, bool isAsync,
-        string targetType = "global::System.ReadOnlyMemory<byte>")
+        string targetType)
     {
         if (retry is not { } r)
         {
@@ -236,6 +261,14 @@ public partial class ServiceHandlersGenerator
 
         code.Append("\n        }");
     }
+
+    /// <summary>
+    /// Caja async reutilizada en los metodos ValueTask generados (cada llamada creaba la suya). El ValueTask resultante se
+    /// consume una sola vez, que es la regla de ValueTask; los contratos Task no pueden usarlo.
+    /// </summary>
+    private static string PooledBuilder(bool generic) =>
+        "[global::System.Runtime.CompilerServices.AsyncMethodBuilder(typeof(global::System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder"
+        + (generic ? "<>" : null) + "))]\n    ";
 
     /// <summary>
     /// Cliente unario raw:
@@ -270,29 +303,32 @@ public partial class ServiceHandlersGenerator
         string reqName = $"__Req{n}", resName = $"__Res{n}", serviceId = GetServiceId(method.GlobalNamespaced).ToString();
         var retry = GetRetry(method, false);
 
-        if (request.Count > 0) EmitWriter(helpers, reqName, [.. request.Select(p => p.Type)], "");
-        // Firma del contrato:
-        if (readsResponse) EmitReader(helpers, resName, responseTypes, "", hasRet ? 1 : 0);
+        if (readsResponse) EmitReader(helpers, resName, responseTypes, "");
 
-        string reqArgs = request.Count > 0 ? $"{reqName}({string.Join(", ", request.Select(p => p.Name))})" : "default";
+        List<string> reqNames = [.. request.Select(p => p.Name)];
+        string reqArgs = request.Count > 0 ? DirectRequest(reqName, reqNames) : NoRequest;
+        bool materialize = false;
 
         // GetCache descarta out/ref: con cache el unico resultado es el retorno.
         string? cacheKey = null;
 
         if (GetCache(method, false, contribution) is { } cache && GetCacheKey(method, [.. request.Select(p => (p, p.Type))], compilation, true, contribution) is { } key)
         {
-            cacheKey = DeclareClientCache(helpers, n, cache, key, retType.GlobalNamespaced, reqArgs);
+            cacheKey = DeclareClientCache(helpers, n, cache, key, retType.GlobalNamespaced, request.Count > 0 ? $"{reqName}({string.Join(", ", reqNames)})" : "default");
             // Clave por bytes = la peticion: en un fallo se envia tal cual, sin serializar dos veces.
-            if (key.Bytes) reqArgs = "__cacheKey";
+            if (key.Bytes) (reqArgs, materialize) = ("__cacheKey, " + BytesWriter, true);
         }
-        string outVars = string.Concat(response.Select((_, i) => $", out var __o{i}"));
-        string outNames = string.Join(", ", response.Select((_, i) => $"__o{i}"));
+
+        if (request.Count > 0) EmitWriter(helpers, reqName, [.. request.Select(p => p.Type)], "", direct: !materialize);
+        string reader = RawReaderArg(readsResponse ? resName : null), resType = TupleOf(responseTypes);
 
         // Async: los out/ref viajan en la tupla de retorno (misma forma que la API tipada).
         string name = method.Name.EndsWith("Async") ? method.Name : method.Name + "Async";
         string asyncParams = string.Join(", ", method.Parameters.Where(p => p.RefKind is not RefKind.Out).Select(p => p.Type.GlobalNamespaced + " " + p.Name));
 
-        code.Append("\n\n    public async global::System.Threading.Tasks.").Append(isTask && !isValueTask ? "Task" : "ValueTask")
+        bool valueTask = !isTask || isValueTask;
+        code.Append("\n\n    ").Append(valueTask ? PooledBuilder(readsResponse) : null)
+            .Append("public async global::System.Threading.Tasks.").Append(valueTask ? "ValueTask" : "Task")
             .Append(readsResponse ? "<" + TupleOf(responseTypes) + ">" : null).Append(' ').Append(name).Append('(').Append(asyncParams);
 
         if (tokenName is null)
@@ -301,18 +337,11 @@ public partial class ServiceHandlersGenerator
         string token = tokenName ?? "@__token";
         code.Append(")\n    {\n        ");
         int cacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, token, true) : 0;
-        EmitCall(code, retry, $"await {conn}.GetRawAsync({serviceId}, {reqArgs}, {token}).ConfigureAwait(false)", readsResponse ? "__res" : null, token, true);
+        EmitCall(code, retry, $"await {conn}.GetRawAsync({serviceId}, {reqArgs}, {reader}, {token}).ConfigureAwait(false)", readsResponse ? "__res" : null, token, true, resType);
 
-        if (cacheKey != null)
-            CloseClientCache(code.Append("\n\n        var __v = ").Append(resName).Append("(__res.Span);"), cacheStart, "__v");
-        else if (!readsResponse) { }
-        else if (response.Count == 0)
-            code.Append("\n\n        return ").Append(resName).Append("(__res.Span);");
-        else if (hasRet)
-            code.Append("\n\n        return (").Append(resName).Append("(__res.Span").Append(outVars).Append("), ").Append(outNames).Append(");");
-        else
-            code.Append("\n\n        ").Append(resName).Append("(__res.Span").Append(outVars).Append(");\n\n        return ")
-                .Append(response.Count == 1 ? outNames : "(" + outNames + ")").Append(';');
+        // Async: la respuesta (valor o tupla retorno + out/ref) ya tiene la forma del retorno.
+        if (cacheKey != null) CloseClientCache(code, cacheStart, "__res");
+        else if (readsResponse) code.Append("\n\n        return __res;");
 
         code.Append("\n    }");
 
@@ -326,12 +355,17 @@ public partial class ServiceHandlersGenerator
         {
             code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ");
             int syncCacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, tokenName, false) : 0;
-            EmitCall(code, retry, $"{conn}.GetRaw({serviceId}, {reqArgs}" + (tokenName is null ? "" : $", {tokenName}") + ")", readsResponse ? "__res" : null, tokenName, false);
+            EmitCall(code, retry, $"{conn}.GetRaw({serviceId}, {reqArgs}, {reader}" + (tokenName is null ? "" : $", {tokenName}") + ")", readsResponse ? "__res" : null, tokenName, false, resType);
 
-            if (cacheKey != null)
-                CloseClientCache(code.Append("\n\n        var __v = ").Append(resName).Append("(__res.Span);"), syncCacheStart, "__v");
-            else if (readsResponse)
-                code.Append("\n\n        ").Append(hasRet ? "return " : null).Append(resName).Append("(__res.Span").Append(string.Concat(response.Select(p => ", out " + p.Name))).Append(");");
+            if (cacheKey != null) CloseClientCache(code, syncCacheStart, "__res");
+            else if (response.Count == 0) code.Append(hasRet ? "\n\n        return __res;" : null);
+            else
+            {
+                // Sync: out/ref salen a los parametros del llamador.
+                code.Append('\n');
+                Unpack(code, [.. hasRet ? ["var __v"] : Enumerable.Empty<string>(), .. response.Select(p => p.Name)]);
+                if (hasRet) code.Append("\n\n        return __v;");
+            }
 
             code.Append("\n    }");
         }

@@ -1,6 +1,6 @@
-﻿# Plan de mejoras — LiteSpeedLink
+# Plan de mejoras — LiteSpeedLink
 
-## Arranque de sesión *(leer primero)*
+## Arranque
 
 Este archivo es el **único traspaso** entre sesiones. Al terminar un paso: marcar su estado aquí,
 añadir lo aprendido en *Trampas conocidas* y actualizar *Siguiente paso*.
@@ -676,6 +676,15 @@ Estado: `[ ]` pendiente · `[~]` en curso · `[x]` hecho · `[-]` descartado
     (4 ramas → 1); async: `return (__Res{n}(span, out var __o0), __o0);`. `void` con out/ref: lector `void`.
     Los lectores de petición del host (`__ReqM`) y de pipelines siguen devolviendo valor/tupla.
     POC: `TryAuth`/`TryAuthAsync` y `IAuth.Bump(ref int, out string)` en `LiteSpeedLink/Program.cs` (4 transportes).
+  - [x] Peticion raw escrita directamente en la trama del transporte (como Memory): `GetRaw(Async)<TState>(op, state,
+    static (w, s) => __ReqN(w, ...))`; el transporte envuelve en `RawBody<TState>` (struct) y lo escribe tras su cabecera.
+    Sin `ArrayBufferWriter` ni copia por llamada; solo la clave de cache por bytes sigue materializando (`__cacheKey`).
+    POC `RawBodyWritePoc`: 8 chars 34.3 ns/120 B -> 26.9 ns/0 B; 1024 chars 235.7 ns/6216 B -> 61.5 ns/0 B.
+    Respuesta sin copia: `GetRaw(Async)<TState,TOut>(..., RawReader<TOut> read)` decodifica sobre el buffer del transporte (pool TCP/UDS, pipe QUIC, nodo Memory, datagrama UDP); se eliminaron las APIs que devolvian `ReadOnlyMemory<byte>` (3 `ToArray`). Lector generado devuelve valor/tupla (retorno + out/ref).
+    Resto (+43 B vs tipada): pendiente de perfilar.
+        `--alloc cmp unary` (200k llamadas): Lsl_Unary 711 B/op, Lsl_UnaryRaw 754 B/op. Los +43 B estan todos en `AsyncStateMachineBox` (capas StreamConnection -> MultiplexedChannel.GetRawAsync -> UnaryAsync transportan `state`+`write`+`read` en vez de `payload`); `RawBody` no se encajona (box). Mejora posible: camino rapido sin async en `StreamConnection.Get(Raw)Async` cuando el canal ya existe (como `EnumerateAsync`): elimina una caja entera (~130-220 B/op).
+        [x] Implementado: camino rapido sin async en `StreamConnection.Get/GetRaw/SendAsync` (canal ya conectado) + `PoolingAsyncValueTaskMethodBuilder` en `MultiplexedChannel.Get/GetRaw/Send/Unary/SendRequestAsync`. `--alloc cmp unary`: Lsl_Unary 711 -> 153 B/op, Lsl_UnaryRaw 754 -> 157 B/op (resto: caja del benchmark + nodo de `_pending`). Contratos publicos intactos; tests 128/129 (falla solo Postgres por entorno).
+        [x] `EnumerateAsync`: `StreamEnumerable` separado en enumerable ligero (sin pool, reenumerable) + `StreamEnumerator<TIn,TOut>` pooled por tipo (vuelve al pool en `DisposeAsync`, idempotente). `--alloc cmp`: Lsl_Stream 359 -> 282 B/op, Lsl_StreamBatched 1202 -> 1107 B/op. BDN: Lsl_Stream 543 -> 469 B, Lsl_StreamBatched 1360 -> 1195 B; tiempo igual. Test: `PooledEnumeratorTest`.
   Test: `UdsTest.TestRawRoundtrip`, `RawCapacityTest`, POC `IAuth.TouchAsync` en `LiteSpeedLink/Program.cs` (4 transportes) + suite (75/75).
 
 - [x] **QUIC intermitente en suite** — `StreamBatchPolicyTest.QuicStreamsMatchBatched(0)` y
@@ -951,3 +960,24 @@ Resultados (arnes completo salvo indicacion; peores casos: unaria y stream simpl
 - Root `Dispose` solo es `virtual` si hay `Scoped` (CS0549 en contenedores sellados).
 - DI empaquetado localmente (2.26.283.31, `nuget.config` -> `external/SourceCrafter.DependencyInjection/publish`) hasta publicarlo.
 - Test: `ClientDisposalTest` (4 transportes) + `LocalConnectionTest` ajustado.
+
+### Cliente generado: caja async pooled
+- [x] El generador emite `[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]` en los metodos `ValueTask` raw y de pipelines (ServiceHandlers.Raw/Pipelines). Los contratos `Task` quedan igual (no se pueden poolear). Firmas y semantica sin cambios. Test: `PooledClientBuilderTest`.
+- Medicion: `--alloc gen` (FeatureServiceClient, 200k llamadas, B/op antes -> despues): Plain 361 -> 231; Processor 454 -> 309; ClientRetry 363 -> 226; ServerRetry 355 -> 226. La caja `<XAsync>d__N` del cliente desaparece del muestreo; queda la del propio benchmark.
+- BDN `FeatureBenchmarks` (ShortRun, Lsl vs AspNetSlim): Plain 63 us / 319 B vs 77 us / 2890 B; Processor 63 us / 365 B vs 77 us / 6131 B; ServerRetry 66 us / 403 B vs 76 us / 2914 B; default job: ClientRetry 38 us / 679 B vs 57 us / 2950 B; SingleFlight 42 us / 5292 B vs 246 us / 46375 B. Tests: 130/131 (falla solo Postgres, sin servidor local).
+
+### Estudio: concurrencia alta y registro de llamadas en curso
+- Medicion `--alloc conc` (ComparisonBenchmarks, 256k unarias UDS, c llamadas a la vez; B/op, us/op de throughput): Lsl_Unary c1 153 / 49.3; c8 185 / 29.0; c64 283 / 18.9; c256 366 / 16.4. Raw: 153 / 181 / 277 / 387. Lo que crece es la caja pooled de `SendRequestAsync` (0 -> 22 -> 99 -> 158-183 B/op): se suspende en `_gate.WaitAsync`/`FlushAsync` y el pool se agota. `UnaryAsync`/`GetAsync` siguen en ~0-1 B/op.
+- [-] 5.x-3 Fusionar `GetRawAsync`/`UnaryAsync`: descartado, sus cajas no se agotan ni con c=256. La palanca de concurrencia es `SendRequestAsync` (escritura sin suspender: candado/flush), no el anidamiento.
+- [x] POC `PendingSlotsPoc` (Benchmarks/Scenarios): `PendingSlots<T>` = array fijo 4096, id global, slot `id & Mask` por CAS, salta slots ocupados, tabla llena -> excepcion; el que entrega compara el id armado. SelfCheck: id viejo tras liberar, slot ocupado por llamada larga, respuesta tardia con mismos bits bajos, tabla llena, 2xCPU hilos sin cruces ni fugas.
+- Resultado BDN (registrar+entregar+liberar por llamada): ConcurrentDictionary 40-43 ns / 40 B -> slots 14-16 ns / 0 B (ventanas 1, 64, 1024); 8 hilos en paralelo 175-186 ns / 40 B -> 94-98 ns / 0 B.
+- [ ] Llevar `PendingSlots` a `MultiplexedChannel._pending` (UDS/TCP): pendiente de aprobacion.
+
+### Servidor: handlers asincronos (S1-S3)
+- POC `AsyncHandlerPoc` (handler TCP generado que hace `await Task.Yield()`) + `--alloc srv`. Con handlers sincronos estas cajas no aparecian.
+- [x] S1: el generador emite caja pooled en `HandleRequestsAsync` del host (no Memory).
+- [x] S2+S3: `ServePipeAsync` ya no usa `DispatchAsync` (`async Task`) ni `ConcurrentDictionary<Task,byte>` + `ContinueWith`. El `RequestContext` pooled es la continuacion del `ValueTask` del handler (delegado cacheado) y libera contexto/cuerpo/hueco; `Inflight` = contador por conexion (la lectura cuenta como una) + un TCS por conexion para el vaciado. `DispatchAsync` (solo QUIC, ya awaited) pasa a `ValueTask` pooled.
+- Resultado A/B intercalado (3 rondas, B/op): c=1 ~552 -> ~223; c=64 ~1060 -> ~745. Tiempo neutro (ruido de maquina; c=64 algo mejor). Queda: caja del harness, `Scoped`/impl por peticion (DI scoped), y a c=64 `TaskNode`/`WriteSlowAsync`/`SendRequestAsync` (candado de escritura).
+- Test: `UdsTest.TestAsyncHandlerCompletionReleasesSlots` (4x MaxInFlight peticiones, exito y fallo tras await). Tests 131/132 (Postgres).
+- [x] Ningun handler generado es sincrono, en ningun transporte: `HandleRequestsAsync` siempre `async ValueTask` pooled; Memory pasa a `StartMemoryServerAsync`. Llamada al servicio, etapas, retry, espera del seguidor de [ServerCache] y stream async usan `await` (fuera todos los `GetAwaiter().GetResult()` del camino de la peticion). Las respuestas de Memory (`Return`/`NotFound`/`Fail`) siguen sincronas: escriben en memoria compartida. `StartMemoryServer` (sync) queda para handlers manuales. Test: `MemoryStreamHostTest.StreamsUseYield`. Tests 131/132 (Postgres).
+- [x] Asincronia contagiosa en Memory: si algo del camino de la peticion espera (metodo, etapa/procesador, dependencia, retry, cache, stream async), todo el handler es `async ValueTask` pooled con `StartMemoryServerAsync`; si nada espera, handler sync con `StartMemoryServer` (sin maquina de estados). Resto de transportes siempre async. Test: `MemoryStreamHostTest.HandlerIsAsyncOnlyIfSomethingAwaits`. Tests 134/135 (Postgres).

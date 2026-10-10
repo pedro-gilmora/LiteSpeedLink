@@ -22,7 +22,7 @@ public static partial class Server
         Action? onFinalize = null,
         CancellationToken cancelToken = default)
     {
-        MemHandler handle = request =>
+        ValueTask handle(MemRequest request)
         {
             var ctx = new MemoryRequestContext(request, cancelToken);
             try
@@ -35,7 +35,7 @@ public static partial class Server
             }
 
             return default;
-        };
+        }
 
         return new MemoryHost(MemHost.Start(contextId, handle), onFinalize);
     }

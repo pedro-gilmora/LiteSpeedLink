@@ -67,24 +67,24 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         return true;
     }
 
-    public ReadOnlyMemory<byte> GetRaw(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
-        MemoryRpc.Call((op, request), WriteRawRequest, ReadRaw, this, _timeout, token);
+    public TOut GetRaw<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default) =>
+        MemoryRpc.Call((op, new RawBody<TState>(state, write)), WriteRawRequest, ReadRaw<TOut>, read, _timeout, token);
 
-    public ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default) =>
-        MemoryRpc.CallAsync((op, request), WriteRawRequest, ReadRaw, this, _timeout, token);
+    public ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default) =>
+        MemoryRpc.CallAsync((op, new RawBody<TState>(state, write)), WriteRawRequest, ReadRaw<TOut>, read, _timeout, token);
 
-    private static void WriteRawRequest(IBufferWriter<byte> writer, (long op, ReadOnlyMemory<byte> request) state)
+    private static void WriteRawRequest<TState>(IBufferWriter<byte> writer, (long op, RawBody<TState> body) state)
     {
         Framing.WriteOpId(writer.GetSpan(Framing.OpIdSize), state.op);
         writer.Advance(Framing.OpIdSize);
-        writer.Write(state.request.Span);
+        state.body.WriteTo(writer);
     }
 
-    // La respuesta solo es valida durante la lectura (puede apuntar al nodo): el raw se copia.
-    private static ReadOnlyMemory<byte> ReadRaw(object? c, ReadOnlySpan<byte> response) =>
+    // Se decodifica sobre la respuesta (puede apuntar al nodo) mientras es valida: sin copia. El estado es el propio lector.
+    private static TOut ReadRaw<TOut>(object? read, ReadOnlySpan<byte> response) =>
         (ResponseStatus)Status(response) is ResponseStatus.Success
-            ? response[Framing.StatusSize..].ToArray()
-            : throw ResponseError.Create((ResponseStatus)response[0], $"'{((MemoryConnection)c!)._contextId}'", response[Framing.StatusSize..]);
+            ? ((RawReader<TOut>)read!)(response[Framing.StatusSize..])
+            : throw ResponseError.Create((ResponseStatus)response[0], "memory host", response[Framing.StatusSize..]);
 
     public bool Send(
         long op,

@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using SourceCrafter.DependencyInjection.Generation;
 using SourceCrafter.LiteSpeedLink.Helpers;
 
@@ -310,12 +310,13 @@ public partial class ServiceHandlersGenerator
         List<ITypeSymbol> responseTypes = [.. hasRet ? [wireRet] : Enumerable.Empty<ITypeSymbol>(), .. outs.Select(p => p.Type)];
         string? asyncType = outs.Count == 0 ? finalType : TupleOf([.. hasRet ? [finalRet] : Enumerable.Empty<ITypeSymbol>(), .. outs.Select(p => p.Type)]);
         bool reads = responseTypes.Count > 0;
+        List<string> reqNames = [.. inputs.Select(Wire)];
         string
             resName = "__Res" + n,
-            reqArgs = inputs.Count > 0 ? "__Req" + n + "(" + string.Join(", ", inputs.Select(Wire)) + ")" : "default";
+            reqArgs = inputs.Count > 0 ? DirectRequest("__Req" + n, reqNames) : NoRequest;
+        bool materialize = false;
 
-        if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], "");
-        if (reads) EmitReader(helpers, resName, responseTypes, "", outs.Count > 0 ? (hasRet ? 1 : 0) : -1);
+        if (reads) EmitReader(helpers, resName, responseTypes, "");
 
         static string Wire((IParameterSymbol Param, ITypeSymbol ClientType, ITypeSymbol Wire, List<Stage> Stages) i) => i.Stages.Count > 0 ? StageVar(i.Param.Name, i.Stages.Count - 1) : i.Param.Name;
 
@@ -329,9 +330,11 @@ public partial class ServiceHandlersGenerator
         {
             // Sin param processors la peticion son los argumentos originales: con clave por bytes se reutiliza.
             bool reuse = key.Bytes && inputs.All(i => i.Stages.Count == 0);
-            cacheKey = DeclareClientCache(helpers, n, cache, key, finalType!, reuse ? reqArgs : null);
-            if (reuse) reqArgs = "__cacheKey";
+            cacheKey = DeclareClientCache(helpers, n, cache, key, finalType!, reuse ? (inputs.Count > 0 ? "__Req" + n + "(" + string.Join(", ", reqNames) + ")" : "default") : null);
+            if (reuse) (reqArgs, materialize) = ("__cacheKey, " + BytesWriter, true);
         }
+
+        if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], "", direct: !materialize);
 
         void Body(bool isAsync, string? token)
         {
@@ -343,13 +346,15 @@ public partial class ServiceHandlersGenerator
                 code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        ", ClientReject));
 
             // Solo la llamada al transporte se reintenta: los processors de parametros ya corrieron una vez.
-            EmitCall(code, retry, (isAsync ? "await " : null) + conn + ".GetRaw" + (isAsync ? "Async" : null) + "(" + serviceId + ", " + reqArgs
-                + (token != null ? ", " + token : null) + (isAsync ? ").ConfigureAwait(false)" : ")"), reads ? "__body" : null, token, isAsync);
+            EmitCall(code, retry, (isAsync ? "await " : null) + conn + ".GetRaw" + (isAsync ? "Async" : null) + "(" + serviceId + ", " + reqArgs + ", " + RawReaderArg(reads ? resName : null)
+                + (token != null ? ", " + token : null) + (isAsync ? ").ConfigureAwait(false)" : ")"), reads ? "__res" : null, token, isAsync, reads ? TupleOf(responseTypes) : "bool");
 
-            // sync: el lector escribe directo en los ref/out del llamador; async: en locales que vuelven en la tupla.
+            // sync: out/ref van directo a los parametros del llamador; async: a locales que vuelven en la tupla.
             if (reads)
-                code.Append("\n\n        ").Append(hasRet ? "var __r = " : null).Append(resName).Append("(__body.Span")
-                    .Append(string.Concat(outs.Select((p, k) => isAsync ? ", out var __o" + k : ", out " + p.Name))).Append(");");
+            {
+                code.Append('\n');
+                Unpack(code, [.. hasRet ? ["var __r"] : Enumerable.Empty<string>(), .. outs.Select((p, k) => isAsync ? "var __o" + k : p.Name)]);
+            }
 
             List<string> rets = [];
 
@@ -368,7 +373,7 @@ public partial class ServiceHandlersGenerator
             code.Append("\n    }");
         }
 
-        code.Append("\n\n    public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
+        code.Append("\n\n    ").Append(PooledBuilder(asyncType is not null)).Append("public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
             .Append(' ').Append(asyncName).Append('(').Append(clientParams);
 
         if (tokenName is null)

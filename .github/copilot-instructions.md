@@ -1,13 +1,19 @@
 # Copilot Instructions
-Just use 2 models: 
-- `claude-opus-5.5` for planning, reasoning profoundly, and generating code with deep understanding of the problem.
-- `claude-haiku-5.5` for fast and straight implementation coding
-- 
+
 ## General Guidelines
+- Just use 2 models: 
+  - `claude-opus-5.5` for planning, reasoning profoundly, and generating code with deep understanding of the problem.
+  - `claude-haiku-5.5` for fast and straight implementation coding.
 - Responder de forma lacónica, directa y concisa; no repetir información ya dicha (principios ponytail).
 - Compilar siempre por separado (nunca encadenado con tests/benchmarks).
 - OBLIGATORIO: todo comando de duración desconocida (build, pack, restore, tests, benchmarks, ejecutar apps/POC) se lanza como PowerShell job y se espera con carrera fin-del-proceso vs timeout, retornando en cuanto termine: `$j = Start-Job { ... }; Wait-Job $j -Timeout 600 | Out-Null; Receive-Job $j; Remove-Job $j -Force`. Prohibido usar esperas fijas estimadas (sleep/waitMs) para comandos que pueden acabar antes o después.
 - Nunca encadenar diferentes operaciones en un solo comando de terminal (p.ej., escribir un archivo y compilar); ejecutar cada operación como un comando separado.
+
+## Release Flow
+- Deploy DI first, then LSL. Only commits touching C# (.cs) files trigger the package publish.
+- Commit the C# changes in the DI generator repo (external/SourceCrafter.DependencyInjection) to dev; wait for the GitHub Action, then for the package to appear on NuGet.
+- Repeat the same steps for LiteSpeedLink.
+- Release commit messages are '[Release] ' followed by a one-sentence summary of the work done.
 
 ## Directrices del proyecto
 - En LiteSpeedLink, los clientes y servidores generados están pensados para usarse en contextos predecibles y typesafe, donde cliente y host se generan a partir de los mismos contratos en tiempo de compilación. NO deben diseñarse como clientes/servidores genéricos agnósticos del runtime: hay que evitar proponer negociación de protocolo, handshakes de versión, descubrimiento dinámica o robustez para usos arbitrarios fuera del flujo generado.

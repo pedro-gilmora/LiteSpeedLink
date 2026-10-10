@@ -62,6 +62,6 @@ public static partial class ClientExtensions
     public static IEnumerable<TOut?> Enumerate<[DynamicallyAccessedMembers(All)] TOut>(this IAsyncConnection c, long op, CancellationToken token = default, [CallerMemberName] string name = "")
         => c.EnumerateAsync<TOut>(op, token, name).ToBlockingEnumerable(token);
 
-    public static ReadOnlyMemory<byte> GetRaw(this IAsyncConnection c, long op, ReadOnlyMemory<byte> request, CancellationToken token = default)
-        => c.GetRawAsync(op, request, token).AsTask().GetAwaiter().GetResult();
+    public static TOut GetRaw<TState, TOut>(this IAsyncConnection c, long op, TState state, Action<System.Buffers.IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default)
+        => c.GetRawAsync(op, state, write, read, token).AsTask().GetAwaiter().GetResult();
 }

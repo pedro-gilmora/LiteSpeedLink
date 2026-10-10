@@ -107,14 +107,14 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IAsyncConnec
         finally { _pending.TryRemove(id, out _); }
     }
 
-    public async ValueTask<ReadOnlyMemory<byte>> GetRawAsync(long op, ReadOnlyMemory<byte> request, CancellationToken token = default)
+    public async ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default)
     {
-        var (id, responses) = await SendRequestAsync(op, new RawBody(request), true, token).ConfigureAwait(false);
+        var (id, responses) = await SendRequestAsync(op, new RawBody<TState>(state, write), true, token).ConfigureAwait(false);
         try
         {
             var response = await responses.Reader.ReadAsync(token).ConfigureAwait(false);
             EnsureSuccess(response);
-            return response.AsMemory(ResponseHeaderSize);
+            return read(response.AsSpan(ResponseHeaderSize));
         }
         finally { _pending.TryRemove(id, out _); }
     }
@@ -199,7 +199,7 @@ public sealed class UdpConnection(EndPoint endpoint) : IDisposable, IAsyncConnec
         {
             try
             {
-                if (typeof(TIn) == typeof(RawBody)) writer.Write(Unsafe.As<TIn, RawBody>(ref payload!).Bytes.Span);
+                if (payload is IRawBody) ((IRawBody)payload).WriteTo(writer);
                 else Serialize(writer, payload);
             }
             catch (Exception ex) { throw new ArgumentException("Invalid parameters", ex); }

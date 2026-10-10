@@ -14,11 +14,11 @@ public class MemoryStreamBatchingTest
 {
     static ValueTask<ResponseStatus> Handle(long op, MemoryRequestContext ctx, CancellationToken token) => op switch
     {
-        1 => ValueTask.FromResult(ctx.Yield(Enumerable.Range(0, ctx.Get<int>()))),
-        3 => ValueTask.FromResult(ctx.Yield(Enumerable.Range(1, 3).Select(i => Enumerable.Repeat((byte)i, 100_000).ToArray()))),
-        4 => ValueTask.FromResult(ctx.Yield(Enumerable.Range(ctx.Get<int>() * 1000, 500))),
+        1 => new(ctx.Yield(Enumerable.Range(0, ctx.Get<int>()))),
+        3 => new(ctx.Yield(Enumerable.Range(1, 3).Select(i => Enumerable.Repeat((byte)i, 100_000).ToArray()))),
+        4 => new(ctx.Yield(Enumerable.Range(ctx.Get<int>() * 1000, 500))),
         5 => ctx.Yield(Stall()),
-        _ => ValueTask.FromResult(ctx.NotFound())
+        _ => new(ctx.NotFound())
     };
 
     static async IAsyncEnumerable<int> Stall()

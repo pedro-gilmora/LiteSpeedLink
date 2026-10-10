@@ -14,9 +14,9 @@ public class MemoryMultiClientTest
 
     static ValueTask<ResponseStatus> Handle(long op, MemoryRequestContext ctx, CancellationToken token) => op switch
     {
-        0 => ValueTask.FromResult(ctx.Return(ctx.Get<int>() + 1)),
+        0 => new(ctx.Return(ctx.Get<int>() + 1)),
         2 => ctx.Yield(Items()),
-        _ => ValueTask.FromResult(ctx.NotFound())
+        _ => new(ctx.NotFound())
     };
 
     static async IAsyncEnumerable<int> Items()
