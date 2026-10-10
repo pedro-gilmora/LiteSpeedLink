@@ -158,7 +158,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                     if (TryGenerateStreamClientMethod(clientCode, method, connectionType)) continue;
 
-                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex, compilation, contribution)) continue;
+                    if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex, container, contribution)) continue;
 
                     bool
                         hasEmptyParams = method.Parameters.IsDefaultOrEmpty,

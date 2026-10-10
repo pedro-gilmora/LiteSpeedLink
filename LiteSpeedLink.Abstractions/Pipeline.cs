@@ -34,6 +34,26 @@ namespace SourceCrafter.LiteSpeedLink
     public sealed class ServerProcessorAttribute<T> : Attribute;
 
     /// <summary>
+    /// Middleware sincrono alrededor de la llamada. <paramref name="next"/> es una lambda <c>static</c> generada (delegado
+    /// cacheado) y <paramref name="state"/> lleva todo lo que necesita: sin closures ni structs por capa.
+    /// </summary>
+    public interface IMiddleware { TRes Invoke<TState, TRes>(TState state, Func<TState, TRes> next); }
+
+    /// <summary>
+    /// Middleware asincrono. Si espera algo, usar <c>PoolingAsyncValueTaskMethodBuilder</c>; si solo reenvia, devolver
+    /// <c>next(state, token)</c> sin <c>async</c> (sin maquina de estados).
+    /// </summary>
+    public interface IAsyncMiddleware { ValueTask<TRes> InvokeAsync<TState, TRes>(TState state, Func<TState, CancellationToken, ValueTask<TRes>> next, CancellationToken token); }
+
+    // Envuelven solo la llamada (transporte en cliente, handler en host): processors y cache quedan fuera, el reintento dentro.
+    // Orden declarado: el primero es el mas externo. T se resuelve de los servicios registrados en ese lado y debe implementar
+    // IMiddleware (camino sync) y/o IAsyncMiddleware (camino async) de forma publica e implicita.
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
+    public sealed class ClientMiddlewareAttribute<T> : Attribute;
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
+    public sealed class ServerMiddlewareAttribute<T> : Attribute;
+
+    /// <summary>
     /// Reintento de cliente: el generador emite un bucle inline alrededor de la llamada al transporte con estas constantes
     /// (sin structs ni delegados). Solo ante <see cref="TimeoutException"/> (plazo del transporte), hasta <see cref="Attempts"/>
     /// intentos con <see cref="IntervalMs"/> de pausa, nunca si el llamante cancelo. Los processors se ejecutan una vez, fuera

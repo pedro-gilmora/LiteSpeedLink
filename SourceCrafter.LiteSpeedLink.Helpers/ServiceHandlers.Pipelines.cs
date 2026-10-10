@@ -74,11 +74,7 @@ public partial class ServiceHandlersGenerator
             // Los del otro lado solo fijan tipos: no se resuelven aqui.
             if (container is null) { stages.Add(stage); continue; }
 
-            // Se prefiere el registro por implementacion; si no, el expuesto como el propio pipeline.
-            var service = container.Services.FirstOrDefault(s => s.MemberName != null && SymbolEqualityComparer.Default.Equals(s.ImplType, pipeline))
-                ?? container.Services.FirstOrDefault(s => s.MemberName != null && SymbolEqualityComparer.Default.Equals(s.ExportType, pipeline));
-
-            if (service is null)
+            if (FindService(container, pipeline) is not { } service)
             {
                 contribution.ReportDiagnostic(Diagnostic.Create(PipelineNotRegistered, location, pipeline.ToDisplayString(), container.ContainerType.ToDisplayString()));
                 continue;
@@ -89,6 +85,92 @@ public partial class ServiceHandlersGenerator
         }
 
         return stages;
+    }
+
+    /// <summary>Se prefiere el registro por implementacion; si no, el expuesto como el propio tipo.</summary>
+    private static ServiceInfo? FindService(ServiceProviderInfo container, INamedTypeSymbol type) =>
+        container.Services.FirstOrDefault(s => s.MemberName != null && SymbolEqualityComparer.Default.Equals(s.ImplType, type))
+            ?? container.Services.FirstOrDefault(s => s.MemberName != null && SymbolEqualityComparer.Default.Equals(s.ExportType, type));
+
+    /// <summary>Lectura del servicio; si su fabrica es async se espera (o se bloquea donde no se puede esperar).</summary>
+    private static string Resolve(ServiceInfo s, string provider, bool canAwait)
+    {
+        var resolve = provider + s.MemberName + (s.MemberIsMethodShaped ? "()" : null);
+
+        return s.AsyncKind is PartialAsyncKind.None ? resolve
+            : canAwait ? "(await " + resolve + ".ConfigureAwait(false))" : resolve + ".GetAwaiter().GetResult()";
+    }
+
+    private sealed record Middleware(ServiceInfo Service, string Name, bool Sync, bool Async);
+
+    private static readonly DiagnosticDescriptor
+        MiddlewareInvalid = new("SCLSL020", "Invalid middleware", "{0}", "LiteSpeedLink", DiagnosticSeverity.Error, true),
+        MiddlewareOnStream = new("SCLSL021", "Middleware ignored on streams",
+            "'{0}' streams its result: [ClientMiddleware]/[ServerMiddleware] are ignored because they would wrap only the creation of the stream", "LiteSpeedLink", DiagnosticSeverity.Warning, true);
+
+    private static bool IsMiddlewareAttribute(AttributeData a, bool server) =>
+        a.AttributeClass is { IsGenericType: true } ac && ac.ContainingNamespace?.ToDisplayString() == PipelineNs
+            && ac.Name == (server ? "ServerMiddlewareAttribute" : "ClientMiddlewareAttribute");
+
+    /// <summary>La interfaz (o el propio tipo si es ella) con su metodo publico e implicito: llamada directa, sin cast.</summary>
+    private static bool Exposes(ITypeSymbol? type, string iface)
+    {
+        if (type is null) return false;
+
+        if (type.Name == iface && type.ContainingNamespace?.ToDisplayString() == PipelineNs) return true;
+
+        return type.AllInterfaces.FirstOrDefault(i => i.Name == iface && i.ContainingNamespace?.ToDisplayString() == PipelineNs) is { } i
+            && i.GetMembers().OfType<IMethodSymbol>().All(m =>
+                type.FindImplementationForInterfaceMember(m) is IMethodSymbol { DeclaredAccessibility: Accessibility.Public, ExplicitInterfaceImplementations.Length: 0 });
+    }
+
+    /// <summary>
+    /// [Client|ServerMiddleware&lt;T&gt;] del metodo en orden declarado (el primero, el mas externo), resueltos en el contenedor
+    /// de ese lado. En streams no se aplican (SCLSL021, ver <see cref="ReportRetryDiagnostics"/>).
+    /// </summary>
+    private static List<Middleware> GetMiddlewares(IMethodSymbol method, bool server, ServiceProviderInfo container, PartialContribution contribution)
+    {
+        List<Middleware> list = [];
+
+        if (IsStream(method.ReturnType)) return list;
+
+        var location = method.Locations.FirstOrDefault();
+
+        foreach (var attr in method.GetAttributes())
+        {
+            if (!IsMiddlewareAttribute(attr, server) || attr.AttributeClass!.TypeArguments[0] is not INamedTypeSymbol type) continue;
+
+            if (FindService(container, type) is not { } service)
+            {
+                contribution.ReportDiagnostic(Diagnostic.Create(PipelineNotRegistered, location, type.ToDisplayString(), container.ContainerType.ToDisplayString()));
+                continue;
+            }
+
+            bool sync = Exposes(service.ExportType, "IMiddleware"), async = Exposes(service.ExportType, "IAsyncMiddleware");
+
+            if (!sync && !async)
+            {
+                contribution.ReportDiagnostic(Diagnostic.Create(MiddlewareInvalid, location,
+                    $"'{type.ToDisplayString()}' must implement IMiddleware and/or IAsyncMiddleware publicly and implicitly"));
+                continue;
+            }
+
+            list.Add(new(service, type.ToDisplayString(), sync, async));
+        }
+
+        return list;
+    }
+
+    /// <summary>Lecturas de los middlewares para una variante (sync/async); si alguno no la implementa, SCLSL020 y ninguno.</summary>
+    private static List<string> MiddlewareChain(List<Middleware> mws, bool isAsync, string provider, IMethodSymbol method, PartialContribution contribution)
+    {
+        var missing = mws.Where(m => !(isAsync ? m.Async : m.Sync)).ToList();
+
+        foreach (var m in missing)
+            contribution.ReportDiagnostic(Diagnostic.Create(MiddlewareInvalid, method.Locations.FirstOrDefault(),
+                $"'{m.Name}' must implement {(isAsync ? "IAsyncMiddleware" : "IMiddleware")} publicly and implicitly: '{method.Name}' has a {(isAsync ? "async" : "sync")} call"));
+
+        return missing.Count > 0 ? [] : [.. mws.Select(m => Resolve(m.Service, provider, isAsync))];
     }
 
     private static bool TryGetStage(INamedTypeSymbol pipeline, out Stage stage)
@@ -197,10 +279,7 @@ public partial class ServiceHandlersGenerator
         for (var n = 0; n < stages.Count; n++)
         {
             var s = stages[n];
-            var resolve = provider + s.Service.MemberName + (s.Service.MemberIsMethodShaped ? "()" : null);
-
-            if (s.Service.AsyncKind is not PartialAsyncKind.None)
-                resolve = canAwait ? "(await " + resolve + ".ConfigureAwait(false))" : resolve + ".GetAwaiter().GetResult()";
+            var resolve = Resolve(s.Service, provider, canAwait);
 
             var call = s.Kind is PipeKind.Sync
                 ? resolve + ".Process(" + expr + ")"
@@ -336,6 +415,9 @@ public partial class ServiceHandlersGenerator
 
         if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], "", direct: !materialize);
 
+        var mws = GetMiddlewares(method, false, container, contribution);
+        List<(string, string)> captures = [("__connection", "__connection"), .. reqNames.Select(r => (r, r)), .. materialize ? [("__cacheKey", "__cacheKey")] : Enumerable.Empty<(string, string)>()];
+
         void Body(bool isAsync, string? token)
         {
             code.Append("\n        ");
@@ -347,7 +429,8 @@ public partial class ServiceHandlersGenerator
 
             // Solo la llamada al transporte se reintenta: los processors de parametros ya corrieron una vez.
             EmitCall(code, retry, (isAsync ? "await " : null) + conn + ".GetRaw" + (isAsync ? "Async" : null) + "(" + serviceId + ", " + reqArgs + ", " + RawReaderArg(reads ? resName : null)
-                + (token != null ? ", " + token : null) + (isAsync ? ").ConfigureAwait(false)" : ")"), reads ? "__res" : null, token, isAsync, reads ? TupleOf(responseTypes) : "bool");
+                + (token != null ? ", " + token : null) + (isAsync ? ").ConfigureAwait(false)" : ")"), reads ? "__res" : null, token, isAsync, reads ? TupleOf(responseTypes) : "bool",
+                MiddlewareChain(mws, isAsync, "__provider.", method, contribution), captures);
 
             // sync: out/ref van directo a los parametros del llamador; async: a locales que vuelven en la tupla.
             if (reads)

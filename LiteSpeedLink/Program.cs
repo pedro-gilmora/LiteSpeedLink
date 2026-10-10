@@ -21,6 +21,17 @@ using (TextService.Start())
     Console.WriteLine($"[Memory] Twice (client TOut): {auth.Twice(21) + 1}");
 }
 
+// Middlewares: Add (sync, IMiddleware en cliente y host) y UpperAsync (async, IAsyncMiddleware).
+using (CalcService.Start("mw-sample"))
+{
+    using CalcServiceClient calcClient = new("mw-sample");
+    var calc = calcClient.Calc;
+    Console.WriteLine("[Middleware] Add (sync):");
+    Console.WriteLine($"[Middleware] = {calc.Add(2, 3)}");
+    Console.WriteLine("[Middleware] UpperAsync (async):");
+    Console.WriteLine($"[Middleware] = {await calc.UpperAsync("hola")}");
+}
+
 // Red: mismo contrato; los miembros sync son sync-over-async.
 using (UdpTextService.Start(5101))
 {

@@ -284,6 +284,8 @@ public partial class ").Append(typeName).Append(@"
             ");
 
                 var provider = "";
+                // Con middlewares la llamada va en una lambda static: los miembros del host se leen de __host (capturado en el estado).
+                var self = "";
 
                 if (dependency.Lifetime is PartialLifetime.Scoped)
                 {
@@ -371,7 +373,7 @@ public partial class ").Append(typeName).Append(@"
                                 {
                                     if (Exchange(ref separateParams)) hostCode.Append(", ");
 
-                                    AppendResolution(hostCode, paramDependency);
+                                    AppendResolution(hostCode, paramDependency, self);
                                 };
 
                             goto NEXT_PARAM;
@@ -552,13 +554,18 @@ public partial class ").Append(typeName).Append(@"
                 var serverRetry = GetRetry(method, true);
                 ReportRetryDiagnostics(method, contribution);
                 ReportCacheKeyIgnored(method, contribution);
+                var mws = GetMiddlewares(method, true, container, contribution);
+                // Sync si nada de la llamada espera ni pausa y todos tienen IMiddleware: no contagia async al handler de Memory.
+                bool mwAsync = isAwaitable || dependencyIsAsync || serverRetry is { IntervalMs: > 0 } || mws.Any(m => !m.Sync || m.Service.AsyncKind is not PartialAsyncKind.None);
+                List<string>? chain = mws.Count > 0 ? MiddlewareChain(mws, mwAsync, provider, method, contribution) : null;
+                if (chain is { Count: > 0 }) self = "__host.";
                 int callStart = hostCode.Length;
 
                 if (isAwaitable) hostCode.Append("await ");
 
                 if (dependencyIsAsync) hostCode.Append("(await ");
 
-                AppendResolution(hostCode, dependency, provider);
+                AppendResolution(hostCode, dependency, provider.Length > 0 ? provider : self);
 
                 if (dependencyIsAsync) hostCode.Append(".ConfigureAwait(false))");
 
@@ -573,6 +580,22 @@ public partial class ").Append(typeName).Append(@"
 
                 int emitStart = hostCode.Length;
 
+                if (chain is { Count: > 0 })
+                {
+                    List<(string, string)> captures = call.Contains("__host.") ? [("this", "__host")] : [];
+                    if (provider.Length > 0) captures.Add((provider.TrimEnd('.'), provider.TrimEnd('.')));
+
+                    var refs = method.Parameters.Where(p => p.RefKind is not RefKind.Out && p.Type.GlobalNamespaced != cancelTokenFullTypeName
+                        && !p.GetAttributes().Any(a => TryResolveAnnotatedParameter(services, a, p, out _))
+                        && p.Type.GlobalNonGenericNamespace != "global::Microsoft.Extensions.Logging.ILogger");
+                    captures.AddRange(refs.Select(p => (p.Name, p.Name)));
+
+                    EmitCall(hostCode, serverRetry, call, returnsType ? "___result" : null, "__token", mwAsync,
+                        (isAwaitable ? awaitedType! : method.ReturnType).GlobalNamespaced, chain, captures,
+                        [.. method.Parameters.Where(p => p.RefKind is RefKind.Out or RefKind.Ref).Select(p => (p.Name, p.Type.GlobalNamespaced, p.RefKind is RefKind.Out))]);
+                }
+                else
+                {
                 if (serverRetry != null)
                 {
                     // Los out se declaran fuera del bucle: un 'out var' dentro del try no seria visible al responder.
@@ -585,6 +608,7 @@ public partial class ").Append(typeName).Append(@"
                 // Solo la invocacion al handler se reintenta: los server processors ya corrieron una vez.
                 EmitCall(hostCode, serverRetry, call, returnsType ? "___result" : null, "__token", true,
                     (isAwaitable ? awaitedType! : method.ReturnType).GlobalNamespaced);
+                }
                 // EmitCall sangra para el cuerpo de un metodo de cliente (8); aqui es el de un case (12).
                 hostCode.Replace("\n        ", "\n            ", emitStart, hostCode.Length - emitStart);
 

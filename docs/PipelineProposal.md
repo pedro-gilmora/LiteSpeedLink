@@ -1,7 +1,7 @@
-﻿# Propuesta: pipelines guard + wrapper
+# Propuesta: pipelines guard + middleware
 
-Estado: **cerrada**. Implementado: processors `[ClientProcessor<T>]`/`[ServerProcessor<T>]` (seccion 1) y retry como bucle inline generado por `[ClientRetry]`/`[ServerRetry]` (2.6). Los wrappers genericos (2.1-2.5) no se implementaron: el unico caso real (retry) sale mas barato inline, sin structs ni delegados. Se conserva el analisis como referencia.
-POC medido: `test/POC/PipelineWrapperPoc` (`dotnet run -c Release -- --check` para el self-check; sin argumentos, BenchmarkDotNet).
+Estado: **cerrada**. Implementado: processors `[ClientProcessor<T>]`/`[ServerProcessor<T>]` (seccion 1) y retry como bucle inline generado por `[ClientRetry]`/`[ServerRetry]` (2.6). Los middlewares genericos (2.1-2.5) no se implementaron: el unico caso real (retry) sale mas barato inline, sin structs ni delegados. Se conserva el analisis como referencia.
+POC medido: `test/POC/PipelineMiddlewarePoc` (`dotnet run -c Release -- --check` para el self-check; sin argumentos, BenchmarkDotNet).
 
 ## 1. Qué hay hoy
 
@@ -36,17 +36,17 @@ Los sync (`IPipeline`) no cambian.
 Hoy un guard que no transforma (p. ej. "rol admin") tiene que colgar de un parámetro.
 **Propuesta G2**: permitir `ClientProcessor<T>`/`ServerProcessor<T>` también en `Method | Interface` cuando `T : IPipeline<TReq>`/`IAsyncValuePipeline<TReq>` y `TReq` es la tupla de parámetros de la operación. Es azúcar sobre lo que ya existe: el generador lo emite igual que un processor de parámetro. Decidir solo si aparece un caso real (YAGNI).
 
-## 2. Wrappers alrededor de la llamada
+## 2. Middlewares alrededor de la llamada
 
-### 2.1 Forma: processors fuera, wrappers dentro
+### 2.1 Forma: processors fuera, middlewares dentro
 
-Los processors se quedan como están (sentencias planas, una vez). Los wrappers envuelven **solo** la llamada (RPC en el cliente, implementación en el host):
+Los processors se quedan como están (sentencias planas, una vez). Los middlewares envuelven **solo** la llamada (RPC en el cliente, implementación en el host):
 
 ```
 if (!pre1) throw/Fail            // processors de entrada: una vez, aunque haya reintentos
 if (!pre2) throw/Fail
 
-result = W1(→ W2(→ CallRemoteOrServerImplementation()))   // wrappers: el 1º declarado es el más externo
+result = W1(→ W2(→ CallRemoteOrServerImplementation()))   // middlewares: el 1º declarado es el más externo
 
 if (!post1) throw/Fail           // processors de salida: una vez, sobre el resultado final
 
@@ -56,8 +56,8 @@ return result                    // host: bytes serializados; cliente: valor tip
 Consecuencias:
 
 - Un reintento **no** repite autenticación/validación/transformación: solo repite la llamada.
-- El wrapper **no ve la petición**: recibe "la llamada" ya con sus argumentos procesados. Por eso no necesita `TReq`, ni tuplas de parámetros, ni `Unit` para la entrada; solo `TRes`.
-- En el cliente, si la serialización va dentro de la llamada, cada reintento re-serializa. Optimización posible: serializar antes de los wrappers y que la llamada solo envíe el buffer (lo decide el struct de la llamada; el wrapper no cambia).
+- El middleware **no ve la petición**: recibe "la llamada" ya con sus argumentos procesados. Por eso no necesita `TReq`, ni tuplas de parámetros, ni `Unit` para la entrada; solo `TRes`.
+- En el cliente, si la serialización va dentro de la llamada, cada reintento re-serializa. Optimización posible: serializar antes de los middlewares y que la llamada solo envíe el buffer (lo decide el struct de la llamada; el middleware no cambia).
 
 ### 2.2 Contrato
 
@@ -68,31 +68,31 @@ namespace SourceCrafter.LiteSpeedLink;
 public interface ICall<TRes>      { TRes Invoke(); }
 public interface IAsyncCall<TRes> { ValueTask<TRes> InvokeAsync(); }
 
-// Wrapper agnóstico de la operación: un mismo Retry sirve para todas.
-public interface IWrapperPipeline
+// Middleware agnóstico de la operación: un mismo Retry sirve para todas.
+public interface IMiddlewarePipeline
 {
 	TRes Invoke<TRes, TCall>(TCall call, CancellationToken token) where TCall : struct, ICall<TRes>;
 }
 
-public interface IAsyncWrapperPipeline
+public interface IAsyncMiddlewarePipeline
 {
 	ValueTask<TRes> InvokeAsync<TRes, TCall>(TCall call, CancellationToken token) where TCall : struct, IAsyncCall<TRes>;
 }
 
 // Declaración: orden declarado = de fuera hacia dentro. Interfaz antes que método.
 [AttributeUsage(AttributeTargets.Interface | AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
-public sealed class WrapperAttribute<T> : Attribute;        // ambos lados
+public sealed class MiddlewareAttribute<T> : Attribute;        // ambos lados
 [AttributeUsage(AttributeTargets.Interface | AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
-public sealed class ClientWrapperAttribute<T> : Attribute;
+public sealed class ClientMiddlewareAttribute<T> : Attribute;
 [AttributeUsage(AttributeTargets.Interface | AttributeTargets.Method, AllowMultiple = true, Inherited = false)]
-public sealed class ServerWrapperAttribute<T> : Attribute;
+public sealed class ServerMiddlewareAttribute<T> : Attribute;
 ```
 
-El token se pasa al wrapper (para no reintentar si el llamante canceló) y además va capturado en el struct de la llamada, que es quien lo entrega al transporte.
+El token se pasa al middleware (para no reintentar si el llamante canceló) y además va capturado en el struct de la llamada, que es quien lo entrega al transporte.
 
-### 2.3 Código generado (cliente, `[ClientWrapper<Timing>][ClientWrapper<Retry>] int Hit([ClientProcessor<Check>] int n)`)
+### 2.3 Código generado (cliente, `[ClientMiddleware<Timing>][ClientMiddleware<Retry>] int Hit([ClientProcessor<Check>] int n)`)
 
-Wrappers obligatoriamente `readonly struct`: el generador solo emite el struct de la llamada real; cada capa interior es `AsyncWrappedCall<TWrapper, TNext, TRes>` de librería (todo argumento genérico es struct ⇒ el JIT especializa, sin dispatch).
+Middlewares obligatoriamente `readonly struct`: el generador solo emite el struct de la llamada real; cada capa interior es `AsyncWrappedCall<TMiddleware, TNext, TRes>` de librería (todo argumento genérico es struct ⇒ el JIT especializa, sin dispatch).
 
 ```csharp
 private readonly struct __Hit_Call(SecureClient c, int n, CancellationToken token) : IAsyncCall<int>
@@ -111,18 +111,18 @@ public async ValueTask<int> HitAsync(int n, CancellationToken token = default)
 }
 ```
 
-En el host es igual dentro del `case`: processors de parámetros → wrappers alrededor de `___scope.Secure.Hit(n)` → processors de retorno → serializar respuesta.
+En el host es igual dentro del `case`: processors de parámetros → middlewares alrededor de `___scope.Secure.Hit(n)` → processors de retorno → serializar respuesta.
 
 Por qué `AsyncWrappedCall<>` de librería y no lambdas ni structs intermedios generados (medido, 2.5):
 
 - Lambda: 64-104 B/llamada (delegate + closure) y llamada indirecta.
-- `AsyncWrappedCall<TWrapper, TNext, TRes>` con wrapper `readonly struct`: 0 B, sin dispatch, mismo coste que un struct por capa (4,7-4,9 ns vs 4,7). Con wrapper `class` el JIT compartiría código (+~3 ns/capa); por eso el wrapper debe ser `readonly struct` y sobran los structs intermedios generados.
+- `AsyncWrappedCall<TMiddleware, TNext, TRes>` con middleware `readonly struct`: 0 B, sin dispatch, mismo coste que un struct por capa (4,7-4,9 ns vs 4,7). Con middleware `class` el JIT compartiría código (+~3 ns/capa); por eso el middleware debe ser `readonly struct` y sobran los structs intermedios generados.
 
-### 2.4 Wrapper de usuario y reglas
+### 2.4 Middleware de usuario y reglas
 
 ```csharp
 // Implementado en Abstractions como RetryPolicy (Attempts, Interval; sync + async); test: RetryPolicyTest.
-public readonly struct Retry() : IAsyncWrapperPipeline
+public readonly struct Retry() : IAsyncMiddlewarePipeline
 {
 	public TimeSpan Interval { get; init; }
 
@@ -141,7 +141,7 @@ public readonly struct Retry() : IAsyncWrapperPipeline
 }
 
 // Paso directo sin await: no es async, no necesita builder.
-public readonly struct Timing(Metrics metrics) : IAsyncWrapperPipeline
+public readonly struct Timing(Metrics metrics) : IAsyncMiddlewarePipeline
 {
 	public ValueTask<TRes> InvokeAsync<TRes, TCall>(TCall call, CancellationToken token) where TCall : struct, IAsyncCall<TRes>
 	{
@@ -156,24 +156,24 @@ Reglas, comprobadas por el generador (ya inspecciona el tipo del atributo) como 
 | Regla | Por qué |
 |---|---|
 | `InvokeAsync` con `async` debe llevar `[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]` | sin él, +125-133 B por llamada que suspende |
-| El wrapper debe ser `readonly struct` | se copia en cada capa; con `class` como argumento genérico el JIT comparte código (+~3 ns/capa, 2.5) |
-| Wrapper resuelto de DI como los processors; sin registro → error (como SCLSL013) | mismo modelo que los processors |
-| Wrapper sync en operación async o viceversa → error | no se mezcla sync-over-async en silencio |
+| El middleware debe ser `readonly struct` | se copia en cada capa; con `class` como argumento genérico el JIT comparte código (+~3 ns/capa, 2.5) |
+| Middleware resuelto de DI como los processors; sin registro → error (como SCLSL013) | mismo modelo que los processors |
+| Middleware sync en operación async o viceversa → error | no se mezcla sync-over-async en silencio |
 
 El builder pooled implica que el `ValueTask` devuelto solo puede esperarse una vez (regla general de `ValueTask`; el código generado la cumple).
 
 ### 2.5 Medido
 
-`test/POC/PipelineWrapperPoc`, .NET 10, Release, BenchmarkDotNet `[MemoryDiagnoser]`. Retry de 3 intentos (+ un contador como 2ª capa) alrededor de una llamada `int → int`.
+`test/POC/PipelineMiddlewarePoc`, .NET 10, Release, BenchmarkDotNet `[MemoryDiagnoser]`. Retry de 3 intentos (+ un contador como 2ª capa) alrededor de una llamada `int → int`.
 Síncrono: el transporte termina síncrono (camino rápido de Memory). Suspende: el transporte suspende de verdad (`Task.Yield`).
 
 | Variante | Síncrono: B | Suspende: B | Síncrono: ns |
 |---|---:|---:|---:|
-| Sin wrapper | 0 | 112 | 0,7 |
-| **Forma 2.3: 2 wrappers `class`, struct por capa, pooled** (`Final2LayersClass`) | **0** | **112** | **4,7** |
-| 2 wrappers `class`, struct por capa, sin pooled | 0 | 236-246 | 4,4 |
-| 2 wrappers `struct` + `Chain<>` de librería, pooled | 0 | 112 | 4,7-4,9 |
-| 2 wrappers, interno `class` en `Chain<>` | 0 | 112 | 7,8-8,0 |
+| Sin middleware | 0 | 112 | 0,7 |
+| **Forma 2.3: 2 middlewares `class`, struct por capa, pooled** (`Final2LayersClass`) | **0** | **112** | **4,7** |
+| 2 middlewares `class`, struct por capa, sin pooled | 0 | 236-246 | 4,4 |
+| 2 middlewares `struct` + `Chain<>` de librería, pooled | 0 | 112 | 4,7-4,9 |
+| 2 middlewares, interno `class` en `Chain<>` | 0 | 112 | 7,8-8,0 |
 | Lambda `static` + estado explícito | 0 | 243-255 | 5,2-5,3 |
 | Lambda que captura `this` | 64 | 300-309 | 7,8 |
 | Lambda con closure | 96 | 331-341 | 9,9-10,5 |
@@ -191,28 +191,28 @@ Comparación: el retry manual de `AuthRetryPoc` (lambda + `CreateLinkedTokenSour
 - Exige handlers idempotentes (POC `AuthRetryPoc`: respuesta "perdida" → el handler se ejecuta 2 veces). La respuesta tardía del intento abandonado la descarta `MemClient` (id con generación).
 - Útil sobre todo en UDP; en TCP/QUIC/Pipes el transporte ya retransmite.
 
-## 3. Guard vs wrapper: cuándo usar cada uno
+## 3. Guard vs middleware: cuándo usar cada uno
 
 | Necesidad | Usar |
 |---|---|
 | Autenticar, validar, transformar un parámetro o el retorno | Processor (guard) |
 | Rechazar con `Failed` sin ejecutar | Processor (guard) |
-| Ejecutar 0..N veces la llamada (retry, circuit breaker, caché) | Wrapper |
-| Medir/registrar la llamada entera, incluida la excepción | Wrapper |
+| Ejecutar 0..N veces la llamada (retry, circuit breaker, caché) | Middleware |
+| Medir/registrar la llamada entera, incluida la excepción | Middleware |
 | Necesita el token de la llamada | Ambos (processor tras G1) |
 
 ## 4. Abierto
 
-1. Re-serialización en reintentos del cliente (2.1): serializar antes de los wrappers si el perfil lo justifica.
+1. Re-serialización en reintentos del cliente (2.1): serializar antes de los middlewares si el perfil lo justifica.
 2. Streams (`IEnumerable`/`IAsyncEnumerable`): fuera de alcance. Processors de retorno → SCLSL012 (procesar = desempaquetar y reempaquetar cada elemento). Retry → SCLSL016 y se ignora: el fallo llega a mitad de la enumeración y repetir reenviaría lo ya entregado; reanudar exigiría un checkpoint en el contrato.
-3. Cortocircuito desde un wrapper (p. ej. circuit breaker abierto): lanzar `PipelineRejectedException` → `Failed` en el catch del handler (ya existe). No se añade un canal de estado propio.
-4. G1 y G2 son independientes de los wrappers; G1 merece la pena ya (el token se pierde hoy).
+3. Cortocircuito desde un middleware (p. ej. circuit breaker abierto): lanzar `PipelineRejectedException` → `Failed` en el catch del handler (ya existe). No se añade un canal de estado propio.
+4. G1 y G2 son independientes de los middlewares; G1 merece la pena ya (el token se pierde hoy).
 
 ## 5. Plan de implementación (cada paso con test)
 
 1. G1: token en `ProcessAsync` + test de cancelación de una etapa async en el host y en el cliente.
-2. `ICall`/`IAsyncCall`/`I(Async)WrapperPipeline` + `[(Client|Server)?Wrapper<T>]` en `Pipeline.cs`.
-3. Generador cliente: struct `__Op_Call` + uno por wrapper interior, processors fuera; test de generación (`GeneratorHarness`) y test E2E de retry sobre Memory (fallos inyectados como en `AuthRetryPoc`) que compruebe que los processors de parámetros se ejecutan una vez con 2 intentos.
-4. Generador host: igual dentro del `case`; test E2E de un wrapper de timing.
-5. Diagnósticos (errores): `async` sin builder pooled, struct no `readonly`, wrapper no registrado, wrapper sync en camino async y viceversa.
-6. Benchmark en `LiteSpeedLink.Benchmarks`: llamada Memory con y sin `[ClientWrapper<Retry>]`; criterio: +0 B.
+2. `ICall`/`IAsyncCall`/`I(Async)MiddlewarePipeline` + `[(Client|Server)?Middleware<T>]` en `Pipeline.cs`.
+3. Generador cliente: struct `__Op_Call` + uno por middleware interior, processors fuera; test de generación (`GeneratorHarness`) y test E2E de retry sobre Memory (fallos inyectados como en `AuthRetryPoc`) que compruebe que los processors de parámetros se ejecutan una vez con 2 intentos.
+4. Generador host: igual dentro del `case`; test E2E de un middleware de timing.
+5. Diagnósticos (errores): `async` sin builder pooled, struct no `readonly`, middleware no registrado, middleware sync en camino async y viceversa.
+6. Benchmark en `LiteSpeedLink.Benchmarks`: llamada Memory con y sin `[ClientMiddleware<Retry>]`; criterio: +0 B.

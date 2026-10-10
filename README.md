@@ -148,7 +148,7 @@ public interface IStreams : IServiceUnit
 | `SourceCrafter.LiteSpeedLink.Server` / `Client` | Transport runtimes |
 | `Application.Contracts`, `LiteSpeedLink` | Sample contracts and demo app (all transports) |
 | `LiteSpeedLink.Tests`, `LiteSpeedLink.Benchmarks` | xUnit suite and BenchmarkDotNet |
-| `test/POC` | Proofs of concept (auth + retry, wrappers, stream decoding) |
+| `test/POC` | Proofs of concept (auth + retry, middlewares, stream decoding) |
 
 Design notes and progress live in [PLAN.md](PLAN.md) and [docs/](docs/).
 

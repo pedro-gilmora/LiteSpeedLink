@@ -15,3 +15,5 @@ SCLSL016 | LiteSpeedLink | Warning | Retry ignored on streams
 SCLSL017 | LiteSpeedLink | Warning | Cache ignored
 SCLSL018 | LiteSpeedLink | Info | Cache key falls back to bytes
 SCLSL019 | LiteSpeedLink | Error | Invalid cache key
+SCLSL020 | LiteSpeedLink | Error | Invalid middleware
+SCLSL021 | LiteSpeedLink | Warning | Middleware ignored on streams

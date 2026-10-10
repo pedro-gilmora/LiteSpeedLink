@@ -40,7 +40,7 @@
     <Project Path="test/POC/AuthRetryPoc/AuthRetryPoc.csproj">
       <BuildType Solution="DEBUG_SG|*" Project="Debug" />
     </Project>
-    <Project Path="test/POC/PipelineWrapperPoc/PipelineWrapperPoc.csproj">
+    <Project Path="test/POC/PipelineMiddlewarePoc/PipelineMiddlewarePoc.csproj">
       <BuildType Solution="DEBUG_SG|*" Project="Debug" />
     </Project>
   </Folder>

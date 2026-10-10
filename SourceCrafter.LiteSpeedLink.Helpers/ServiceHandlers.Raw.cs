@@ -226,6 +226,9 @@ public partial class ServiceHandlersGenerator
         {
             if (ReadRetry(method, false) != null || ReadRetry(method, true) != null)
                 contribution.ReportDiagnostic(Diagnostic.Create(RetryOnStream, location, method.Name));
+
+            if (method.GetAttributes().Any(a => IsMiddlewareAttribute(a, false) || IsMiddlewareAttribute(a, true)))
+                contribution.ReportDiagnostic(Diagnostic.Create(MiddlewareOnStream, location, method.Name));
         }
         else if (GetRetry(method, false) is { } c && GetRetry(method, true) is { } s)
             contribution.ReportDiagnostic(Diagnostic.Create(RetryOnBothSides, location, method.Name, c.Attempts * s.Attempts));
@@ -237,8 +240,15 @@ public partial class ServiceHandlersGenerator
     /// llamante cancelo: sin structs ni delegados por operacion; processors y lectores quedan fuera y se ejecutan una vez.
     /// </summary>
     private static void EmitCall(StringBuilder code, (int Attempts, int IntervalMs)? retry, string call, string? target, string? token, bool isAsync,
-        string targetType)
+        string targetType, IReadOnlyList<string>? middlewares = null, IReadOnlyList<(string Expr, string Name)>? captures = null,
+        IReadOnlyList<(string Name, string Type, bool IsOut)>? outs = null)
     {
+        if (middlewares is { Count: > 0 })
+        {
+            EmitMiddlewares(code, middlewares, captures ?? [], outs ?? [], retry, call, target, token, isAsync, targetType);
+            return;
+        }
+
         if (retry is not { } r)
         {
             code.Append(target is null ? null : "var " + target + " = ").Append(call).Append(';');
@@ -263,6 +273,64 @@ public partial class ServiceHandlersGenerator
     }
 
     /// <summary>
+    /// [Client|ServerMiddleware]: la llamada (con su reintento) va en la lambda <c>static</c> mas interna y cada middleware la
+    /// envuelve con otra lambda <c>static</c>: delegados cacheados por el compilador, sin structs por capa. Todas las capas
+    /// comparten un unico estado (middlewares internos + <paramref name="captures"/>); el primero es el mas externo.
+    /// Async: solo la capa interna tiene maquina de estados (pooled); las de paso devuelven el ValueTask del siguiente.
+    /// <paramref name="outs"/> (host): out/ref vuelven en el resultado; out se declara, ref se reasigna.
+    /// </summary>
+    private static void EmitMiddlewares(StringBuilder code, IReadOnlyList<string> mws, IReadOnlyList<(string Expr, string Name)> captures,
+        IReadOnlyList<(string Name, string Type, bool IsOut)> outs, (int Attempts, int IntervalMs)? retry, string call, string? target, string? token,
+        bool isAsync, string targetType)
+    {
+        // Sync con token: la lambda no lo recibe, viaja en el estado.
+        if (!isAsync && token != null) captures = [.. captures, (token, token)];
+
+        List<string> state = [.. mws.Skip(1), .. captures.Select(c => c.Expr)];
+        string Item(int i) => state.Count == 1 ? "__s" : "__s.Item" + (i + 1);
+
+        List<(string Name, string Type)> results = [.. target is null ? [] : new[] { (target!, targetType) }, .. outs.Select(o => (o.Name, o.Type))];
+        string resType = results.Count switch { 0 => "bool", 1 => results[0].Type, _ => "(" + string.Join(", ", results.Select(r => r.Type)) + ")" };
+
+        string lambdaHead = isAsync ? "static global::System.Threading.Tasks.ValueTask<" + resType + "> (__s, " + token + ") => " : "static " + resType + " (__s) => ";
+        string Next = isAsync ? ".InvokeAsync(" : ".Invoke(";
+        string Tail = isAsync ? ", " + token + ")" : ")";
+
+        var inner = new StringBuilder();
+
+        if (captures.Count > 0)
+            inner.Append(state.Count == 1 ? "var " + captures[0].Name + " = __s;"
+                : "var (" + string.Join(", ", state.Select((_, i) => i < mws.Count - 1 ? "_" : captures[i - (mws.Count - 1)].Name)) + ") = __s;")
+                .Append("\n        ");
+
+        foreach (var o in outs.Where(o => o.IsOut)) inner.Append(o.Type).Append(' ').Append(o.Name).Append(";\n        ");
+
+        EmitCall(inner, retry, outs.Count > 0 ? call.Replace("out var ", "out ") : call, target, token, isAsync, targetType);
+        string result = results.Count switch
+        {
+            0 => "true",
+            1 => results[0].Name,
+            _ => "(" + string.Join(", ", results.Select(r => r.Name)) + ")"
+        };
+        // Async con maquina de estados (pooled) solo si la capa interna espera; si no, devuelve el ValueTask ya completado.
+        bool awaits = isAsync && inner.ToString().Contains("await ");
+        inner.Append("\n\n        return ").Append(isAsync && !awaits ? "new global::System.Threading.Tasks.ValueTask<" + resType + ">(" + result + ")" : result).Append(';');
+
+        var lambda = new StringBuilder(awaits ? PooledBuilder(true) + "static async global::System.Threading.Tasks.ValueTask<" + resType + "> (__s, " + token + ") =>" : lambdaHead.TrimEnd())
+            .Append("\n        {\n        ").Append(inner).Append("\n        }").ToString();
+
+        for (int layer = mws.Count - 1; layer > 0; layer--)
+            lambda = lambdaHead + Item(layer - 1) + Next + "__s, " + lambda + Tail;
+
+        string invoke = (isAsync ? "await " : null) + mws[0] + Next + (state.Count switch { 0 => "(byte)0", 1 => state[0], _ => "(" + string.Join(", ", state) + ")" })
+            + ", " + lambda + Tail + (isAsync ? ".ConfigureAwait(false)" : null);
+
+        var assigned = results.Select((r, i) => (i == 0 && target != null) || outs[i - (target is null ? 0 : 1)].IsOut ? "var " + r.Name : r.Name).ToList();
+
+        code.Append(assigned.Count switch { 0 => null, 1 => assigned[0] + " = ", _ => "(" + string.Join(", ", assigned) + ") = " }).Append(invoke).Append(';');
+    }
+
+    /// <summary>
     /// Caja async reutilizada en los metodos ValueTask generados (cada llamada creaba la suya). El ValueTask resultante se
     /// consume una sola vez, que es la regla de ValueTask; los contratos Task no pueden usarlo.
     /// </summary>
@@ -277,8 +345,9 @@ public partial class ServiceHandlersGenerator
     /// resultado siguen por la API tipada.
     /// </summary>
     private static bool TryGenerateRawClientMethod(StringBuilder code, StringBuilder helpers, INamedTypeSymbol iFace, IMethodSymbol method, string conn, ref int rawIndex,
-        Compilation compilation, PartialContribution contribution)
+        ServiceProviderInfo container, PartialContribution contribution)
     {
+        var compilation = container.Compilation;
         bool isTask = method.ReturnType.TryGetAsyncType(out var retType, out var hasRet, out var isValueTask);
         hasRet = isTask ? hasRet : !method.ReturnsVoid;
 
@@ -321,6 +390,8 @@ public partial class ServiceHandlersGenerator
 
         if (request.Count > 0) EmitWriter(helpers, reqName, [.. request.Select(p => p.Type)], "", direct: !materialize);
         string reader = RawReaderArg(readsResponse ? resName : null), resType = TupleOf(responseTypes);
+        var mws = GetMiddlewares(method, false, container, contribution);
+        List<(string, string)> captures = [("__connection", "__connection"), .. reqNames.Select(r => (r, r)), .. materialize ? [("__cacheKey", "__cacheKey")] : Enumerable.Empty<(string, string)>()];
 
         // Async: los out/ref viajan en la tupla de retorno (misma forma que la API tipada).
         string name = method.Name.EndsWith("Async") ? method.Name : method.Name + "Async";
@@ -337,7 +408,8 @@ public partial class ServiceHandlersGenerator
         string token = tokenName ?? "@__token";
         code.Append(")\n    {\n        ");
         int cacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, token, true) : 0;
-        EmitCall(code, retry, $"await {conn}.GetRawAsync({serviceId}, {reqArgs}, {reader}, {token}).ConfigureAwait(false)", readsResponse ? "__res" : null, token, true, resType);
+        EmitCall(code, retry, $"await {conn}.GetRawAsync({serviceId}, {reqArgs}, {reader}, {token}).ConfigureAwait(false)", readsResponse ? "__res" : null, token, true, resType,
+            MiddlewareChain(mws, true, "__provider.", method, contribution), captures);
 
         // Async: la respuesta (valor o tupla retorno + out/ref) ya tiene la forma del retorno.
         if (cacheKey != null) CloseClientCache(code, cacheStart, "__res");
@@ -355,7 +427,8 @@ public partial class ServiceHandlersGenerator
         {
             code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append("\n    {\n        ");
             int syncCacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, tokenName, false) : 0;
-            EmitCall(code, retry, $"{conn}.GetRaw({serviceId}, {reqArgs}, {reader}" + (tokenName is null ? "" : $", {tokenName}") + ")", readsResponse ? "__res" : null, tokenName, false, resType);
+            EmitCall(code, retry, $"{conn}.GetRaw({serviceId}, {reqArgs}, {reader}" + (tokenName is null ? "" : $", {tokenName}") + ")", readsResponse ? "__res" : null, tokenName, false, resType,
+                MiddlewareChain(mws, false, "__provider.", method, contribution), captures);
 
             if (cacheKey != null) CloseClientCache(code, syncCacheStart, "__res");
             else if (response.Count == 0) code.Append(hasRet ? "\n\n        return __res;" : null);
