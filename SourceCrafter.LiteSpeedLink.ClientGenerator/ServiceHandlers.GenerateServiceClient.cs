@@ -31,7 +31,7 @@ public partial class ServiceHandlersGenerator
         var compilation = container.Compilation;
         var serviceClient = container.ContainerType;
 
-        StringBuilder clientCode = new();
+        StringBuilder clientCode = new("#nullable enable annotations\n");
 
         string nsStr = "";
 
@@ -91,8 +91,8 @@ public partial class ").Append(typeShortName).Append(@"
     private readonly global::System.Threading.Lock __servicesLock = new();");
 
         string header = nsStr.Length > 0
-            ? "using SourceCrafter.LiteSpeedLink.Client;\n\nnamespace " + nsStr + ";\n"
-            : "using SourceCrafter.LiteSpeedLink.Client;\n";
+            ? "#nullable enable annotations\nusing SourceCrafter.LiteSpeedLink.Client;\n\nnamespace " + nsStr + ";\n"
+            : "#nullable enable annotations\nusing SourceCrafter.LiteSpeedLink.Client;\n";
 
         string
             typeName = serviceClient.GlobalNamespaced,
@@ -517,6 +517,10 @@ public partial class ").Append(typeShortName).Append(@"
             clientCode.Append(@"
     }
 }");
+
+            // Solo los pipelines de cliente usan __provider; sin ellos el parametro sobra (CS9113).
+            if (clientCode.ToString(membersStart, clientCode.Length - membersStart).IndexOf("__provider", StringComparison.Ordinal) < 0)
+                clientCode.Replace(", " + typeShortName + " __provider)", ")").Replace("new(__connection, this)", "new(__connection)");
 
             contribution.AddSource(hintName + "." + propName + ".client", clientCode.ToString());
         }

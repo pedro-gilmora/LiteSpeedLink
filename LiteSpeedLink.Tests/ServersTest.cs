@@ -105,7 +105,7 @@ public partial class ServersTest(ITestOutputHelper output)
     [Fact]
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
-    public void TestMemoryStreamFailureDoesNotHang()
+    public async Task TestMemoryStreamFailureDoesNotHang()
     {
         string MmfName = $"Test-{Guid.CreateVersion7()}";
         using (Server.StartMemoryServer(MmfName, HandleMemoryRequest, () => { }))
@@ -114,7 +114,7 @@ public partial class ServersTest(ITestOutputHelper output)
 
             var run = Task.Run(() => connection.Enumerate<int>(99).ToList());
 
-            Task.WaitAny(run, Task.Delay(5000)).Should().Be(0);
+            (await Task.WhenAny(run, Task.Delay(5000))).Should().BeSameAs(run);
             run.Exception!.GetBaseException().Should().BeOfType<NotImplementedException>();
         }
     }

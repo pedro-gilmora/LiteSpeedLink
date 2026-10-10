@@ -8,6 +8,7 @@ namespace LiteSpeedLink.Benchmarks;
 /// <c>--alloc</c>: muestrea por tipo (GCAllocationTick, ~100 KB por muestra) las asignaciones de todo el proceso
 /// mientras se drena un stream grande de Memory. Sirve para saber QUE asigna, no cuanto.
 /// </summary>
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 internal sealed class AllocProbe : EventListener
 {
     private readonly ConcurrentDictionary<string, long> _bytes = new();

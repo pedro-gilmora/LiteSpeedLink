@@ -24,11 +24,11 @@ public static class Program
             return SemanticCheck.Run();
         }
 
-        if (args.Contains("--alloc"))
+        if (args.Contains("--alloc") && OperatingSystem.IsWindows())
         {
             var t = args.FirstOrDefault(a => a is "tcp" or "uds" or "memory" or "quicstream");
-            if (args.Contains("cmp") && OperatingSystem.IsWindows()) return AllocProbe.RunComparisonAsync().GetAwaiter().GetResult();
-            return (args.Contains("quic") && OperatingSystem.IsWindows() ? AllocProbe.RunQuicAsync()
+            if (args.Contains("cmp")) return AllocProbe.RunComparisonAsync().GetAwaiter().GetResult();
+            return (args.Contains("quic") ? AllocProbe.RunQuicAsync()
                 : t is null ? AllocProbe.RunStreamAsync()
                 : AllocProbe.RunAsync(t == "quicstream" ? "quic" : t)).GetAwaiter().GetResult();
         }

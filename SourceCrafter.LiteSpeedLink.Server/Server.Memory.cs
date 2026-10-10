@@ -65,6 +65,7 @@ public static partial class Server
     }
 
     /// <summary>Un solo <see cref="MemHost"/> multicliente: cada cliente se libera con su propio Close, sin lobby ni Bye.</summary>
+    [SupportedOSPlatform("windows")]
     private sealed class MemoryHost(MemHost host, Action? onFinalize) : IDisposable
     {
         public void Dispose()

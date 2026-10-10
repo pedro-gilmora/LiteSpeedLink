@@ -223,6 +223,7 @@ internal sealed class MultiplexedChannel
         : IAsyncEnumerable<TOut?>, IAsyncEnumerator<TOut?>
     {
         private bool _opened, _done, _held;
+        private readonly CancellationToken _origin = token;
         private CancellationToken _token = token;
         private CancellationTokenSource? _linked;
         private StreamSink? _sink;
@@ -235,7 +236,7 @@ internal sealed class MultiplexedChannel
         public IAsyncEnumerator<TOut?> GetAsyncEnumerator(CancellationToken enumeratorToken = default)
         {
             // Re-enumeracion: peticion nueva, como un iterador async.
-            if (_opened) return new StreamEnumerable<TIn, TOut>(channel, op, payload, hasPayload, token).GetAsyncEnumerator(enumeratorToken);
+            if (_opened) return new StreamEnumerable<TIn, TOut>(channel, op, payload, hasPayload, _origin).GetAsyncEnumerator(enumeratorToken);
 
             _opened = true;
 

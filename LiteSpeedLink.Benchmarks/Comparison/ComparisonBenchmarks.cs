@@ -229,9 +229,9 @@ public class ComparisonBenchmarks
     private static int ParseSse(System.Buffers.ReadOnlySequence<byte> buffer, int n, out SequencePosition consumed)
     {
         var sr = new System.Buffers.SequenceReader<byte>(buffer);
+        Span<byte> tmp = stackalloc byte[16];
         while (sr.TryReadTo(out System.Buffers.ReadOnlySequence<byte> ev, "\n\n"u8))
         {
-            Span<byte> tmp = stackalloc byte[16];
             var line = ev.Slice(6);
             System.Buffers.BuffersExtensions.CopyTo(line, tmp);
             System.Buffers.Text.Utf8Parser.TryParse(tmp[..(int)line.Length], out int v, out _);

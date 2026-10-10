@@ -33,7 +33,7 @@ public partial class ServiceHandlersGenerator
             isMsLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILogger") != null,
             isMsConsoleLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ConsoleLoggerExtensions") != null;
 
-        StringBuilder hostCode = new();
+        StringBuilder hostCode = new("#nullable enable annotations\n");
 
 
         if (isMsLoggerInstalled)

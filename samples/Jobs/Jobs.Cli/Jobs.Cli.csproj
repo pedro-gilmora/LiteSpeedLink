@@ -14,4 +14,9 @@
 		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.ClientGenerator\SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 	</ItemGroup>
 
+	<!-- Local resuelve Memory al compilar en Windows: ese binario es solo-Windows y el analizador de plataforma lo sabe. -->
+	<ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+		<AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute"><_Parameter1>windows</_Parameter1></AssemblyAttribute>
+	</ItemGroup>
+
 </Project>

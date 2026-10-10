@@ -95,10 +95,9 @@ internal sealed class StreamBatchPoc : IAsyncDisposable
 
                 while (buffer.Length >= 4)
                 {
-                    Span<byte> head = stackalloc byte[4];
-                    buffer.Slice(0, 4).CopyTo(head);
+                    var head = new SequenceReader<byte>(buffer);
+                    head.TryReadLittleEndian(out int count);
                     buffer = buffer.Slice(4);
-                    int count = BinaryPrimitives.ReadInt32LittleEndian(head);
 
                     for (int i = 0; i < count;)
                     {

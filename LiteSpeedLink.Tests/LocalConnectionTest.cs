@@ -67,6 +67,8 @@ public class LocalConnectionTest
         var client = r.Sources.Single(s => s.Key.Contains("Client.client")).Value;
         host.Should().Contain(hostApi).And.Contain("global::System.IAsyncDisposable Start(");
         client.Should().Contain(clientApi);
+        // Sin pipelines de cliente la unidad no recibe el proveedor (CS9113).
+        r.Sources.Single(s => s.Key.Contains("Client.Contract.client")).Value.Should().StartWith("#nullable enable annotations").And.NotContain("__provider");
         // La interfaz la aporta el proveedor de DI, que libera __connection.
         r.Sources.Single(s => s.Key.EndsWith("Client.g.cs") && !s.Key.Contains(".client")).Value
             .Should().Contain(": global::System.IAsyncDisposable").And.Contain("__connection.DisposeAsync()");

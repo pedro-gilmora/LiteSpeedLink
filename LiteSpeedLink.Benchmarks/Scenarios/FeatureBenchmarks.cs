@@ -32,6 +32,7 @@ namespace LiteSpeedLink.Benchmarks.Scenarios;
 [MemoryDiagnoser]
 [CategoriesColumn]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public class FeatureBenchmarks
 {
     private const int Burst = 16;
