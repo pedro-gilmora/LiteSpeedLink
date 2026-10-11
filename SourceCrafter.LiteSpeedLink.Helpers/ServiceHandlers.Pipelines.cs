@@ -271,9 +271,8 @@ public partial class ServiceHandlersGenerator
     /// </summary>
     // ponytail: patron con el tipo declarado: un TOut referencia null con Success tambien se rechaza.
     // Nullable<T> no admite patron de tipo (CS8116): ahi se usa 'var'.
-    private static string ApplyStages(string expr, List<Stage> stages, bool canAwait, string provider, string indent, string reject, string? last = null)
+    private static void ApplyStages(CodeBuilder code, string expr, List<Stage> stages, bool canAwait, string provider, string reject, string? last = null)
     {
-        var code = new StringBuilder();
         var root = expr;
 
         for (var n = 0; n < stages.Count; n++)
@@ -293,12 +292,11 @@ public partial class ServiceHandlersGenerator
                 ? "var"
                 : s.Out.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
-            code.Append("if (").Append(call).Append(" is not (global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success, ").Append(type).Append(' ').Append(expr).Append("))\n")
-                .Append(indent).Append("    ").Append(string.Format(reject, s.Pipeline.Name))
-                .Append('\n').Append(n == stages.Count - 1 ? "\n" : null).Append(indent);
+            code.Line("if (").Append(call).Append(" is not (global::SourceCrafter.LiteSpeedLink.ResponseStatus.Success, ").Append(type).Append(' ').Append(expr).Append("))")
+                .Indent().Line(string.Format(reject, s.Pipeline.Name)).Unindent();
         }
 
-        return code.ToString();
+        if (stages.Count > 0) code.Blank();
     }
 
     /// <summary>
@@ -307,7 +305,7 @@ public partial class ServiceHandlersGenerator
     /// explicita lanzando <c>InvalidOperationException</c>.
     /// </summary>
     private static bool TryGenerateProcessedClientMethod(
-        StringBuilder code, StringBuilder helpers, ServiceProviderInfo container, INamedTypeSymbol iFace, IMethodSymbol method, PartialContribution contribution, string conn, ref int rawIndex)
+        CodeBuilder code, CodeBuilder helpers, ServiceProviderInfo container, INamedTypeSymbol iFace, IMethodSymbol method, PartialContribution contribution, string conn, ref int rawIndex)
     {
         if (!HasProcessors(method.GetReturnTypeAttributes()) && !method.Parameters.Any(p => HasProcessors(p.GetAttributes())))
             return false;
@@ -395,7 +393,7 @@ public partial class ServiceHandlersGenerator
             reqArgs = inputs.Count > 0 ? DirectRequest("__Req" + n, reqNames) : NoRequest;
         bool materialize = false;
 
-        if (reads) EmitReader(helpers, resName, responseTypes, "");
+        if (reads) EmitReader(helpers, resName, responseTypes);
 
         static string Wire((IParameterSymbol Param, ITypeSymbol ClientType, ITypeSymbol Wire, List<Stage> Stages) i) => i.Stages.Count > 0 ? StageVar(i.Param.Name, i.Stages.Count - 1) : i.Param.Name;
 
@@ -413,19 +411,19 @@ public partial class ServiceHandlersGenerator
             if (reuse) (reqArgs, materialize) = ("__cacheKey, " + BytesWriter, true);
         }
 
-        if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], "", direct: !materialize);
+        if (inputs.Count > 0) EmitWriter(helpers, "__Req" + n, [.. inputs.Select(i => i.Wire)], direct: !materialize);
 
         var mws = GetMiddlewares(method, false, container, contribution);
         List<(string, string)> captures = [("__connection", "__connection"), .. reqNames.Select(r => (r, r)), .. materialize ? [("__cacheKey", "__cacheKey")] : Enumerable.Empty<(string, string)>()];
 
         void Body(bool isAsync, string? token)
         {
-            code.Append("\n        ");
+            code.Open();
 
-            int cacheStart = cacheKey != null ? OpenClientCache(code, n, cacheKey, token, isAsync) : 0;
+            if (cacheKey != null) OpenClientCache(code, n, cacheKey, token, isAsync);
 
             foreach (var i in inputs.Where(i => i.Stages.Count > 0))
-                code.Append(ApplyStages(i.Param.Name, i.Stages, isAsync, "__provider.", "        ", ClientReject));
+                ApplyStages(code, i.Param.Name, i.Stages, isAsync, "__provider.", ClientReject);
 
             // Solo la llamada al transporte se reintenta: los processors de parametros ya corrieron una vez.
             EmitCall(code, retry, (isAsync ? "await " : null) + conn + ".GetRaw" + (isAsync ? "Async" : null) + "(" + serviceId + ", " + reqArgs + ", " + RawReaderArg(reads ? resName : null)
@@ -434,42 +432,42 @@ public partial class ServiceHandlersGenerator
 
             // sync: out/ref van directo a los parametros del llamador; async: a locales que vuelven en la tupla.
             if (reads)
-            {
-                code.Append('\n');
-                Unpack(code, [.. hasRet ? ["var __r"] : Enumerable.Empty<string>(), .. outs.Select((p, k) => isAsync ? "var __o" + k : p.Name)]);
-            }
+                Unpack(code.Blank(), [.. hasRet ? ["var __r"] : Enumerable.Empty<string>(), .. outs.Select((p, k) => isAsync ? "var __o" + k : p.Name)]);
 
             List<string> rets = [];
 
             if (hasRet)
             {
-                code.Append("\n\n        ").Append(ApplyStages("__r", clientPost, isAsync, "__provider.", "        ", ClientReject));
+                ApplyStages(code.Blank(), "__r", clientPost, isAsync, "__provider.", ClientReject);
                 rets.Add(clientPost.Count > 0 ? StageVar("__r", clientPost.Count - 1) : "__r");
             }
 
             if (isAsync) rets.AddRange(outs.Select((_, k) => "__o" + k));
 
-            if (cacheKey != null) CloseClientCache(code, cacheStart, rets[0]);
+            if (cacheKey != null) CloseClientCache(code, rets[0]);
             else if (rets.Count > 0)
-                code.Append(hasRet ? null : "\n\n        ").Append("return ").Append(rets.Count == 1 ? rets[0] : "(" + string.Join(", ", rets) + ")").Append(';');
+                code.Blank().Line("return ").Append(rets.Count == 1 ? rets[0] : "(" + string.Join(", ", rets) + ")").Append(';');
 
-            code.Append("\n    }");
+            code.Close();
         }
 
-        code.Append("\n\n    ").Append(PooledBuilder(asyncType is not null)).Append("public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
+        // Los miembros del cliente van un nivel dentro de su clase.
+        code.Indent().Append("\n\n").Append(PooledBuilder(asyncType is not null)).Line("public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
             .Append(' ').Append(asyncName).Append('(').Append(clientParams);
 
         if (tokenName is null)
             code.Append(clientParams.Length > 0 ? ", " : null).Append(cancelTokenFullTypeName).Append(" @__token = default");
 
-        code.Append(")\n    {");
+        code.Append(')');
         Body(true, tokenName ?? "@__token");
 
         if (!isTask)
         {
-            code.Append("\n\n    public ").Append(finalType ?? "void").Append(' ').Append(name).Append('(').Append(ClientParams(true)).Append(")\n    {");
+            code.Append("\n\npublic ").Append(finalType ?? "void").Append(' ').Append(name).Append('(').Append(ClientParams(true)).Append(')');
             Body(false, tokenName);
         }
+
+        code.Unindent();
 
         var mismatch = $"{iFace.Name}.{name} server contract ({string.Join(", ", inputs.Select(i => i.Param.Type.ToDisplayString()))}) -> {(hasRet ? retType.ToDisplayString() : "void")} differs from the client pipelines ({string.Join(", ", inputs.Select(i => i.ClientType.ToDisplayString()))}) -> {(hasRet ? finalRet.ToDisplayString() : "void")}; call {(isTask ? asyncName : name)}({string.Join(", ", inputs.Select(i => i.ClientType.ToDisplayString()))}) instead.";
 

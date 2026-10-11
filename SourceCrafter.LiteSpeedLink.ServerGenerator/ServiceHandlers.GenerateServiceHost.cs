@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SourceCrafter.DependencyInjection.Generation;
@@ -33,24 +33,21 @@ public partial class ServiceHandlersGenerator
             isMsLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILogger") != null,
             isMsConsoleLoggerInstalled = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ConsoleLoggerExtensions") != null;
 
-        StringBuilder hostCode = new("#nullable enable annotations\n");
+        // La disposability efectiva del contenedor la calcula el generador de DI: aqui ya no
+        // se deduce servicio a servicio.
+        var containerDisposability = container.ContainerDisposability;
 
+        var hostCode = new CodeBuilder().Append("#nullable enable annotations");
 
         if (isMsLoggerInstalled)
-        {
-            hostCode.Append(@"using global::Microsoft.Extensions.Logging;
-
-");
-        }
+            hostCode.Line("using global::Microsoft.Extensions.Logging;");
 
         string nsStr = "";
 
         string? typeName = serviceHost.TypeNameFormat;
-        var (certParam, certArg) = connectionType is 2 or 3
-                ? ($@",
-        global::System.Security.Cryptography.X509Certificates.X509Certificate2{(connectionType == 2 ? "?" : null)} certificate{(connectionType == 1 ? " = default" : null)}", @", 
-            certificate")
-                : (null, null);
+        string? certParam = connectionType is 2 or 3
+            ? ",\nglobal::System.Security.Cryptography.X509Certificates.X509Certificate2" + (connectionType == 2 ? "?" : null) + " certificate"
+            : null;
 
         var (context, startMethod, returnType, disposableInterface, asyncKeyword, awaitKeyword, asyncSuffix) = connectionType switch
         {
@@ -96,112 +93,90 @@ public partial class ServiceHandlersGenerator
         var handlerType = context.Replace("Context", "Handler");
 
         if (serviceHost.ContainingNamespace is { IsGlobalNamespace: false } ns)
-        {
-            hostCode.Append("namespace ").Append(nsStr = ns.ToDisplayString()).AppendLine(@";");
-        }
+            hostCode.Blank().Line("namespace ").Append(nsStr = ns.ToDisplayString()).Append(';');
 
-        hostCode.Append(PlatformAttributes(connectionType)).Append(@"
-public partial class ").Append(typeName).Append(@"
-{");
+        hostCode.Blank().Append(PlatformAttributes(connectionType).TrimStart()).Line("public partial class ").Append(typeName).Open();
+
         if (isMsLoggerInstalled)
         {
-            hostCode.Append(@"
-    static readonly global::Microsoft.Extensions.Logging.ILoggerFactory ___loggerFactory = global::Microsoft.Extensions.Logging.LoggerFactory.Create(static builder =>
-    {
-        builder
-            .AddFilter(""Microsoft"", global::Microsoft.Extensions.Logging.LogLevel.Warning)
-            .AddFilter(""System"", global::Microsoft.Extensions.Logging.LogLevel.Warning)
-            .AddFilter(""").Append(serviceHost.GlobalNamespaced.Replace("global::", "")).Append(@""", global::Microsoft.Extensions.Logging.LogLevel.Debug)");
+            hostCode.Line("static readonly global::Microsoft.Extensions.Logging.ILoggerFactory ___loggerFactory = global::Microsoft.Extensions.Logging.LoggerFactory.Create(static builder =>")
+                .Open()
+                .Line("builder")
+                .Indent()
+                .Line(".AddFilter(\"Microsoft\", global::Microsoft.Extensions.Logging.LogLevel.Warning)")
+                .Line(".AddFilter(\"System\", global::Microsoft.Extensions.Logging.LogLevel.Warning)")
+                .Line(".AddFilter(\"").Append(serviceHost.GlobalNamespaced.Replace("global::", "")).Append("\", global::Microsoft.Extensions.Logging.LogLevel.Debug)");
 
-            if (isMsConsoleLoggerInstalled)
-            {
-                hostCode.Append(@"
-            .AddConsole()");
-            }
+            if (isMsConsoleLoggerInstalled) hostCode.Line(".AddConsole()");
 
-            hostCode.Append(@";
-    });
-");
+            hostCode.Append(';').Unindent().Close(");");
         }
 
-		// Local: misma firma (nombre) y misma superficie (IAsyncDisposable) en cualquier destino.
-		if (isLocal) returnType = "global::System.IAsyncDisposable";
+        // Local: misma firma (nombre) y misma superficie (IAsyncDisposable) en cualquier destino.
+        if (isLocal) returnType = "global::System.IAsyncDisposable";
 
-		var (endpointParam, endpointArg) = isLocal ? ("string name", "name") : connectionType is 0 ? ("string memoryRpcName", "memoryRpcName") : ("int port", "port");
+        var (endpointParam, endpointArg) = isLocal ? ("string name", "name") : connectionType is 0 ? ("string memoryRpcName", "memoryRpcName") : ("int port", "port");
 
-		hostCode.Append(@"
-	public static ").Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(
-		").Append(endpointParam).Append(certParam).Append(@",
-		global::System.Threading.CancellationToken cancelToken = default) => __Start").Append(asyncSuffix).Append(@"(new ").Append(typeName).Append(@"(), ").Append(endpointArg).Append(certArg).Append(@", cancelToken);
-");
+        hostCode.Blank().Line("public static ").Append(returnType).Append(" Start").Append(asyncSuffix).Append('(')
+            .Indent().Line(endpointParam).Append(certParam).Append(',')
+            .Line("global::System.Threading.CancellationToken cancelToken = default) => __Start").Append(asyncSuffix).Append("(new ").Append(typeName).Append("(), ").Append(endpointArg).Append(certParam is null ? null : ", certificate").Append(", cancelToken);")
+            .Unindent();
 
-		// Endpoint omitido: el de [JsonSetting<RemoteOptions|LocalOptions>] del contenedor (MsConfiguration).
-		if (EndpointSettings(container, connectionType is 1 or 2 or 3) is { } settings)
-			hostCode.Append(@"
-	public static ").Append(returnType).Append(@" Start").Append(asyncSuffix).Append(@"(").Append(certParam is null ? null : connectionType is 2
-				? "global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = default, "
-				: "global::System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, ").Append(@"global::System.Threading.CancellationToken cancelToken = default)
-	{
-		var provider = new ").Append(typeName).Append(@"();
-		return __Start").Append(asyncSuffix).Append(@"(provider, provider.").Append(settings).Append(connectionType is 1 or 2 or 3 ? ".Port" : ".Name").Append(certArg).Append(@", cancelToken);
-	}
-");
+        // Endpoint omitido: el de [JsonSetting<RemoteOptions|LocalOptions>] del contenedor (MsConfiguration).
+        if (EndpointSettings(container, connectionType is 1 or 2 or 3) is { } settings)
+            hostCode.Blank().Line("public static ").Append(returnType).Append(" Start").Append(asyncSuffix).Append('(').Append(certParam is null ? null : connectionType is 2
+                    ? "global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = default, "
+                    : "global::System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, ").Append("global::System.Threading.CancellationToken cancelToken = default)")
+                .Open()
+                .Line("var provider = new ").Append(typeName).Append("();")
+                .Line("return __Start").Append(asyncSuffix).Append("(provider, provider.").Append(settings).Append(connectionType is 1 or 2 or 3 ? ".Port" : ".Name").Append(certParam is null ? null : ", certificate").Append(", cancelToken);")
+                .Close();
 
-		hostCode.Append(@"
-	private static ").Append(asyncKeyword).Append(returnType).Append(@" __Start").Append(asyncSuffix).Append(@"(
-		").Append(typeName).Append(@" provider,
-		").Append(endpointParam).Append(certParam).Append(@",
-		global::System.Threading.CancellationToken cancelToken)
-	{
-		return ").Append(awaitKeyword).Append(isLocal ? "new global::SourceCrafter.LiteSpeedLink.LocalHost(" : null).Append(@"global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append(@"(
-			").Append(isLocal ? (connectionType is 0 ? "name" : LocalUdsPath) : endpointArg).Append(@", 
-			").Append(connectionType > 1 ? "new __Handler(provider)" : "provider.HandleRequestsAsync").Append(@", 
-			");
+        hostCode.Blank().Line("private static ").Append(asyncKeyword).Append(returnType).Append(" __Start").Append(asyncSuffix).Append('(')
+            .Indent().Line(typeName).Append(" provider,")
+            .Line(endpointParam).Append(certParam).Append(',')
+            .Line("global::System.Threading.CancellationToken cancelToken)").Unindent()
+            .Open()
+            .Line("return ").Append(awaitKeyword).Append(isLocal ? "new global::SourceCrafter.LiteSpeedLink.LocalHost(" : null).Append("global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append('(')
+            .Indent().Line(isLocal ? (connectionType is 0 ? "name" : LocalUdsPath) : endpointArg).Append(',')
+            .Line(connectionType > 1 ? "new __Handler(provider)" : "provider.HandleRequestsAsync").Append(',')
+            .Line(containerDisposability switch
+            {
+                PartialDisposability.AsyncDisposable => "() => provider.DisposeAsync().GetAwaiter().GetResult()",
+                PartialDisposability.Disposable => "() => provider.Dispose()",
+                _ => "() => {}"
+            }).Append(',');
 
-		var onFinalizePoint = hostCode.Length;
+        if (certParam != null) hostCode.Line("certificate,");
 
-		if (certArg != null)
-			hostCode.Append(certArg);
+        hostCode.Line("cancelToken)").Append(isLocal ? ")" : null).Append(awaitKeyword != null ? ".ConfigureAwait(false)" : null).Append(';')
+            .Unindent().Close();
 
-		hostCode.Append(@", 
-			cancelToken)").Append(isLocal ? ")" : null).Append(awaitKeyword != null ? ".ConfigureAwait(false)" : null).Append(@";
-	}
-");
+        if (connectionType > 1)
+            hostCode.Blank().Line("private readonly struct __Handler(").Append(typeName).Append(" provider) : global::SourceCrafter.LiteSpeedLink.IRequestHandler")
+                .Open()
+                .Line("public global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleAsync(long id, global::SourceCrafter.LiteSpeedLink.RequestContext ctx, global::System.Threading.CancellationToken token)")
+                .Indent().Line("=> provider.HandleRequestsAsync(id, ctx, token);").Unindent()
+                .Close();
 
-		if (connectionType > 1)
-			hostCode.Append(@"
-	private readonly struct __Handler(").Append(typeName).Append(@" provider) : global::SourceCrafter.LiteSpeedLink.IRequestHandler
-	{
-		public global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleAsync(long id, global::SourceCrafter.LiteSpeedLink.RequestContext ctx, global::System.Threading.CancellationToken token)
-			=> provider.HandleRequestsAsync(id, ctx, token);
-	}
-");
+        // Async (pooled) en cuanto algo del camino de la peticion espera; Memory sin nada que esperar pasa a sync al final.
+        var pooled = PooledBuilder(true);
 
-		// Async (pooled) en cuanto algo del camino de la peticion espera; Memory sin nada que esperar pasa a sync al final.
-		hostCode.Append(@"    	
-	");
+        hostCode.Blank().Line(pooled);
 
-		int signatureStart = hostCode.Length;
+        int signatureStart = hostCode.Length - pooled.Length;
 
-		hostCode.Append(PooledBuilder(true)).Append("private async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
+        hostCode.Line("private async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
 
-		int signatureEnd = hostCode.Length;
+        int signatureEnd = hostCode.Length;
 
-        hostCode.Append(@" HandleRequestsAsync(
-        long id,
-        ").Append(context).Append(@" __context,
-        global::System.Threading.CancellationToken __token)
-    {
-        try
-        {");
-
-        var switchStart = hostCode.Length;
-
-        hostCode.Append(@"
-        switch(id)
-        {");
-
-        var casesStart = hostCode.Length;
+        hostCode.Append(" HandleRequestsAsync(")
+            .Indent().Line("long id,")
+            .Line(context).Append(" __context,")
+            .Line("global::System.Threading.CancellationToken __token)").Unindent()
+            .Open()
+            .Open("try")
+            .Open("switch(id)");
 
         int providerTypeId = SymbolEqualityComparer.Default.GetHashCode(serviceHost);
 
@@ -212,15 +187,9 @@ public partial class ").Append(typeName).Append(@"
             justTypeMeta = nsMeta.Length > 0 ? typeMeta.Replace(nsMeta, "") : typeMeta,
             hintName = nsStr.Length > 0 ? nsStr + "." + justTypeMeta : justTypeMeta;
 
-        //string? serviceCommaSep = default;
-
-        // La disposability efectiva del contenedor la calcula el generador de DI: aqui ya no
-        // se deduce servicio a servicio.
-        var containerDisposability = container.ContainerDisposability;
-
         var services = IndexServices(container);
 
-        StringBuilder policyTypes = new();
+        CodeBuilder policyTypes = new();
         HashSet<string> emittedPolicies = [];
 
         foreach (var dependency in container.Services)
@@ -278,10 +247,7 @@ public partial class ").Append(typeName).Append(@"
     
                 //    ServiceId: ").Append(serviceId).Append(@""");
 
-                hostCode.Append(@"
-        case ").Append(serviceId).Append(@": //Id for: [").Append(globalizedMethodName).Append(@"]
-        {
-            ");
+                hostCode.Blank().Line("case ").Append(serviceId).Append(": //Id for: [").Append(globalizedMethodName).Append(']').Open();
 
                 var provider = "";
                 // Con middlewares la llamada va en una lambda static: los miembros del host se leen de __host (capturado en el estado).
@@ -300,9 +266,7 @@ public partial class ").Append(typeName).Append(@"
 
                     if (dependency.IsCached)
                     {
-                        hostCode.Append(@"var ___scope = CreateScope();
-
-            ");
+                        hostCode.Append("var ___scope = CreateScope();").Blank();
                         provider = "___scope.";
                     }
                 }
@@ -425,7 +389,7 @@ public partial class ").Append(typeName).Append(@"
                             {
                                 ValidateChain(compilation, null, serverPre, param.Type, methodName + "(" + param.Name + ") server request", contribution, methodLocation);
 
-                                applyPreStages += () => hostCode.Append(ApplyStages(wireName, serverPre, true, provider, "            ", HostReject(connectionType > 0), param.Name));
+                                applyPreStages += () => ApplyStages(hostCode, wireName, serverPre, true, provider, HostReject(connectionType > 0), param.Name);
                             }
 
                             //Register params to deconstruct request from deserialization
@@ -513,26 +477,23 @@ public partial class ").Append(typeName).Append(@"
                         : "global::SourceCrafter.LiteSpeedLink.ServerCacheManager";
 
                     // Por metodo, creado al primer uso (thread-safe): sin coste de memoria para operaciones nunca llamadas.
-                    policyTypes.Append(@"
-
-    private ").Append(manager).Append(" __cache").Append(opSuffix).Append(@";
-
-    private ").Append(manager).Append(" __Cache").Append(opSuffix).Append(@" =>
-        global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache").Append(opSuffix)
-                        .Append(", static () => new ").Append(manager).Append('(').Append(sc.DurationMs).Append(", ").Append(sc.Capacity).Append("));");
+                    policyTypes.Append("\n\nprivate ").Append(manager).Append(" __cache").Append(opSuffix).Append(';')
+                        .Blank().Line("private ").Append(manager).Append(" __Cache").Append(opSuffix).Append(" =>")
+                        .Indent().Line("global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache").Append(opSuffix)
+                        .Append(", static () => new ").Append(manager).Append('(').Append(sc.DurationMs).Append(", ").Append(sc.Capacity).Append("));").Unindent();
 
                     EmitWriter(policyTypes, "__Res" + opSuffix,
-                        [serverPost.Count > 0 ? serverPost[serverPost.Count - 1].Out : isAwaitable ? awaitedType! : method.ReturnType], "    ");
+                        [serverPost.Count > 0 ? serverPost[serverPost.Count - 1].Out : isAwaitable ? awaitedType! : method.ReturnType]);
                 }
 
                 // Con param processors (p.ej. autorizacion) la consulta va despues: un acierto no puede saltarselos.
-                int cacheStart = serverCache != null && applyPreStages == null && !typedKey ? OpenServerCache(hostCode, opSuffix, "__context.Body") : 0;
+                if (serverCache != null && applyPreStages == null && !typedKey) OpenServerCache(hostCode, opSuffix, "__context.Body");
 
                 if (requestParamsCount > 0 && requestTypes != null && requestDeconstruct != null)
                 {
                     var readerName = "__Req" + opSuffix;
 
-                    EmitReader(policyTypes, readerName, requestWireTypes, "    ");
+                    EmitReader(policyTypes, readerName, requestWireTypes);
 
                     hostCode.Append("var ");
 
@@ -542,14 +503,12 @@ public partial class ").Append(typeName).Append(@"
 
                     if (requestParamsCount > 1) hostCode.Append(')');
 
-                    hostCode.Append(" = ").Append(readerName).Append(@"(__context.Body.Span);
-
-            ");
+                    hostCode.Append(" = ").Append(readerName).Append("(__context.Body.Span);").Blank();
                 }
 
                 applyPreStages?.Invoke();
 
-                if (serverCache != null && (applyPreStages != null || typedKey)) cacheStart = OpenServerCache(hostCode, opSuffix, typedKey ? serverKey!.Expr : "__context.Body");
+                if (serverCache != null && (applyPreStages != null || typedKey)) OpenServerCache(hostCode, opSuffix, typedKey ? serverKey!.Expr : "__context.Body");
 
                 var serverRetry = GetRetry(method, true);
                 ReportRetryDiagnostics(method, contribution);
@@ -575,10 +534,9 @@ public partial class ").Append(typeName).Append(@"
 
                 hostCode.Append(isAwaitable ? ").ConfigureAwait(false)" : ")");
 
-                var call = hostCode.ToString(callStart, hostCode.Length - callStart);
+                // Se escribe en hostCode solo para capturar el texto: la sangria de inicio de linea no es parte de la llamada.
+                var call = hostCode.ToString(callStart, hostCode.Length - callStart).TrimStart();
                 hostCode.Length = callStart;
-
-                int emitStart = hostCode.Length;
 
                 if (chain is { Count: > 0 })
                 {
@@ -600,7 +558,7 @@ public partial class ").Append(typeName).Append(@"
                 {
                     // Los out se declaran fuera del bucle: un 'out var' dentro del try no seria visible al responder.
                     foreach (var p in method.Parameters.Where(p => p.RefKind == RefKind.Out))
-                        hostCode.Append(p.Type.GlobalNamespaced).Append(' ').Append(p.Name).Append(";\n        ");
+                        hostCode.Append(p.Type.GlobalNamespaced).Append(' ').Append(p.Name).Append(';').Line();
 
                     call = call.Replace("out var ", "out ");
                 }
@@ -609,19 +567,15 @@ public partial class ").Append(typeName).Append(@"
                 EmitCall(hostCode, serverRetry, call, returnsType ? "___result" : null, "__token", true,
                     (isAwaitable ? awaitedType! : method.ReturnType).GlobalNamespaced);
                 }
-                // EmitCall sangra para el cuerpo de un metodo de cliente (8); aqui es el de un case (12).
-                hostCode.Replace("\n        ", "\n            ", emitStart, hostCode.Length - emitStart);
 
-                hostCode.Append(@"
-
-            ");
+                hostCode.Blank();
 
                 if (returnsType && serverPost.Count > 0)
-                    hostCode.Append(ApplyStages("___result", serverPost, true, provider, "            ", HostReject(connectionType > 0)));
+                    ApplyStages(hostCode, "___result", serverPost, true, provider, HostReject(connectionType > 0));
 
                 if (serverCache != null)
                 {
-                    CloseServerCache(hostCode, cacheStart, opSuffix, serverPost.Count > 0 ? StageVar("___result", serverPost.Count - 1) : "___result", connectionType > 0);
+                    CloseServerCache(hostCode, opSuffix, serverPost.Count > 0 ? StageVar("___result", serverPost.Count - 1) : "___result", connectionType > 0);
                     continue;
                 }
 
@@ -646,13 +600,11 @@ public partial class ").Append(typeName).Append(@"
                         string policy = batch <= 0 ? "global::SourceCrafter.LiteSpeedLink.Unbatched" : "__Policy_B" + batch + "_D" + Math.Max(delay, 0);
 
                         if (batch > 0 && emittedPolicies.Add(policy))
-                            policyTypes.Append(@"
-    private readonly struct ").Append(policy).Append(@" : global::SourceCrafter.LiteSpeedLink.IStreamPolicy
-    {
-        public static int Items => ").Append(batch).Append(@";
-        public static long MaxDelayTicks => ").Append(delay <= 0 ? "long.MaxValue" : "global::System.Diagnostics.Stopwatch.Frequency * " + delay + " / 1000").Append(@";
-    }
-");
+                            policyTypes.Append("\n\nprivate readonly struct ").Append(policy).Append(" : global::SourceCrafter.LiteSpeedLink.IStreamPolicy")
+                                .Open()
+                                .Line("public static int Items => ").Append(batch).Append(';')
+                                .Line("public static long MaxDelayTicks => ").Append(delay <= 0 ? "long.MaxValue" : "global::System.Diagnostics.Stopwatch.Frequency * " + delay + " / 1000").Append(';')
+                                .Close();
 
                         hostCode.Length -= 1;
                         hostCode.Append('<').Append(((INamedTypeSymbol)method.ReturnType).TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)).Append(", ").Append(policy).Append(">(");
@@ -680,35 +632,20 @@ public partial class ").Append(typeName).Append(@"
                     hostCode.Append("false");
                 }
 
-                hostCode.Append(awaitReply ? ").ConfigureAwait(false);" : ");").Append(@"
-        }
-");
+                hostCode.Append(awaitReply ? ").ConfigureAwait(false);" : ");").Close();
             }
         }
 
-        hostCode.Append(@"
-        default:
-            return ").Append(connectionType is 0 ? "__context.NotFound()" : "await __context.NotFoundAsync().ConfigureAwait(false)").Append(@";");
+        hostCode.Blank().Line("default:")
+            .Indent().Line("return ").Append(connectionType is 0 ? "__context.NotFound()" : "await __context.NotFoundAsync().ConfigureAwait(false)").Append(';').Unindent()
+            .Close()
+            .Close()
+            .Line("catch (global::System.OperationCanceledException) when (__token.IsCancellationRequested)")
+            .Open().Line("throw;").Close()
+            .Line("catch (global::System.Exception __ex)")
+            .Open().Line("return ").Append(connectionType is 0 ? "__context.Fail(__ex)" : "await __context.FailAsync(__ex).ConfigureAwait(false)").Append(';').Close()
+            .Close();
 
-        hostCode.Replace("\n        ", "\n            ", casesStart, hostCode.Length - casesStart);
-
-        hostCode.Append(@"
-        }");
-
-        hostCode.Replace("\n        ", "\n            ", switchStart, hostCode.Length - switchStart);
-
-        hostCode.Append(@"
-        }
-        catch (global::System.OperationCanceledException) when (__token.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (global::System.Exception __ex)
-        {
-            return ").Append(connectionType is 0 ? "__context.Fail(__ex)" : "await __context.FailAsync(__ex).ConfigureAwait(false)").Append(@";
-        }
-    }
-}");
         // Memory responde sin I/O: si ningun metodo, etapa, dependencia, retry, cache ni stream espera, el handler es sync
         // (mismo cuerpo: sus return ya son ResponseStatus). Basta un await para que todo el handler sea async.
         // ponytail: se detecta por el texto emitido ("await "); los nombres que se emiten (metodos/pipelines) no lo contienen.
@@ -717,14 +654,7 @@ public partial class ").Append(typeName).Append(@"
         if (syncMemory)
             hostCode.Remove(signatureStart, signatureEnd - signatureStart).Insert(signatureStart, "private " + handlerReturnType);
 
-        hostCode.Insert(hostCode.Length - 1, policyTypes.ToString());
-
-        hostCode.Insert(onFinalizePoint, containerDisposability switch
-        {
-            PartialDisposability.AsyncDisposable => "() => provider.DisposeAsync().GetAwaiter().GetResult()",
-            PartialDisposability.Disposable => "() => provider.Dispose()",
-            _ => "() => {}"
-        });
+        hostCode.Append(policyTypes).Close();
 
         if (syncMemory)
             hostCode.Replace("Server.StartMemoryServerAsync(", "Server.StartMemoryServer(");
@@ -736,51 +666,33 @@ public partial class ").Append(typeName).Append(@"
     /// [ServerCache]: acierto -> bytes guardados; fallo -> single-flight (un solo handler por peticion identica en curso,
     /// el resto espera sus bytes). Ningun lock abarca el await del handler.
     /// </summary>
-    /// Devuelve el inicio del cuerpo del try, que <see cref="CloseServerCache"/> indenta.
-    private static int OpenServerCache(StringBuilder code, string suffix, string key)
+    /// Deja abierto el cuerpo del try (dos bloques), que <see cref="CloseServerCache"/> cierra junto con el case.
+    private static void OpenServerCache(CodeBuilder code, string suffix, string key)
     {
-        code.Append(@"var __cache = __Cache").Append(suffix).Append(@";
-            var __cacheKey = ").Append(key).Append(@";
-
-            if (!__cache.TryGet(__cacheKey, out var __cached))
-            {
-                if (!__cache.TryLead(__cacheKey, out var __flight))
-                    __cached = await __flight.Task.WaitAsync(__token).ConfigureAwait(false);
-                else try
-                {");
-
-        int start = code.Length;
-        code.Append(@"
-            ");
-        return start;
+        code.Line("var __cache = __Cache").Append(suffix).Append(';')
+            .Line("var __cacheKey = ").Append(key).Append(';')
+            .Blank()
+            .Open("if (!__cache.TryGet(__cacheKey, out var __cached))")
+            .Line("if (!__cache.TryLead(__cacheKey, out var __flight))")
+            .Indent().Line("__cached = await __flight.Task.WaitAsync(__token).ConfigureAwait(false);").Unindent()
+            .Open("else try");
     }
 
     /// <summary>Guarda los bytes tras los return processors; fallo o rechazo no se cachean (Fail es idempotente).</summary>
-    private static void CloseServerCache(StringBuilder code, int start, string suffix, string result, bool canAwait)
+    private static void CloseServerCache(CodeBuilder code, string suffix, string result, bool canAwait)
     {
-        while (char.IsWhiteSpace(code[code.Length - 1])) code.Length--;
-
-        code.Append(@"
-
-            __cached = __Res").Append(suffix).Append('(').Append(result).Append(@");
-            __cache.Complete(__cacheKey, __flight, __cached);")
-            .Replace("\n            ", "\n                    ", start, code.Length - start)
-            .Append(@"
-                }
-                catch (global::System.Exception __cacheError)
-                {
-                    __cache.Fail(__cacheKey, __flight, __cacheError);
-                    throw;
-                }
-                finally
-                {
-                    __cache.Fail(__cacheKey, __flight, null);
-                }
-            }
-
-            return ").Append(canAwait ? "await __context.ReturnRawAsync(__cached).ConfigureAwait(false);" : "__context.ReturnRaw(__cached);").Append(@"
-        }
-");
+        code.TrimEnd().Blank()
+            .Line("__cached = __Res").Append(suffix).Append('(').Append(result).Append(");")
+            .Line("__cache.Complete(__cacheKey, __flight, __cached);")
+            .Close()
+            .Line("catch (global::System.Exception __cacheError)")
+            .Open().Line("__cache.Fail(__cacheKey, __flight, __cacheError);").Line("throw;").Close()
+            .Line("finally")
+            .Open().Line("__cache.Fail(__cacheKey, __flight, null);").Close()
+            .Close()
+            .Blank()
+            .Line("return ").Append(canAwait ? "await __context.ReturnRawAsync(__cached).ConfigureAwait(false);" : "__context.ReturnRaw(__cached);")
+            .Close();
     }
 
     /// <summary>
@@ -792,7 +704,7 @@ public partial class ").Append(typeName).Append(@"
     /// transient sincrono es una propiedad, y escribirle <c>()</c> no compilaba.
     /// </para>
     /// </summary>
-    private static void AppendResolution(StringBuilder code, ServiceInfo service, string provider = "")
+    private static void AppendResolution(CodeBuilder code, ServiceInfo service, string provider = "")
     {
         code.Append(provider).Append(service.MemberName);
 

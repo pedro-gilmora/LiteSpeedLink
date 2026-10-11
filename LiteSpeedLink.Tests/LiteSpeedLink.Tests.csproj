@@ -33,6 +33,7 @@
 		<ProjectReference Include="..\LiteSpeedLink.Abstractions\LiteSpeedLink.Abstractions.csproj" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Client\SourceCrafter.LiteSpeedLink.Client.csproj" />
 		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
+		<Compile Include="..\external\SourceCrafter.DependencyInjection\Solution\Utils\CodeBuilder.cs" Link="Shared\CodeBuilder.cs" />
 	</ItemGroup>
 
 	<!--

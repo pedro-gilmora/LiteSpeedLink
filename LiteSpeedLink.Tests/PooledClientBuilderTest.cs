@@ -33,11 +33,13 @@ public class PooledClientBuilderTest
 
         r.Errors.Should().BeEmpty();
         var client = System.Text.RegularExpressions.Regex.Replace(r.Sources.Values.Single(s => s.Contains("PlainTaskAsync(")), @"\s+", " ");
-        const string pooled = "PoolingAsyncValueTaskMethodBuilder<>))] public async global::System.Threading.Tasks.ValueTask<int> ";
+        // Solo GetRawAsync: su ValueTask sale tal cual, sin async ni caja.
+        const string direct = "public global::System.Threading.Tasks.ValueTask<int> ";
 
         client.Should()
-            .Contain(pooled + "PlainAsync(")
-            .And.Contain(pooled + "PlainValueAsync(")
+            .Contain(direct + "PlainAsync(int n, global::System.Threading.CancellationToken @__token = default) { return __connection.GetRawAsync(")
+            .And.Contain(direct + "PlainValueAsync(int n, global::System.Threading.CancellationToken @__token = default) { return __connection.GetRawAsync(")
+            .And.NotContain("PoolingAsyncValueTaskMethodBuilder<>")
             .And.Contain("PoolingAsyncValueTaskMethodBuilder))] public async global::System.Threading.Tasks.ValueTask FireAsync(")
             .And.Contain("public async global::System.Threading.Tasks.Task<int> PlainTaskAsync(")
             .And.NotContain("PoolingAsyncValueTaskMethodBuilder<>))] public async global::System.Threading.Tasks.Task<int> PlainTaskAsync(");

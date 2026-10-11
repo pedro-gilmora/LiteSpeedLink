@@ -32,6 +32,9 @@
 		<Compile Include="$(DISolutionDir)Interop\PartialGenerationContracts.cs">
 			<Link>Interop\%(Filename)%(Extension)</Link>
 		</Compile>
+		<Compile Include="$(DISolutionDir)Utils\CodeBuilder.cs">
+			<Link>Utils\%(Filename)%(Extension)</Link>
+		</Compile>
 		<Compile Include="$(DISolutionDir)Metadata\*.cs">
 			<Link>Metadata\%(RecursiveDir)%(Filename)%(Extension)</Link>
 		</Compile>

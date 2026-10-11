@@ -31,7 +31,7 @@ public partial class ServiceHandlersGenerator
         var compilation = container.Compilation;
         var serviceClient = container.ContainerType;
 
-        StringBuilder clientCode = new("#nullable enable annotations\n");
+        var clientCode = new CodeBuilder().Append("#nullable enable annotations\n");
 
         string nsStr = "";
 
@@ -119,7 +119,7 @@ public partial class ").Append(typeShortName).Append(@"
             var implName = propName + "Client";
             var fieldName = "__" + char.ToLowerInvariant(propName[0]) + propName.Substring(1);
 
-            clientCode = new StringBuilder(header).Append(@"
+            clientCode = new CodeBuilder().Append(header).Append(@"
 public partial class ").Append(typeShortName).Append(@"
 {
     private ").Append(implName).Append("? ").Append(fieldName).Append(@";
@@ -139,8 +139,10 @@ public partial class ").Append(typeShortName).Append(@"
     public sealed class ").Append(implName).Append("(global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append("Connection __connection, ").Append(typeShortName).Append(" __provider) : ").Append(fullTypeName).Append(@"
     {");
 
+            // Los miembros se emiten a 4 espacios; la profundidad los anida un nivel dentro de la clase cliente.
+            clientCode.Indent();
             var membersStart = clientCode.Length;
-            var rawHelpers = new StringBuilder();
+            var rawHelpers = new CodeBuilder();
             int rawIndex = 0;
 
             foreach (var member in iFace.GetMembers())
@@ -317,7 +319,7 @@ public partial class ").Append(typeShortName).Append(@"
                         clientCode.Append('>');
                     }
 
-                    clientCode.AddSpace().Append(methodName);
+                    clientCode.Append(' ').Append(methodName);
 
                     if (!methodName.EndsWith("Async"))
                     {
@@ -508,11 +510,8 @@ public partial class ").Append(typeShortName).Append(@"
                 }
             }
 
-            clientCode.Append(rawHelpers.Replace("\n", "\n    "));
-
-            // Los miembros se emiten a 4 espacios; se anidan un nivel dentro de la clase cliente.
-            clientCode.Replace("\n", "\n    ", membersStart, clientCode.Length - membersStart);
-            clientCode.Replace("\n    \n", "\n\n", membersStart, clientCode.Length - membersStart).Replace("\n    \r\n", "\n\r\n", membersStart, clientCode.Length - membersStart);
+            // Los helpers se emiten a columna 0: dos niveles dentro (clase raiz + clase cliente).
+            clientCode.Indent().Append(rawHelpers).Unindent().Unindent();
 
             clientCode.Append(@"
     }
@@ -529,7 +528,7 @@ public partial class ").Append(typeShortName).Append(@"
     /// Stream (IEnumerable/IAsyncEnumerable): el contrato se implementa con Enumerate/EnumerateAsync de la
     /// conexion; los sync ganan una sobrecarga *Async con token. Peticion = parametro o tupla (misma forma que el host).
     /// </summary>
-    private static bool TryGenerateStreamClientMethod(StringBuilder code, IMethodSymbol method, int connectionType)
+    private static bool TryGenerateStreamClientMethod(CodeBuilder code, IMethodSymbol method, int connectionType)
     {
         if (!IsStream(method.ReturnType) || method.Parameters.Any(p => p.RefKind is not RefKind.None))
             return false;

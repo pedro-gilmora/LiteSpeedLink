@@ -9,10 +9,10 @@ namespace SourceCrafter.LiteSpeedLink;
 // UpperAsync es async -> IAsyncMiddleware.InvokeAsync; Audit (el primero) es la capa externa, Throttle la interna.
 public interface ICalc : IServiceUnit
 {
-    [ClientMiddleware<Audit>, ServerMiddleware<Audit>]
+    [ServerMiddleware<Audit>]
     int Add(int a, int b);
 
-    [ClientMiddleware<Audit>, ClientMiddleware<Throttle>, ServerMiddleware<Throttle>]
+    [ClientMiddleware<Throttle>]
     Task<string> UpperAsync(string text);
 }
 

@@ -9,6 +9,18 @@
 - OBLIGATORIO: todo comando de duración desconocida (build, pack, restore, tests, benchmarks, ejecutar apps/POC) se lanza como PowerShell job y se espera con carrera fin-del-proceso vs timeout, retornando en cuanto termine: `$j = Start-Job { ... }; Wait-Job $j -Timeout 600 | Out-Null; Receive-Job $j; Remove-Job $j -Force`. Prohibido usar esperas fijas estimadas (sleep/waitMs) para comandos que pueden acabar antes o después.
 - Nunca encadenar diferentes operaciones en un solo comando de terminal (p.ej., escribir un archivo y compilar); ejecutar cada operación como un comando separado.
 
+## Edición de archivos (replace_string_in_file / multi_replace_string_in_file)
+- Cómo funciona realmente: la herramienta reemplaza las LÍNEAS COMPLETAS que toca `oldString` por `newString`; no sustituye solo el fragmento. Si `oldString` empieza o termina a mitad de línea, se pierde lo que había antes/después en esas líneas (verificado: `one two` en `line B: one two three` deja `ONE TWO`).
+- Por tanto, `oldString` y `newString` siempre son líneas completas, con su sangría exacta, y `newString` debe contener cada línea tal como debe quedar entera.
+- La escritura en disco es diferida: tras editar, el archivo puede seguir con el contenido anterior unos segundos (get_file ya muestra el cambio, el terminal/compilador aún no).
+- Pasos obligatorios por edición:
+  1. Leer con get_file el rango exacto (con números de línea) antes de editar.
+  2. Editar copiando líneas completas en `oldString`; agrupar ediciones del mismo archivo en una llamada.
+  3. Verificar en disco desde el terminal (`Select-String -Path <archivo> -Pattern '<texto nuevo>'`) antes de compilar; si no aparece aún, repetir la verificación, no reeditar.
+  4. Compilar como paso separado.
+- Si una edición deja el archivo roto o la herramienta falla dos veces seguidas: reemplazar el bloque por rango de líneas desde PowerShell (`[IO.File]::ReadAllLines` + `WriteAllLines`, conservando CRLF) en lugar de seguir insistiendo con la herramienta.
+- No usar parches git como sustituto: los archivos son CRLF con `core.autocrlf=true` y los parches creados con herramientas pierden espacios/tabs; fallan sin aviso en PowerShell.
+
 ## Release Flow
 - Deploy DI first, then LSL. Only commits touching C# (.cs) files trigger the package publish.
 - Commit the C# changes in the DI generator repo (external/SourceCrafter.DependencyInjection) to dev; wait for the GitHub Action, then for the package to appear on NuGet.

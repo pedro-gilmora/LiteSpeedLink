@@ -276,7 +276,7 @@ public partial class ServiceHandlersGenerator
     /// [ClientCache] por instancia de cliente, creado al primer uso. Devuelve la expresion de la clave; con alternativa por
     /// bytes y sin processors es la propia peticion (<paramref name="request"/>), que en un fallo se envia tal cual.
     /// </summary>
-    private static string DeclareClientCache(StringBuilder helpers, int n, (int DurationMs, int Capacity) cache, KeyPlan key, string valueType, string? request)
+    private static string DeclareClientCache(CodeBuilder helpers, int n, (int DurationMs, int Capacity) cache, KeyPlan key, string valueType, string? request)
     {
         var manager = "global::SourceCrafter.LiteSpeedLink.CacheManager<" + key.Type + ", " + valueType + ">";
 
@@ -289,35 +289,37 @@ public partial class ServiceHandlersGenerator
 
         if (request != null) return request;
 
-        EmitWriter(helpers, "__Key" + n, [.. key.Leaves.Select(l => l.Type)], "");
+        EmitWriter(helpers, "__Key" + n, [.. key.Leaves.Select(l => l.Type)]);
         return "__Key" + n + "(" + string.Join(", ", key.Leaves.Select(l => l.Expr)) + ")";
     }
 
     /// <summary>
     /// Acierto -> resultado; en curso -> espera al lider (su cancelacion solo cancela la espera); si no, lidera.
-    /// Devuelve el inicio del cuerpo del try, que <see cref="CloseClientCache"/> indenta.
+    /// Deja abierto el cuerpo del try (un nivel mas), que <see cref="CloseClientCache"/> cierra.
     /// </summary>
-    private static int OpenClientCache(StringBuilder code, int n, string key, string? token, bool isAsync)
+    private static void OpenClientCache(CodeBuilder code, int n, string key, string? token, bool isAsync)
     {
-        code.Append("var __cache = __Cache").Append(n).Append(";\n        var __cacheKey = ").Append(key)
-            .Append(";\n\n        if (__cache.TryGet(__cacheKey, out var __cached)) return __cached;\n\n        if (!__cache.TryLead(__cacheKey, out var __flight))\n            return ")
-            .Append(isAsync ? "await __flight.Task.WaitAsync(" + token + ").ConfigureAwait(false)"
+        code.Line("var __cache = __Cache").Append(n).Append(';')
+            .Line("var __cacheKey = ").Append(key).Append(';').Blank()
+            .Line("if (__cache.TryGet(__cacheKey, out var __cached)) return __cached;").Blank()
+            .Line("if (!__cache.TryLead(__cacheKey, out var __flight))").Indent()
+            .Line("return ").Append(isAsync ? "await __flight.Task.WaitAsync(" + token + ").ConfigureAwait(false)"
                 : token is null ? "__flight.Task.GetAwaiter().GetResult()"
                 : "__flight.Task.WaitAsync(" + token + ").GetAwaiter().GetResult()")
-            .Append(";\n\n        try\n        {");
-
-        int start = code.Length;
-        code.Append("\n        ");
-        return start;
+            .Append(';').Unindent().Blank()
+            .Open("try");
     }
 
     /// <summary>Publica el resultado final; excepcion, rechazo o cancelacion no se cachean y llegan a los que esperaban.</summary>
-    private static void CloseClientCache(StringBuilder code, int start, string value)
+    private static void CloseClientCache(CodeBuilder code, string value)
     {
-        while (char.IsWhiteSpace(code[code.Length - 1])) code.Length--;
-
-        code.Append("\n\n        __cache.Complete(__cacheKey, __flight, ").Append(value).Append(");\n        return ").Append(value).Append(';')
-            .Replace("\n        ", "\n            ", start, code.Length - start)
-            .Append("\n        }\n        catch (global::System.Exception __cacheError)\n        {\n            __cache.Fail(__cacheKey, __flight, __cacheError);\n            throw;\n        }");
+        code.TrimEnd().Blank()
+            .Line("__cache.Complete(__cacheKey, __flight, ").Append(value).Append(");")
+            .Line("return ").Append(value).Append(';')
+            .Close()
+            .Open("catch (global::System.Exception __cacheError)")
+            .Line("__cache.Fail(__cacheKey, __flight, __cacheError);")
+            .Line("throw;")
+            .Close();
     }
 }
