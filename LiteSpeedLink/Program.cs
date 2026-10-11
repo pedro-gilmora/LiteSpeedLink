@@ -32,6 +32,27 @@ using (CalcService.Start("mw-sample"))
     Console.WriteLine($"[Middleware] = {await calc.UpperAsync("hola")}");
 }
 
+// Combinado: client cache + server retry + server middleware + processor async de peticion en una misma operacion.
+using (QuoteService.Start("complex-sample"))
+{
+    using QuoteServiceClient quoteClient = new("complex-sample");
+    var quotes = quoteClient.Quotes;
+    static string Check(bool ok) => ok ? "ok" : "MISMATCH";
+
+    Quotes.DownstreamTimeouts = 2;
+    var first = await quotes.QuoteAsync("tok-acme", 7);
+    Console.WriteLine($"[Complex] 2 timeouts aguas abajo -> {first}: {Check(first == "acme:630.00" && Quotes.Attempts == 3 && Timing.Calls == 1 && ResolveCustomer.Calls == 1)} (3 intentos, 1 middleware, 1 processor)");
+
+    var cached = await quotes.QuoteAsync("tok-acme", 7);
+    Console.WriteLine($"[Complex] acierto de client cache -> {cached}: {Check(cached == first && Quotes.Attempts == 3 && Timing.Calls == 1 && ResolveCustomer.Calls == 1)} (sin viaje)");
+
+    try { await quotes.QuoteAsync("forged", 7); Console.WriteLine("[Complex] token falso: MISMATCH"); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("ResolveCustomer"))
+    {
+        Console.WriteLine($"[Complex] token falso -> rechazo en el processor: {Check(Quotes.Attempts == 3 && Timing.Calls == 1)} (sin middleware ni handler)");
+    }
+}
+
 // Red: mismo contrato; los miembros sync son sync-over-async.
 using (UdpTextService.Start(5101))
 {
