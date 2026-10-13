@@ -31,15 +31,9 @@ public class StreamPolicyTypeTest
     }
 
     [Theory]
-    [InlineData(0, 0)] [InlineData(0, 3)]
-    [InlineData(1, 0)] [InlineData(1, 3)]
-    [InlineData(2, 0)] [InlineData(2, 3)]
-    [InlineData(3, 0)] [InlineData(3, 3)]
-    [InlineData(4, 0)] [InlineData(4, 3)]
-    [InlineData(5, 0)] [InlineData(5, 3)]
-    [InlineData(6, 0)] [InlineData(6, 3)]
-    [InlineData(7, 0)] [InlineData(7, 3)]
-    public async Task EveryShapeDeliversInOrder(long op, int serverBatch)
+    [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)]
+    [InlineData(4)] [InlineData(5)] [InlineData(6)] [InlineData(7)]
+    public async Task EveryShapeDeliversInOrder(long op)
     {
         using var cts = new CancellationTokenSource(5000);
         var server = Server.StartTcpServer(0, (op, ctx, _) =>
@@ -56,7 +50,7 @@ public class StreamPolicyTypeTest
                 6 => ctx.EnumerateAsync<int, Batched16>(Range(n)),
                 _ => ctx.EnumerateAsync<int, Timed16>(Range(n)),
             };
-        }, () => { }, streamBatch: serverBatch);
+        }, () => { });
         try
         {
             await using var client = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)server.LocalEndpoint).Port));

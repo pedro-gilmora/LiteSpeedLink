@@ -48,7 +48,8 @@ public class MemoryStreamHostTest
             .And.Contain("return __context.Yield(___result);")
             .And.Contain("StartMemoryServerAsync(")
             .And.Contain("PoolingAsyncValueTaskMethodBuilder<>")
-            .And.Contain("private async global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleRequestsAsync(")
+            .And.Contain("private async global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> __Live_")
+            .And.Contain("private global::SourceCrafter.LiteSpeedLink.ResponseStatus __Range_")
             .And.NotContain("__context.Return(___result)")
             .And.NotContain(".GetAwaiter().GetResult();\n");
     }
@@ -95,7 +96,11 @@ public class MemoryStreamHostTest
         var host = r.Sources.Single(s => s.Key.Contains(".host")).Value;
 
         if (isAsync)
-            host.Should().Contain("StartMemoryServerAsync(").And.Contain("private async global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleRequestsAsync(");
+            host.Should().Contain("StartMemoryServerAsync(")
+                .And.Contain("private async global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> __Echo_")
+                .And.Contain("private global::SourceCrafter.LiteSpeedLink.ResponseStatus __Plain_")
+                .And.Contain("=> new(__Plain_")
+                .And.Contain("private global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleRequestsAsync(long id, ");
         else
             host.Should().Contain("StartMemoryServer(").And.NotContain("StartMemoryServerAsync(")
                 .And.Contain("private global::SourceCrafter.LiteSpeedLink.ResponseStatus HandleRequestsAsync(")

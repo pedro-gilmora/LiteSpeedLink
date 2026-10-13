@@ -452,7 +452,7 @@ public partial class ServiceHandlersGenerator
         }
 
         // Los miembros del cliente van un nivel dentro de su clase.
-        code.Indent().Append("\n\n").Append(PooledBuilder(asyncType is not null)).Line("public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
+        code.Indent().PrependLine(2, PooledBuilder(asyncType is not null)).Line("public async global::System.Threading.Tasks.ValueTask").Append(asyncType is null ? null : "<" + asyncType + ">")
             .Append(' ').Append(asyncName).Append('(').Append(clientParams);
 
         if (tokenName is null)
@@ -463,7 +463,7 @@ public partial class ServiceHandlersGenerator
 
         if (!isTask)
         {
-            code.Append("\n\npublic ").Append(finalType ?? "void").Append(' ').Append(name).Append('(').Append(ClientParams(true)).Append(')');
+            code.PrependLine(2, "public ").Append(finalType ?? "void").Append(' ').Append(name).Append('(').Append(ClientParams(true)).Append(')');
             Body(false, tokenName);
         }
 

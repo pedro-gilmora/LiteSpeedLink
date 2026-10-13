@@ -59,7 +59,7 @@ public class QuicOverheadBenchmarks
 
         _lsl = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert, unaryStreams: 0);
         _lslPool = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert, unaryStreams: 4);
-        await RawStream(); await RawPipes(); await Lsl(); await LslUnary(); await LslUnaryPooled();
+        await RawStream(); await RawPipes(); await Lsl(); await LslPooled(); await LslUnary(); await LslUnaryPooled();
         _reused = await _raw.OpenOutboundStreamAsync(QuicStreamType.Bidirectional);
         await RawReused();
     }
@@ -88,33 +88,29 @@ public class QuicOverheadBenchmarks
     {
         try
         {
-            while (true)
-            {
-                var c = await l.AcceptConnectionAsync();
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        while (true)
-                        {
-                            var s = await c.AcceptInboundStreamAsync();
-                            _ = Task.Run(async () =>
-                            {
-                                await using (s)
-                                {
-                                    var b = new byte[16];
-                                    int n;
-                                    while ((n = await s.ReadAsync(b)) > 0) await s.WriteAsync(b.AsMemory(0, n));
-                                    s.CompleteWrites();
-                                }
-                            });
-                        }
-                    }
-                    catch { }
-                });
-            }
+            while (true) _ = AcceptStreams(await l.AcceptConnectionAsync());
         }
         catch { }
+    }
+
+    private static async Task AcceptStreams(System.Net.Quic.QuicConnection c)
+    {
+        try
+        {
+            while (true) _ = Echo(await c.AcceptInboundStreamAsync());
+        }
+        catch { }
+    }
+
+    private static async Task Echo(QuicStream s)
+    {
+        await using (s)
+        {
+            var b = new byte[16];
+            int n;
+            while ((n = await s.ReadAsync(b)) > 0) await s.WriteAsync(b.AsMemory(0, n));
+            s.CompleteWrites();
+        }
     }
 
     [GlobalCleanup]
@@ -159,6 +155,15 @@ public class QuicOverheadBenchmarks
     {
         int n = 0;
         await foreach (var _ in _lsl.EnumerateAsync<int, int>(0, 1)) n++;
+        return n == 1 ? n : throw new InvalidOperationException($"{n}");
+    }
+
+    /// <summary>RPC LiteSpeedLink de 1 item por el pool de streams multiplexados (por defecto).</summary>
+    [Benchmark]
+    public async Task<int> LslPooled()
+    {
+        int n = 0;
+        await foreach (var _ in _lslPool.EnumerateAsync<int, int>(0, 1)) n++;
         return n == 1 ? n : throw new InvalidOperationException($"{n}");
     }
 }

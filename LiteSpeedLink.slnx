@@ -5,6 +5,7 @@
     <BuildType Name="Release" />
   </Configurations>
   <Folder Name="/Generals/">
+    <File Path="docs/PerformanceMemoryEnhancements.md" />
     <File Path="PLAN.md" />
     <Folder Name="/docs/" />
   </Folder>

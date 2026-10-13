@@ -74,7 +74,7 @@ public static partial class Server
             {
                 await handlers(op, ctx, token).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && !ctx.IsCompleted)
+            catch (Exception ex) when ((ex is not OperationCanceledException || !token.IsCancellationRequested) && !ctx.IsCompleted)
             {
                 try { await ctx.FailAsync(ex).ConfigureAwait(false); } catch { }
             }

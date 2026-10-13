@@ -9,12 +9,21 @@ namespace SourceCrafter.LiteSpeedLink;
 //   host:    [ServerProcessor<ResolveCustomer>] (async, una vez) -> [ServerMiddleware<Timing>] (una vez)
 //            -> [ServerRetry(3)] (solo el handler, ante TimeoutException) -> handler.
 // El cable lleva el token (string); el handler recibe el Customer ya resuelto.
+// Reserve (void) y ReleaseAsync (Task) muestran la misma cadena sin resultado; ahi no aplica [ClientCache].
 public interface IQuotes : IServiceUnit
 {
     [ClientCache(60_000)]
     [ServerRetry(3)]
     [ServerMiddleware<Timing>]
     Task<string> QuoteAsync([ServerProcessor<ResolveCustomer>] Customer customer, int sku);
+
+    [ServerRetry(3)]
+    [ServerMiddleware<Timing>]
+    void Reserve([ServerProcessor<ResolveCustomer>] Customer customer, int sku);
+
+    [ServerRetry(3)]
+    [ServerMiddleware<Timing>]
+    Task ReleaseAsync([ServerProcessor<ResolveCustomer>] Customer customer, int sku);
 }
 
 public sealed record Customer(string Name, decimal Discount);
@@ -59,6 +68,23 @@ public sealed class Quotes : IQuotes
         if (Volatile.Read(ref DownstreamTimeouts) > 0 && Interlocked.Decrement(ref DownstreamTimeouts) >= 0) throw new TimeoutException("pricing");
 
         return Task.FromResult($"{customer.Name}:{sku * 100 * (1 - customer.Discount):F2}");
+    }
+
+    public static int Reserved;
+
+    public void Reserve(Customer customer, int sku)
+    {
+        Interlocked.Increment(ref Attempts);
+        if (Volatile.Read(ref DownstreamTimeouts) > 0 && Interlocked.Decrement(ref DownstreamTimeouts) >= 0) throw new TimeoutException("stock");
+        Interlocked.Add(ref Reserved, sku);
+    }
+
+    public async Task ReleaseAsync(Customer customer, int sku)
+    {
+        Interlocked.Increment(ref Attempts);
+        await Task.Yield();
+        if (Volatile.Read(ref DownstreamTimeouts) > 0 && Interlocked.Decrement(ref DownstreamTimeouts) >= 0) throw new TimeoutException("stock");
+        Interlocked.Add(ref Reserved, -sku);
     }
 }
 

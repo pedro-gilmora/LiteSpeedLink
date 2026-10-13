@@ -22,10 +22,8 @@ public static partial class Server
         RequestHandler handlers,
         Action onFinalize,
         X509Certificate2 cert,
-        CancellationToken token = default,
-        int streamBatch = 0,
-        TimeSpan streamBatchMaxDelay = default)
-        => StartQuicServerAsync(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, streamBatch, streamBatchMaxDelay);
+        CancellationToken token = default)
+        => StartQuicServerAsync(port, new DelegateRequestHandler(handlers), onFinalize, cert, token);
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
@@ -36,12 +34,9 @@ public static partial class Server
         THandler handlers,
         Action onFinalize,
         X509Certificate2 cert,
-        CancellationToken token = default,
-        int streamBatch = 0,
-        TimeSpan streamBatchMaxDelay = default)
+        CancellationToken token = default)
         where THandler : struct, IRequestHandler
     {
-        var batch = BatchPolicy.Create(streamBatch, streamBatchMaxDelay);
         QuicServerConnectionOptions connectionOptions = new()
         {
             IdleTimeout = TimeSpan.FromMinutes(5),
@@ -70,7 +65,7 @@ public static partial class Server
             .ConfigureAwait(false);
 
 
-        ListenConnections(listener, handlers, onFinalize, batch, token);
+        ListenConnections(listener, handlers, onFinalize, token);
 
         return listener;
 
@@ -79,12 +74,11 @@ public static partial class Server
             QuicListener listener,
             THandler handlers,
             Action onFinalize,
-            BatchPolicy batch,
             CancellationToken token)
         {
             try
             {
-            DO: HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), handlers, batch, token); goto DO;
+            DO: HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), handlers, token); goto DO;
             }
             catch
             {
@@ -100,14 +94,13 @@ public static partial class Server
         static async void HandleConnectionAsync(
             QuicConnection connection,
             THandler handlers,
-            BatchPolicy batch,
             CancellationToken token)
         {
             await using (connection)
             {
                 try
                 {
-                DO: _ = HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, batch, token); goto DO;
+                DO: _ = HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, token); goto DO;
                 }
                 catch
                 {
@@ -119,7 +112,6 @@ public static partial class Server
         static async Task HandleStreamAsync(
             QuicStream stream,
             THandler handlers,
-            BatchPolicy batch,
             CancellationToken token)
         {
             await using (stream)
@@ -131,12 +123,12 @@ public static partial class Server
                     if (head.Buffer.Length >= Framing.OpIdSize && Framing.ReadOpId(head.Buffer) == MuxMarker)
                     {
                         reader.AdvanceTo(head.Buffer.GetPosition(Framing.OpIdSize));
-                        await ServePipeAsync(reader, PipeWriter.Create(stream), handlers, token, batch: batch).ConfigureAwait(false);
+                        await ServePipeAsync(reader, PipeWriter.Create(stream), handlers, token).ConfigureAwait(false);
                     }
                     else
                     {
                         reader.AdvanceTo(head.Buffer.Start);
-                        await ServeQuicStreamAsync(reader, PipeWriter.Create(stream), handlers, token, batch).ConfigureAwait(false);
+                        await ServeQuicStreamAsync(reader, PipeWriter.Create(stream), handlers, token).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex) when (ex is OperationCanceledException or IOException or QuicException)
@@ -150,7 +142,7 @@ public static partial class Server
     /// Un stream QUIC es un RPC: la peticion <c>[opId][cuerpo]</c> la delimita el FIN y el propio
     /// stream empareja las respuestas <c>[len][estado][cuerpo]</c>, asi que no hace falta corrId.
     /// </summary>
-    internal static async Task ServeQuicStreamAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, BatchPolicy batch = default)
+    internal static async Task ServeQuicStreamAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token)
         where THandler : struct, IRequestHandler
     {
         try
@@ -174,7 +166,7 @@ public static partial class Server
             request.Slice(Framing.OpIdSize).CopyTo(body);
             reader.AdvanceTo(request.End);
 
-            await DispatchAsync(handlers, op, RequestContext.Rent(0, body.AsMemory(0, length), new ResponseChannel(writer, correlated: false, batch: batch), token), body, null, token).ConfigureAwait(false);
+            await DispatchAsync(handlers, op, RequestContext.Rent(0, body.AsMemory(0, length), new ResponseChannel(writer, correlated: false), token), body, null, token).ConfigureAwait(false);
         }
         finally
         {

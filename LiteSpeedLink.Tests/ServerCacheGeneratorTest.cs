@@ -45,12 +45,11 @@ public class ServerCacheGeneratorTest
         public partial class Host;
         """;
 
-    // Bloque del case de un metodo: desde su "case" hasta el siguiente.
+    // Cuerpo del metodo generado para la operacion: desde su firma hasta su llave de cierre (nivel de clase).
     static string Case(string host, string method)
     {
-        var start = host.LastIndexOf("case ", host.IndexOf("IContract." + method + "("));
-        var end = host.IndexOf("case ", start + 5);
-        return host[start..(end < 0 ? host.IndexOf("default:", start) : end)];
+        var start = host.IndexOf(" __" + method + "_");
+        return host[start..host.IndexOf("\n    }\n", start)];
     }
 
     [Theory]

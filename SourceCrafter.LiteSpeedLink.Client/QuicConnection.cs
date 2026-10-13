@@ -50,15 +50,20 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
 
     private ValueTask<MultiplexedChannel> GetMuxAsync(CancellationToken token)
     {
+        var t = MuxTask();
+        return t.IsCompletedSuccessfully ? new(t.Result) : new(t.WaitAsync(token));
+    }
+
+    private Task<MultiplexedChannel> MuxTask()
+    {
         int i = (int)((uint)Interlocked.Increment(ref _next) % (uint)_mux.Length);
         var t = Volatile.Read(ref _mux[i]);
-        if (t is { IsCompletedSuccessfully: true }) return new(t.Result);
         if (t is null or { IsFaulted: true } or { IsCanceled: true })
         {
             var created = OpenMuxAsync();
             t = Interlocked.CompareExchange(ref _mux[i], created, t) == t ? created : Volatile.Read(ref _mux[i])!;
         }
-        return new(t.WaitAsync(token));
+        return t;
     }
 
     private async Task<MultiplexedChannel> OpenMuxAsync()
@@ -131,19 +136,37 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
         await call.ReadValueAsync<byte>(token, expectBody: false).ConfigureAwait(false);
     }
 
-    public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-        (long op, TIn payload, [EnumeratorCancellation] CancellationToken token = default, [CallerMemberName] string name = "")
-    {
-        await using var call = await StartAsync(op, payload, true, token).ConfigureAwait(false);
+    // Streams por el pool como las unarias; los largos o suscripciones van por Dedicated ([DedicatedStream]) para evitar HOL.
+    public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "")
+        => EnumerateCoreAsync<TIn, TOut>(op, payload, true, token);
 
-        await foreach (var item in call.ReadStreamAsync<TOut>(token).ConfigureAwait(false))
+    public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, CancellationToken token = default, [CallerMemberName] string name = "")
+        => EnumerateCoreAsync<byte, TOut>(op, default, false, token);
+
+    private IAsyncEnumerable<TOut?> EnumerateCoreAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn? payload, bool hasPayload, CancellationToken token)
+    {
+        if (_mux.Length == 0) return EnumerateDedicatedAsync<TIn, TOut>(op, payload, hasPayload, token);
+        var mux = MuxTask();
+        return mux.IsCompletedSuccessfully
+            ? mux.Result.EnumerateAsync<TIn, TOut>(op, payload, hasPayload, token)
+            : MuxThenEnumerateAsync<TIn, TOut>(mux, op, payload, hasPayload, token);
+    }
+
+    private static async IAsyncEnumerable<TOut?> MuxThenEnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (Task<MultiplexedChannel> mux, long op, TIn? payload, bool hasPayload, [EnumeratorCancellation] CancellationToken token)
+    {
+        var channel = await mux.WaitAsync(token).ConfigureAwait(false);
+        await foreach (var item in channel.EnumerateAsync<TIn, TOut>(op, payload, hasPayload, token).ConfigureAwait(false))
             yield return item;
     }
 
-    public async IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
-        (long op, [EnumeratorCancellation] CancellationToken token = default, [CallerMemberName] string name = "")
+    private async IAsyncEnumerable<TOut?> EnumerateDedicatedAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
+        (long op, TIn? payload, bool hasPayload, [EnumeratorCancellation] CancellationToken token)
     {
-        await using var call = await StartAsync<byte>(op, default, false, token).ConfigureAwait(false);
+        await using var call = await StartAsync(op, payload, hasPayload, token).ConfigureAwait(false);
 
         await foreach (var item in call.ReadStreamAsync<TOut>(token).ConfigureAwait(false))
             yield return item;

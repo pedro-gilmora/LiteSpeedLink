@@ -156,27 +156,12 @@ public partial class ServiceHandlersGenerator
             hostCode.Blank().Line("private readonly struct __Handler(").Append(typeName).Append(" provider) : global::SourceCrafter.LiteSpeedLink.IRequestHandler")
                 .Open()
                 .Line("public global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleAsync(long id, global::SourceCrafter.LiteSpeedLink.RequestContext ctx, global::System.Threading.CancellationToken token)")
-                .Indent().Line("=> provider.HandleRequestsAsync(id, ctx, token);").Unindent()
+                .Line("=> provider.HandleRequestsAsync(id, ctx, token);", 1)
                 .Close();
 
-        // Async (pooled) en cuanto algo del camino de la peticion espera; Memory sin nada que esperar pasa a sync al final.
+        // Un metodo por operacion: async (pooled) solo si algo de su camino espera (ver EndOperation).
         var pooled = PooledBuilder(true);
-
-        hostCode.Blank().Line(pooled);
-
-        int signatureStart = hostCode.Length - pooled.Length;
-
-        hostCode.Line("private async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
-
-        int signatureEnd = hostCode.Length;
-
-        hostCode.Append(" HandleRequestsAsync(")
-            .Indent().Line("long id,")
-            .Line(context).Append(" __context,")
-            .Line("global::System.Threading.CancellationToken __token)").Unindent()
-            .Open()
-            .Open("try")
-            .Open("switch(id)");
+        List<(long Id, string Signature, string Name, bool Sync)> operations = [];
 
         int providerTypeId = SymbolEqualityComparer.Default.GetHashCode(serviceHost);
 
@@ -247,7 +232,18 @@ public partial class ServiceHandlersGenerator
     
                 //    ServiceId: ").Append(serviceId).Append(@""");
 
-                hostCode.Blank().Line("case ").Append(serviceId).Append(": //Id for: [").Append(globalizedMethodName).Append(']').Open();
+                var opSuffix = serviceId < 0 ? "M" + (-serviceId) : serviceId.ToString();
+                var opName = "__" + methodName + "_" + opSuffix;
+
+                hostCode.Blank().Line(pooled);
+
+                int signatureStart = hostCode.Length - pooled.Length;
+
+                hostCode.Line("private async global::System.Threading.Tasks.ValueTask<").Append(handlerReturnType).Append('>');
+
+                int signatureEnd = hostCode.Length;
+
+                hostCode.Append(' ').Append(opName).Append('(').Append(context).Append(" __context, global::System.Threading.CancellationToken __token)").Open();
 
                 var provider = "";
                 // Con middlewares la llamada va en una lambda static: los miembros del host se leen de __host (capturado en el estado).
@@ -468,7 +464,6 @@ public partial class ServiceHandlersGenerator
                 var serverKey = serverCache is null ? null : GetCacheKey(method, keyRoots, compilation, false, contribution);
                 if (serverKey is null) serverCache = null;
                 bool typedKey = serverKey is { Explicit: true };
-                var opSuffix = serviceId < 0 ? "M" + (-serviceId) : serviceId.ToString();
 
                 if (serverCache is { } sc)
                 {
@@ -477,10 +472,10 @@ public partial class ServiceHandlersGenerator
                         : "global::SourceCrafter.LiteSpeedLink.ServerCacheManager";
 
                     // Por metodo, creado al primer uso (thread-safe): sin coste de memoria para operaciones nunca llamadas.
-                    policyTypes.Append("\n\nprivate ").Append(manager).Append(" __cache").Append(opSuffix).Append(';')
+                    policyTypes.PrependLine(2, "private ").Append(manager).Append(" __cache").Append(opSuffix).Append(';')
                         .Blank().Line("private ").Append(manager).Append(" __Cache").Append(opSuffix).Append(" =>")
-                        .Indent().Line("global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache").Append(opSuffix)
-                        .Append(", static () => new ").Append(manager).Append('(').Append(sc.DurationMs).Append(", ").Append(sc.Capacity).Append("));").Unindent();
+                        .Line("global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache", 1).Append(opSuffix)
+                        .Append(", static () => new ").Append(manager).Append('(').Append(sc.DurationMs).Append(", ").Append(sc.Capacity).Append("));");
 
                     EmitWriter(policyTypes, "__Res" + opSuffix,
                         [serverPost.Count > 0 ? serverPost[serverPost.Count - 1].Out : isAwaitable ? awaitedType! : method.ReturnType]);
@@ -495,15 +490,8 @@ public partial class ServiceHandlersGenerator
 
                     EmitReader(policyTypes, readerName, requestWireTypes);
 
-                    hostCode.Append("var ");
-
-                    if (requestParamsCount > 1) hostCode.Append('(');
-
-                    requestDeconstruct();
-
-                    if (requestParamsCount > 1) hostCode.Append(')');
-
-                    hostCode.Append(" = ").Append(readerName).Append("(__context.Body.Span);").Blank();
+                    hostCode.Append("var ").Parens(requestDeconstruct, requestParamsCount > 1)
+                        .Append(" = ").Append(readerName).Append("(__context.Body.Span);").Blank();
                 }
 
                 applyPreStages?.Invoke();
@@ -528,11 +516,7 @@ public partial class ServiceHandlersGenerator
 
                 if (dependencyIsAsync) hostCode.Append(".ConfigureAwait(false))");
 
-                hostCode.Append('.').Append(methodName).Append('(');
-
-                invokeParams?.Invoke();
-
-                hostCode.Append(isAwaitable ? ").ConfigureAwait(false)" : ")");
+                hostCode.Append('.').Append(methodName).Parens(invokeParams).Append(isAwaitable ? ".ConfigureAwait(false)" : null);
 
                 // Se escribe en hostCode solo para capturar el texto: la sangria de inicio de linea no es parte de la llamada.
                 var call = hostCode.ToString(callStart, hostCode.Length - callStart).TrimStart();
@@ -576,6 +560,7 @@ public partial class ServiceHandlersGenerator
                 if (serverCache != null)
                 {
                     CloseServerCache(hostCode, opSuffix, serverPost.Count > 0 ? StageVar("___result", serverPost.Count - 1) : "___result", connectionType > 0);
+                    operations.Add((serviceId, globalizedMethodName, opName, EndOperation(hostCode, signatureStart, signatureEnd, handlerReturnType, connectionType == 0)));
                     continue;
                 }
 
@@ -600,7 +585,7 @@ public partial class ServiceHandlersGenerator
                         string policy = batch <= 0 ? "global::SourceCrafter.LiteSpeedLink.Unbatched" : "__Policy_B" + batch + "_D" + Math.Max(delay, 0);
 
                         if (batch > 0 && emittedPolicies.Add(policy))
-                            policyTypes.Append("\n\nprivate readonly struct ").Append(policy).Append(" : global::SourceCrafter.LiteSpeedLink.IStreamPolicy")
+                            policyTypes.PrependLine(2, "private readonly struct ").Append(policy).Append(" : global::SourceCrafter.LiteSpeedLink.IStreamPolicy")
                                 .Open()
                                 .Line("public static int Items => ").Append(batch).Append(';')
                                 .Line("public static long MaxDelayTicks => ").Append(delay <= 0 ? "long.MaxValue" : "global::System.Diagnostics.Stopwatch.Frequency * " + delay + " / 1000").Append(';')
@@ -614,18 +599,7 @@ public partial class ServiceHandlersGenerator
                 }
                 else if (outCount > 0)
                 {
-                    if (outCount == 1)
-                    {
-                        resultExpression!();
-                    }
-                    else
-                    {
-                        hostCode.Append('(');
-
-                        resultExpression!();
-
-                        hostCode.Append(')');
-                    }
+                    hostCode.Parens(resultExpression, outCount > 1);
                 }
                 else
                 {
@@ -633,26 +607,26 @@ public partial class ServiceHandlersGenerator
                 }
 
                 hostCode.Append(awaitReply ? ").ConfigureAwait(false);" : ");").Close();
+
+                operations.Add((serviceId, globalizedMethodName, opName, EndOperation(hostCode, signatureStart, signatureEnd, handlerReturnType, connectionType == 0)));
             }
         }
 
-        hostCode.Blank().Line("default:")
-            .Indent().Line("return ").Append(connectionType is 0 ? "__context.NotFound()" : "await __context.NotFoundAsync().ConfigureAwait(false)").Append(';').Unindent()
-            .Close()
-            .Close()
-            .Line("catch (global::System.OperationCanceledException) when (__token.IsCancellationRequested)")
-            .Open().Line("throw;").Close()
-            .Line("catch (global::System.Exception __ex)")
-            .Open().Line("return ").Append(connectionType is 0 ? "__context.Fail(__ex)" : "await __context.FailAsync(__ex).ConfigureAwait(false)").Append(';').Close()
-            .Close();
+        // Despachador sin async ni try: las excepciones las convierte en Failed el servidor (Server.*), que ya rodea la llamada.
+        // Memory sin ninguna operacion que espere responde sync (StartMemoryServer); si no, las sync se envuelven en new(...).
+        bool syncMemory = connectionType == 0 && operations.All(o => o.Sync);
+        string? wrapOpen = syncMemory ? null : "new(", wrapClose = syncMemory ? null : ")";
 
-        // Memory responde sin I/O: si ningun metodo, etapa, dependencia, retry, cache ni stream espera, el handler es sync
-        // (mismo cuerpo: sus return ya son ResponseStatus). Basta un await para que todo el handler sea async.
-        // ponytail: se detecta por el texto emitido ("await "); los nombres que se emiten (metodos/pipelines) no lo contienen.
-        var syncMemory = connectionType == 0 && hostCode.ToString(signatureEnd, hostCode.Length - signatureEnd).IndexOf("await ", StringComparison.Ordinal) < 0;
+        hostCode.Blank().Line("private ").Append(syncMemory ? handlerReturnType : "global::System.Threading.Tasks.ValueTask<" + handlerReturnType + ">")
+            .Append(" HandleRequestsAsync(long id, ").Append(context).Append(" __context, global::System.Threading.CancellationToken __token) => id switch")
+            .Open();
 
-        if (syncMemory)
-            hostCode.Remove(signatureStart, signatureEnd - signatureStart).Insert(signatureStart, "private " + handlerReturnType);
+        foreach (var (id, signature, name, sync) in operations)
+            hostCode.Line().Append(id).Append(" => ").Append(sync ? wrapOpen : null).Append(name).Append("(__context, __token)").Append(sync ? wrapClose : null)
+                .Append(", //Id for: [").Append(signature).Append(']');
+
+        hostCode.Line("_ => ").Append(connectionType is 0 ? wrapOpen + "__context.NotFound()" + wrapClose : "__context.NotFoundAsync()")
+            .Close(";");
 
         hostCode.Append(policyTypes).Close();
 
@@ -674,8 +648,22 @@ public partial class ServiceHandlersGenerator
             .Blank()
             .Open("if (!__cache.TryGet(__cacheKey, out var __cached))")
             .Line("if (!__cache.TryLead(__cacheKey, out var __flight))")
-            .Indent().Line("__cached = await __flight.Task.WaitAsync(__token).ConfigureAwait(false);").Unindent()
+            .Line("__cached = await __flight.Task.WaitAsync(__token).ConfigureAwait(false);", 1)
             .Open("else try");
+    }
+
+    /// <summary>
+    /// Cierra el metodo de una operacion: en Memory, si su cuerpo no espera nada, pasa a sync (sus return ya son
+    /// ResponseStatus) y el despachador no paga maquina de estados por ella. Devuelve si quedo sync.
+    /// </summary>
+    // ponytail: se detecta por el texto emitido ("await "); los nombres que se emiten (metodos/pipelines) no lo contienen.
+    private static bool EndOperation(CodeBuilder code, int signatureStart, int signatureEnd, string returnType, bool canSync)
+    {
+        if (!canSync || code.ToString(signatureEnd, code.Length - signatureEnd).IndexOf("await ", StringComparison.Ordinal) >= 0)
+            return false;
+
+        code.Remove(signatureStart, signatureEnd - signatureStart).Insert(signatureStart, "private " + returnType);
+        return true;
     }
 
     /// <summary>Guarda los bytes tras los return processors; fallo o rechazo no se cachean (Fail es idempotente).</summary>

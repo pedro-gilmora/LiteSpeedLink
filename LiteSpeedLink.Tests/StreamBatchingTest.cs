@@ -8,18 +8,34 @@ namespace LiteSpeedLink.Tests;
 
 public class StreamBatchingTest
 {
-    /// <summary>Opt-in: servidor por lotes y/o cliente que agrupa; mismo orden y mismos items, unarias intactas.</summary>
+    private readonly struct Batched7 : IStreamPolicy
+    {
+        public static int Items => 7;
+        public static long MaxDelayTicks => long.MaxValue;
+    }
+
+    /// <summary>Politica del servidor (item a item, por defecto, lote 7) x cliente que agrupa; mismo orden y mismos items, unarias intactas.</summary>
     [Theory]
     [InlineData(0, false)]
     [InlineData(0, true)]
-    [InlineData(7, false)]
-    [InlineData(7, true)]
-    public async Task StreamsMatchInEveryMode(int streamBatch, bool coalesce)
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public async Task StreamsMatchInEveryMode(int policy, bool coalesce)
     {
         using var cts = new CancellationTokenSource(5000);
-        var server = Server.StartTcpServer(0, (op, ctx, _) => op == 0
-            ? ctx.ReturnAsync(ctx.Get<int>() * 2)
-            : ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>()).Select(i => $"item-{i}")), () => { }, streamBatch: streamBatch);
+        var server = Server.StartTcpServer(0, (op, ctx, _) =>
+        {
+            if (op == 0) return ctx.ReturnAsync(ctx.Get<int>() * 2);
+            var items = Enumerable.Range(0, ctx.Get<int>()).Select(i => $"item-{i}");
+            return policy switch
+            {
+                0 => ctx.EnumerateAsync<string, Unbatched>(items),
+                1 => ctx.EnumerateAsync(items),
+                _ => ctx.EnumerateAsync<string, Batched7>(items),
+            };
+        }, () => { });
 
         try
         {

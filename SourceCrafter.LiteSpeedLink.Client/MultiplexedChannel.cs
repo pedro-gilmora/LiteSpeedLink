@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
@@ -16,10 +17,17 @@ internal sealed class MultiplexedChannel
 {
     private readonly PipeReader _reader;
     private readonly PipeWriter _writer;
-    private readonly FrameWriter _frames;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    // StreamSink para streams; UnarySink para unarias; ambos reutilizables.
-    private readonly ConcurrentDictionary<int, object> _pending = new();
+    // Escritura agrupada: cada llamada encola su trama bajo _send y solo una (la que encuentra _flushing a false)
+    // la vuelca al PipeWriter y hace flush; las demas vuelven sin suspender y salen en ese mismo envio.
+    private readonly Lock _send = new();
+    private ArrayBufferWriter<byte> _queued = new(256), _spare = new(256);
+    private bool _flushing;
+    private Exception? _broken;
+    // StreamSink para streams; UnarySink para unarias; ambos reutilizables. Slot = id & SlotMask; el ocupante
+    // puede ser otra llamada con los mismos bits bajos: el sink compara su id armado antes de aceptar nada.
+    // ponytail: tope de 4096 llamadas en vuelo por conexion (como MemChannel); llena -> InvalidOperationException. Subir SlotBits si hiciera falta.
+    private const int SlotBits = 12, SlotMask = (1 << SlotBits) - 1;
+    private readonly object?[] _pending = new object?[1 << SlotBits];
     private readonly ConcurrentBag<UnarySink> _sinks = [];
     private readonly ConcurrentBag<StreamSink> _streams = [];
     private readonly string _remote;
@@ -40,7 +48,6 @@ internal sealed class MultiplexedChannel
         _coalesce = coalesce;
         _reader = reader;
         _writer = writer;
-        _frames = new(writer);
         _remote = remote;
         _readLoop = ReadLoopAsync();
     }
@@ -91,7 +98,7 @@ internal sealed class MultiplexedChannel
         }
         finally
         {
-            _pending.TryRemove(new(id, sink));
+            Unregister(id, sink);
             // Consumido (resultado, fallo o cancelacion): el id del armado impide que una entrega tardia lo toque.
             _sinks.Add(sink);
         }
@@ -176,7 +183,9 @@ internal sealed class MultiplexedChannel
             _core.SetResult(false);
         }
 
-        public void Cancel(CancellationToken token) => TryFail(Volatile.Read(ref _armed), new OperationCanceledException(token));
+        public void Cancel(CancellationToken token) => TryFail(new OperationCanceledException(token));
+
+        public void TryFail(Exception ex) => TryFail(Volatile.Read(ref _armed), ex);
 
         /// <summary>Lo pendiente sale antes que el error, como al completar un Channel con excepcion.</summary>
         public bool TryRead(out Response response)
@@ -243,7 +252,7 @@ internal sealed class MultiplexedChannel
         private MultiplexedChannel channel = null!;
         private long op;
         private TIn? payload;
-        private bool hasPayload, _rented, _done, _held;
+        private bool hasPayload, _rented, _done, _held, _ended;
         private CancellationToken _token;
         private CancellationTokenSource? _linked;
         private StreamSink? _sink;
@@ -259,6 +268,7 @@ internal sealed class MultiplexedChannel
             (e.channel, e.op, e.payload, e.hasPayload, e._token) = (channel, op, payload, hasPayload, token);
             e._rented = true;
             e._done = false;
+            e._ended = false;
 
             // Mismo criterio que [EnumeratorCancellation]: se enlazan solo si ambos pueden cancelar.
             if (enumeratorToken.CanBeCanceled)
@@ -347,11 +357,13 @@ internal sealed class MultiplexedChannel
                 {
                     if (response.Status is ResponseStatus.StreamEnd)
                     {
-                        _done = true;
+                        _done = _ended = true;
                         more = false;
                         return true;
                     }
 
+                    // Failed/NotFound tambien cierran el stream en el host: no hace falta avisarle.
+                    _ended = response.Status is not ResponseStatus.Success;
                     channel.EnsureSuccess(response);
                     _current = Deserialize<TOut>(response.Span);
                 }
@@ -377,7 +389,9 @@ internal sealed class MultiplexedChannel
             {
                 _sink = null;
                 _cancel.Dispose();
-                channel._pending.TryRemove(new(_id, sink));
+                // Abandonado antes del final (break, cancelacion, fallo local): el productor del host para.
+                if (!_ended) channel.CancelStream(_id);
+                channel.Unregister(_id, sink);
                 sink.Disarm();
                 channel._streams.Add(sink);
             }
@@ -395,55 +409,165 @@ internal sealed class MultiplexedChannel
         long op, TIn? payload, bool hasPayload, object sink, CancellationToken token)
     {
         if (_fault is { } fault) throw new IOException($"Connection to {_remote} is closed.", fault);
+        token.ThrowIfCancellationRequested();
 
-        // 0 queda reservado como "desarmado" en UnarySink.
-        int id;
-        do id = Interlocked.Increment(ref _nextId); while (id == 0);
+        int id = Register(sink);
+        Exception? invalid = null;
+        bool flush;
 
-        if (sink is UnarySink unary) unary.Arm(id);
-        else ((StreamSink)sink).Arm(id);
+        lock (_send)
+        {
+            var queued = _queued;
+            int start = queued.WrittenCount;
+            const int header = Framing.FrameHeaderSize + Framing.OpIdSize;
+            Framing.WriteOpId(queued.GetSpan(header)[Framing.FrameHeaderSize..header], op);
+            queued.Advance(header);
 
-        _pending[id] = sink;
+            if (hasPayload)
+            {
+                try
+                {
+                    if (payload is IRawBody) ((IRawBody)payload).WriteTo(queued);
+                    else Serialize(queued, payload);
+                }
+                catch (Exception ex)
+                {
+                    // La trama queda a medias en la cola: la conexion queda inservible (el flusher la cierra).
+                    _broken ??= ex;
+                    invalid = ex;
+                }
+            }
+
+            // Por posicion: el buffer pudo realojarse al serializar.
+            if (invalid is null)
+            {
+                var frame = MemoryMarshal.AsMemory(queued.WrittenMemory).Span[start..];
+                Framing.WriteFrameHeader(frame, id, frame.Length - Framing.FrameHeaderSize);
+            }
+
+            flush = !_flushing;
+            _flushing = true;
+        }
 
         try
         {
-            await _gate.WaitAsync(token).ConfigureAwait(false);
-            try
-            {
-                Framing.WriteOpId(_frames.BeginFrame(id, Framing.OpIdSize), op);
+            if (flush) await FlushQueuedAsync().ConfigureAwait(false);
+        }
+        catch when (invalid is null)
+        {
+            Unregister(id, sink);
+            throw;
+        }
+        catch
+        {
+            // Se informa la causa (parametros invalidos), abajo.
+        }
 
-                if (hasPayload)
+        if (invalid is not null)
+        {
+            Unregister(id, sink);
+            throw new ArgumentException("Invalid parameters", invalid);
+        }
+
+        return id;
+    }
+
+    /// <summary>Vacia la cola hasta dejarla vacia; un fallo de envio cae a todas las llamadas en curso.</summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    private async ValueTask FlushQueuedAsync()
+    {
+        try
+        {
+            while (true)
+            {
+                ArrayBufferWriter<byte> batch;
+                Exception? broken;
+
+                lock (_send)
                 {
-                    try
+                    if (_broken is null && _queued.WrittenCount == 0)
                     {
-                        if (payload is IRawBody) ((IRawBody)payload).WriteTo(_frames);
-                        else Serialize(_frames, payload);
+                        _flushing = false;
+                        return;
                     }
-                    catch (Exception ex)
-                    {
-                        // La trama ya esta a medias en el writer: la conexion queda inservible.
-                        await _writer.CompleteAsync(ex).ConfigureAwait(false);
-                        throw new ArgumentException("Invalid parameters", ex);
-                    }
+
+                    batch = _queued;
+                    (_queued, _spare) = (_spare, _queued);
+                    broken = _broken;
                 }
 
-                _frames.EndFrame();
+                if (broken is not null)
+                {
+                    await _writer.CompleteAsync(broken).ConfigureAwait(false);
+                    throw new IOException($"Connection to {_remote} is closed.", broken);
+                }
+
+                _writer.Write(batch.WrittenSpan);
+                batch.ResetWrittenCount();
 
                 // Sin token: cancelar un flush a medias partiria la trama.
                 await _writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
             }
-            finally
-            {
-                _gate.Release();
-            }
         }
-        catch
+        catch (Exception ex)
         {
-            _pending.TryRemove(id, out _);
+            lock (_send)
+            {
+                _queued.ResetWrittenCount();
+                _flushing = false;
+            }
+
+            Fail(ex);
             throw;
         }
+    }
 
-        return id;
+    private int Register(object sink)
+    {
+        for (int tries = 0; tries <= SlotMask + 1; tries++)
+        {
+            // 0 queda reservado como "desarmado" en los sinks.
+            int id = Interlocked.Increment(ref _nextId);
+            if (id == 0) continue;
+
+            // Armado antes de publicarlo: quien lo vea en el slot ya puede comparar el id. Slot ocupado (p. ej. stream largo) -> id siguiente.
+            if (sink is UnarySink unary) unary.Arm(id);
+            else ((StreamSink)sink).Arm(id);
+
+            if (Interlocked.CompareExchange(ref _pending[id & SlotMask], sink, null) is null) return id;
+        }
+
+        throw new InvalidOperationException($"Too many calls in flight on {_remote} (max {SlotMask + 1}).");
+    }
+
+    private void Unregister(int id, object sink) => Interlocked.CompareExchange(ref _pending[id & SlotMask], null, sink);
+
+    /// <summary>
+    /// Trama <c>[len=4][corrId]</c> sin opId (toda peticion lleva uno): el host cancela el productor de ese stream.
+    /// Va por la cola de envio, detras de la peticion si aun no salio. Best-effort: sin conexion no hay productor que parar.
+    /// </summary>
+    private void CancelStream(int id)
+    {
+        if (_fault is not null) return;
+        bool flush;
+
+        lock (_send)
+        {
+            if (_broken is not null) return;
+            Framing.WriteFrameHeader(_queued.GetSpan(Framing.FrameHeaderSize), id, 0);
+            _queued.Advance(Framing.FrameHeaderSize);
+            flush = !_flushing;
+            _flushing = true;
+        }
+
+        if (flush) _ = FlushCancelAsync();
+    }
+
+    private async Task FlushCancelAsync()
+    {
+        // Un fallo de envio ya cae a las llamadas en curso dentro de FlushQueuedAsync.
+        try { await FlushQueuedAsync().ConfigureAwait(false); }
+        catch { }
     }
 
     private async Task ReadLoopAsync()
@@ -519,7 +643,7 @@ internal sealed class MultiplexedChannel
     private void Deliver(int id, Response response)
     {
         // Una respuesta sin destinatario pertenece a una llamada ya cancelada.
-        bool delivered = _pending.TryGetValue(id, out var pending) && pending switch
+        bool delivered = Volatile.Read(ref _pending[id & SlotMask]) switch
         {
             StreamSink stream => stream.TryWrite(id, response),
             UnarySink sink => sink.TrySet(id, response),
@@ -533,10 +657,11 @@ internal sealed class MultiplexedChannel
     {
         _fault = ex;
 
-        foreach (var (id, pending) in _pending)
+        for (int i = 0; i < _pending.Length; i++)
         {
-            if (pending is StreamSink stream) stream.TryFail(id, ex);
-            else ((UnarySink)pending).TryFail(ex);
+            var pending = Volatile.Read(ref _pending[i]);
+            if (pending is StreamSink stream) stream.TryFail(ex);
+            else (pending as UnarySink)?.TryFail(ex);
         }
     }
 

@@ -38,8 +38,8 @@ public class ComparisonBenchmarks
     private static readonly RangeRequest GrpcRange = new() { Count = Items };
     private static readonly byte[] RawAdd = [1, 0, 0, 0, 2, 0, 0, 0];
 
-    private TcpListener _lslServer = null!, _lslBatchServer = null!;
-    private TcpConnection _lsl = null!, _lslPerItem = null!, _lslBatched = null!;
+    private TcpListener _lslServer = null!;
+    private TcpConnection _lsl = null!, _lslPerItem = null!;
     private WebApplication _aspnet = null!, _aspnetSlim = null!, _grpc = null!, _grpcSlim = null!;
     private HttpClient _aspnetClient = null!, _aspnetSlimClient = null!;
     private GrpcChannel _grpcChannel = null!, _grpcSlimChannel = null!;
@@ -54,10 +54,8 @@ public class ComparisonBenchmarks
             : ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { });
         _lsl = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslServer.LocalEndpoint).Port));
 
-        // Referencia: cliente sin agrupar en el lector (entrega item a item) y servidor opt-in que emite tramas Batch.
+        // Referencia: cliente sin agrupar en el lector (entrega item a item).
         _lslPerItem = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslServer.LocalEndpoint).Port), coalesceStreams: false);
-        _lslBatchServer = Server.StartTcpServer(0, static (op, ctx, _) => ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { }, streamBatch: StreamBatch);
-        _lslBatched = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_lslBatchServer.LocalEndpoint).Port));
 
         // ASP.NET Core completo: CreateBuilder + minimal API + JSON source-gen, HTTP/1.1.
         int p = FreePort();
@@ -108,13 +106,13 @@ public class ComparisonBenchmarks
         // Calentar todo (y validar) antes de medir.
         await Lsl_Unary(); await Lsl_UnaryRaw(); await AspNet_Unary(); await AspNetSlim_Unary(); await Grpc_Unary(); await GrpcSlim_Unary();
         await Lsl_Stream(); await AspNet_Stream(); await AspNetSlim_Stream(); await Grpc_Stream(); await GrpcSlim_Stream();
-        await Lsl_StreamPerItem(); await Lsl_StreamBatched(); await AspNetSlim_StreamBatched();
+        await Lsl_StreamPerItem(); await AspNetSlim_StreamBatched();
     }
 
     [GlobalCleanup]
     public async Task Cleanup()
     {
-        await _lsl.DisposeAsync(); await _lslPerItem.DisposeAsync(); await _lslBatched.DisposeAsync(); _lslServer.Stop(); _lslBatchServer.Stop();
+        await _lsl.DisposeAsync(); await _lslPerItem.DisposeAsync(); _lslServer.Stop();
         _aspnetClient.Dispose(); _aspnetSlimClient.Dispose(); _grpcChannel.Dispose(); _grpcSlimChannel.Dispose();
         await _aspnet.DisposeAsync(); await _aspnetSlim.DisposeAsync(); await _grpc.DisposeAsync(); await _grpcSlim.DisposeAsync();
     }
@@ -191,19 +189,27 @@ public class ComparisonBenchmarks
     /// <summary>Endpoints slim: binario crudo en /add, SSE a mano en /range (flush por evento) y /range-batched (flush por lote).</summary>
     internal static void MapSlim(WebApplication app)
     {
-        app.MapPost("/add", static async ctx =>
-        {
-            var r = await ctx.Request.BodyReader.ReadAtLeastAsync(8);
-            Span<byte> tmp = stackalloc byte[8];
-            System.Buffers.BuffersExtensions.CopyTo(r.Buffer.Slice(0, 8), tmp);
-            ctx.Request.BodyReader.AdvanceTo(r.Buffer.GetPosition(8));
-            ctx.Response.ContentLength = 4;
-            BinaryPrimitives.WriteInt32LittleEndian(ctx.Response.BodyWriter.GetSpan(4), BinaryPrimitives.ReadInt32LittleEndian(tmp) + BinaryPrimitives.ReadInt32LittleEndian(tmp[4..]));
-            ctx.Response.BodyWriter.Advance(4);
-            await ctx.Response.BodyWriter.FlushAsync();
-        });
+        app.MapPost("/add", SlimAdd);
         app.MapGet("/range/{n:int}", static ctx => WriteSse(ctx, 1));
         app.MapGet("/range-batched/{n:int}", static ctx => WriteSse(ctx, StreamBatch));
+    }
+
+    private static async Task SlimAdd(HttpContext ctx)
+    {
+        var r = await ctx.Request.BodyReader.ReadAtLeastAsync(8);
+        int sum = Sum(r.Buffer);
+        ctx.Request.BodyReader.AdvanceTo(r.Buffer.GetPosition(8));
+        ctx.Response.ContentLength = 4;
+        BinaryPrimitives.WriteInt32LittleEndian(ctx.Response.BodyWriter.GetSpan(4), sum);
+        ctx.Response.BodyWriter.Advance(4);
+        await ctx.Response.BodyWriter.FlushAsync();
+
+        static int Sum(System.Buffers.ReadOnlySequence<byte> buffer)
+        {
+            Span<byte> tmp = stackalloc byte[8];
+            System.Buffers.BuffersExtensions.CopyTo(buffer.Slice(0, 8), tmp);
+            return BinaryPrimitives.ReadInt32LittleEndian(tmp) + BinaryPrimitives.ReadInt32LittleEndian(tmp[4..]);
+        }
     }
 
     private static async Task WriteSse(HttpContext ctx, int flushEvery)
@@ -284,21 +290,13 @@ public class ComparisonBenchmarks
         return Count(n);
     }
 
-    // ---------- Stream opt-in: agrupado en lector / tramas Batch / SSE con flush por lote ----------
+    // ---------- Stream de referencia: item a item en el lector / SSE con flush por lote ----------
 
     [Benchmark, BenchmarkCategory("Stream")]
     public async Task<int> Lsl_StreamPerItem()
     {
         int n = 0;
         await foreach (var i in _lslPerItem.EnumerateAsync<int, int>(1, Items)) if (i == n) n++;
-        return Count(n);
-    }
-
-    [Benchmark, BenchmarkCategory("Stream")]
-    public async Task<int> Lsl_StreamBatched()
-    {
-        int n = 0;
-        await foreach (var i in _lslBatched.EnumerateAsync<int, int>(1, Items)) if (i == n) n++;
         return Count(n);
     }
 

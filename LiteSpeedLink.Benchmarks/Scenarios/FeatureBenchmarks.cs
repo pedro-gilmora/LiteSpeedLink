@@ -188,31 +188,45 @@ public class FeatureBenchmarks
 
     private static void MapSlim(WebApplication app)
     {
-        app.MapPost("/plain", static async ctx => await WriteInt(ctx.Response, await ReadInt(ctx.Request) + 1));
-        app.MapPost("/burst", static async ctx => await WriteInt(ctx.Response, await ReadInt(ctx.Request)));
-        app.MapPost("/whoami", static async ctx =>
+        app.MapPost("/plain", static ctx => Echo(ctx, 1));
+        app.MapPost("/burst", static ctx => Echo(ctx, 0));
+        app.MapPost("/whoami", WhoAmI);
+        app.MapPost("/retry-server", RetryServer);
+        app.MapGet("/price/{sku:int}", static (HttpContext ctx, int sku) => Counted(ref SlimCounters.Price, ctx, sku * 10)).CacheOutput();
+        app.MapGet("/stock/{sku:int}", static (HttpContext ctx, int sku) => Counted(ref SlimCounters.Stock, ctx, sku + 1)).CacheOutput();
+        app.MapGet("/quote", SlimQuote).CacheOutput(o => o.SetVaryByQuery("sku"));
+    }
+
+    private static async Task Echo(HttpContext ctx, int add) => await WriteInt(ctx.Response, await ReadInt(ctx.Request) + add);
+
+    private static Task Counted(ref int counter, HttpContext ctx, int v)
+    {
+        Interlocked.Increment(ref counter);
+        return WriteInt(ctx.Response, v);
+    }
+
+    private static Task SlimQuote(HttpContext ctx, int sku, string note)
+    {
+        Interlocked.Increment(ref SlimCounters.Quote);
+        return ctx.Response.WriteAsync($"{sku}:{note}");
+    }
+
+    private static async Task WhoAmI(HttpContext ctx)
+    {
+        using var sr = new StreamReader(ctx.Request.Body);
+        if (FeatureTokens.Instance.Find(await sr.ReadToEndAsync()) is not { } p) { ctx.Response.StatusCode = 401; return; }
+        await ctx.Response.WriteAsync(p.User);
+    }
+
+    private static async Task RetryServer(HttpContext ctx)
+    {
+        int n = await ReadInt(ctx.Request), v;
+        for (var attempt = 1; ; attempt++)
         {
-            using var sr = new StreamReader(ctx.Request.Body);
-            if (FeatureTokens.Instance.Find(await sr.ReadToEndAsync()) is not { } p) { ctx.Response.StatusCode = 401; return; }
-            await ctx.Response.WriteAsync(p.User);
-        });
-        app.MapPost("/retry-server", static async ctx =>
-        {
-            int n = await ReadInt(ctx.Request), v;
-            for (var attempt = 1; ; attempt++)
-            {
-                try { v = n + 1; break; }
-                catch (TimeoutException) when (attempt < 3) { }
-            }
-            await WriteInt(ctx.Response, v);
-        });
-        app.MapGet("/price/{sku:int}", static (HttpContext ctx, int sku) => { Interlocked.Increment(ref SlimCounters.Price); return WriteInt(ctx.Response, sku * 10); }).CacheOutput();
-        app.MapGet("/stock/{sku:int}", static (HttpContext ctx, int sku) => { Interlocked.Increment(ref SlimCounters.Stock); return WriteInt(ctx.Response, sku + 1); }).CacheOutput();
-        app.MapGet("/quote", static (HttpContext ctx, int sku, string note) =>
-        {
-            Interlocked.Increment(ref SlimCounters.Quote);
-            return ctx.Response.WriteAsync($"{sku}:{note}");
-        }).CacheOutput(o => o.SetVaryByQuery("sku"));
+            try { v = n + 1; break; }
+            catch (TimeoutException) when (attempt < 3) { }
+        }
+        await WriteInt(ctx.Response, v);
     }
 
     private static async Task<int> ReadInt(HttpRequest req)

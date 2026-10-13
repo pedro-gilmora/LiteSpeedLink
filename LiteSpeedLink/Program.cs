@@ -51,6 +51,21 @@ using (QuoteService.Start("complex-sample"))
     {
         Console.WriteLine($"[Complex] token falso -> rechazo en el processor: {Check(Quotes.Attempts == 3 && Timing.Calls == 1)} (sin middleware ni handler)");
     }
+
+    // Sin resultado: el mismo processor/middleware/retry envuelve void (sync) y Task (async).
+    Quotes.DownstreamTimeouts = 2;
+    quotes.Reserve("tok-acme", 5);
+    Console.WriteLine($"[Complex] void Reserve con 2 timeouts: {Check(Quotes.Reserved == 5 && Quotes.Attempts == 6 && Timing.Calls == 2 && ResolveCustomer.Calls == 3)} (3 intentos)");
+
+    Quotes.DownstreamTimeouts = 2;
+    await quotes.ReleaseAsync("tok-acme", 5);
+    Console.WriteLine($"[Complex] Task ReleaseAsync con 2 timeouts: {Check(Quotes.Reserved == 0 && Quotes.Attempts == 9 && Timing.Calls == 3 && ResolveCustomer.Calls == 4)} (3 intentos)");
+
+    try { quotes.Reserve("forged", 5); Console.WriteLine("[Complex] void token falso: MISMATCH"); }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("ResolveCustomer"))
+    {
+        Console.WriteLine($"[Complex] void token falso -> rechazo en el processor: {Check(Quotes.Attempts == 9 && Timing.Calls == 3)}");
+    }
 }
 
 // Red: mismo contrato; los miembros sync son sync-over-async.

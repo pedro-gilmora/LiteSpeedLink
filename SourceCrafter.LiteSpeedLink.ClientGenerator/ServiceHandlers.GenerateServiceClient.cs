@@ -158,7 +158,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                     if (TryGenerateProcessedClientMethod(clientCode, rawHelpers, container, iFace, method, contribution, conn, ref rawIndex)) continue;
 
-                    if (TryGenerateStreamClientMethod(clientCode, method, connectionType)) continue;
+                    if (TryGenerateStreamClientMethod(clientCode, method, connectionType, conn)) continue;
 
                     if (TryGenerateRawClientMethod(clientCode, rawHelpers, iFace, method, conn, ref rawIndex, container, contribution)) continue;
 
@@ -301,22 +301,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                     if (outCount > 0)
                     {
-                        clientCode.Append('<');
-
-                        if (outCount > 1)
-                        {
-                            clientCode.Append('(');
-
-                            responseTypes!.Invoke();
-
-                            clientCode.Append(')');
-                        }
-                        else
-                        {
-                            responseTypes!.Invoke();
-                        }
-
-                        clientCode.Append('>');
+                        clientCode.Append('<').Parens(responseTypes, outCount > 1).Append('>');
                     }
 
                     clientCode.Append(' ').Append(methodName);
@@ -363,23 +348,7 @@ public partial class ").Append(typeShortName).Append(@"
                     {
                         useComma = true;
                         closeTag = true;
-                        if (inCount > 1)
-                        {
-                            clientCode
-                                .Append("<(");
-
-                            requestTypes!.Invoke();
-
-                            clientCode
-                                .Append(')');
-                        }
-                        else
-                        {
-                            clientCode
-                                .Append('<');
-
-                            requestTypes!.Invoke();
-                        }
+                        clientCode.Append('<').Parens(requestTypes, inCount > 1);
                     }
 
                     if (responseTypes != null)
@@ -393,18 +362,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                         if (outCount > 0)
                         {
-                            if (outCount > 1)
-                            {
-                                clientCode.Append('(');
-
-                                responseTypes!.Invoke();
-
-                                clientCode.Append(')');
-                            }
-                            else
-                            {
-                                responseTypes!.Invoke();
-                            }
+                            clientCode.Parens(responseTypes, outCount > 1);
                         }
                     }
 
@@ -421,18 +379,7 @@ public partial class ").Append(typeShortName).Append(@"
 
                     if (inCount > 0)
                     {
-                        if (inCount == 1)
-                        {
-                            requestParams?.Invoke();
-                        }
-                        else
-                        {
-                            clientCode.Append('(');
-
-                            requestParams?.Invoke();
-
-                            clientCode.Append(')');
-                        }
+                        clientCode.Parens(requestParams, inCount > 1);
                     }
 
                    if(!generatingSync) clientCode.Append(", ").Append(cancelTokenParam);
@@ -528,7 +475,7 @@ public partial class ").Append(typeShortName).Append(@"
     /// Stream (IEnumerable/IAsyncEnumerable): el contrato se implementa con Enumerate/EnumerateAsync de la
     /// conexion; los sync ganan una sobrecarga *Async con token. Peticion = parametro o tupla (misma forma que el host).
     /// </summary>
-    private static bool TryGenerateStreamClientMethod(CodeBuilder code, IMethodSymbol method, int connectionType)
+    private static bool TryGenerateStreamClientMethod(CodeBuilder code, IMethodSymbol method, int connectionType, string conn)
     {
         if (!IsStream(method.ReturnType) || method.Parameters.Any(p => p.RefKind is not RefKind.None))
             return false;
@@ -548,7 +495,7 @@ public partial class ").Append(typeShortName).Append(@"
                 if (arg.Key == "IdleTimeoutMs") idle = (int)arg.Value.Value!;
         string idleArg = idle == 0 ? "" : ", " + idle;
 
-        string Call(string op, string tokenArg) => $"__connection.{op}<{generics}>({id}{payload}{(op == "EnumerateAsync" ? idleArg : "")}{tokenArg})!;";
+        string Call(string op, string tokenArg) => $"{conn}.{op}<{generics}>({id}{payload}{(op == "EnumerateAsync" ? idleArg : "")}{tokenArg})!;";
 
         code.Append("\n\n    public ").Append(method.GlobalMemberSignature).Append(" => ")
             .Append(Call(isAsync ? "EnumerateAsync" : "Enumerate", token is null ? "" : ", " + token.Name));

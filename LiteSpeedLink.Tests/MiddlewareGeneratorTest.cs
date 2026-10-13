@@ -104,7 +104,7 @@ public class MiddlewareGeneratorTest
         var host = r.Sources.Single(s => s.Key.Contains(".host")).Value;
 
         host.Should().NotContain("struct __").And.Contain(".InvokeAsync(");
-        var shout = host[host.IndexOf("IContract.Shout(")..];
+        var shout = host[host.IndexOf(" __Shout_")..];
         shout.IndexOf(".Process(").Should().BeLessThan(shout.IndexOf(".Invoke"));
     }
 

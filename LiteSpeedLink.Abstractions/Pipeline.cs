@@ -90,7 +90,7 @@ namespace SourceCrafter.LiteSpeedLink
         public int IdleTimeoutMs { get; set; }
     }
 
-    /// <summary>Unaria con stream QUIC propio en lugar del pool (respuestas grandes, ~1 MB+). Otros transportes la ignoran.</summary>
+    /// <summary>Unaria o stream con stream QUIC propio en lugar del pool (respuestas grandes ~1 MB+, streams largos o suscripciones). Otros transportes la ignoran.</summary>
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
     public sealed class DedicatedStreamAttribute : Attribute;
 

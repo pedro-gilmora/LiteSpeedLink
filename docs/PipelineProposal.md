@@ -1,6 +1,6 @@
 # Propuesta: pipelines guard + middleware
 
-Estado: **cerrada**. Implementado: processors `[ClientProcessor<T>]`/`[ServerProcessor<T>]` (seccion 1) y retry como bucle inline generado por `[ClientRetry]`/`[ServerRetry]` (2.6). Los middlewares genericos (2.1-2.5) no se implementaron: el unico caso real (retry) sale mas barato inline, sin structs ni delegados. Se conserva el analisis como referencia.
+Estado: **implementada**. Processors `[ClientProcessor<T>]`/`[ServerProcessor<T>]` (seccion 1), retry como bucle inline `[ClientRetry]`/`[ServerRetry]` (2.6) y middlewares `[ClientMiddleware<T>]`/`[ServerMiddleware<T>]` con `IMiddleware`/`IAsyncMiddleware` (lambda `static` + estado explicito, la opcion de 0 B de la tabla de 2.5; diagnosticos SCLSL020/SCLSL021). Orden por llamada: cache -> processors (una vez) -> middlewares (una vez, el primero declarado es el mas externo) -> retry -> llamada; igual en operaciones sin resultado (`void`/`Task`). Ejemplo combinado: `LiteSpeedLink/ComplexSample.cs`.
 POC medido: `test/POC/PipelineMiddlewarePoc` (`dotnet run -c Release -- --check` para el self-check; sin argumentos, BenchmarkDotNet).
 
 ## 1. Qué hay hoy
@@ -116,7 +116,7 @@ En el host es igual dentro del `case`: processors de parámetros → middlewares
 Por qué `AsyncWrappedCall<>` de librería y no lambdas ni structs intermedios generados (medido, 2.5):
 
 - Lambda: 64-104 B/llamada (delegate + closure) y llamada indirecta.
-- `AsyncWrappedCall<TMiddleware, TNext, TRes>` con middleware `readonly struct`: 0 B, sin dispatch, mismo coste que un struct por capa (4,7-4,9 ns vs 4,7). Con middleware `class` el JIT compartiría código (+~3 ns/capa); por eso el middleware debe ser `readonly struct` y sobran los structs intermedios generados.
+- `AsyncWrappedCall<TMiddleware, TNext, TRes>` con middleware `readonly struct`: 0 B, sin dispatch, mismo coste que un struct por capa (4,4-4,9 ns vs 4,3-4,7). Con middleware `class` el JIT compartiría código (+~3 ns/capa); por eso el middleware debe ser `readonly struct` y sobran los structs intermedios generados.
 
 ### 2.4 Middleware de usuario y reglas
 
@@ -169,18 +169,18 @@ Síncrono: el transporte termina síncrono (camino rápido de Memory). Suspende:
 
 | Variante | Síncrono: B | Suspende: B | Síncrono: ns |
 |---|---:|---:|---:|
-| Sin middleware | 0 | 112 | 0,7 |
-| **Forma 2.3: 2 middlewares `class`, struct por capa, pooled** (`Final2LayersClass`) | **0** | **112** | **4,7** |
-| 2 middlewares `class`, struct por capa, sin pooled | 0 | 236-246 | 4,4 |
-| 2 middlewares `struct` + `Chain<>` de librería, pooled | 0 | 112 | 4,7-4,9 |
-| 2 middlewares, interno `class` en `Chain<>` | 0 | 112 | 7,8-8,0 |
-| Lambda `static` + estado explícito | 0 | 243-255 | 5,2-5,3 |
-| Lambda que captura `this` | 64 | 300-309 | 7,8 |
-| Lambda con closure | 96 | 331-341 | 9,9-10,5 |
-| 2 capas de lambdas con closure | 104 | 347-349 | 10,8-11,8 |
+| Sin middleware | 0 | 112 | 0,6-0,7 |
+| **Forma 2.3: 2 middlewares `class`, struct por capa, pooled** (`Final2LayersClass`) | **0** | **112** | **4,3-4,7** |
+| 2 middlewares `class`, struct por capa, sin pooled | 0 | 236-247 | 4,1-4,4 |
+| 2 middlewares `struct` + `Chain<>` de librería, pooled | 0 | 112 | 4,4-4,9 |
+| 2 middlewares, interno `class` en `Chain<>` | 0 | 112 | 7,4-8,0 |
+| Lambda `static` + estado explícito | 0 | 243-255 | 5,2-5,4 |
+| Lambda que captura `this` | 64 | 300-309 | 7,8-8,0 |
+| Lambda con closure | 96 | 331-341 | 8,9-10,5 |
+| 2 capas de lambdas con closure | 104 | 347-349 | 10,3-11,8 |
 
-Asignaciones deterministas en todas las pasadas; los tiempos con transporte que suspende (~3-4 µs) tienen demasiado ruido para comparar variantes.
-Coste de 2 capas: ~4 ns, invisible frente a una llamada RPC (~11 µs en Memory).
+Asignaciones deterministas en todas las pasadas (revalidadas tras limpiar las lambdas de los POCs: mismos bytes); los tiempos con transporte que suspende (~3-4 µs) tienen demasiado ruido para comparar variantes.
+Coste de 2 capas: ~4 ns, invisible frente a una llamada RPC (~16 µs en Memory, ~34 µs en TCP).
 
 Comparación: el retry manual de `AuthRetryPoc` (lambda + `CreateLinkedTokenSource` + `CancelAfter` por intento) cuesta **+432 B/llamada**, casi todo por el CTS: el plazo por intento debe venir del transporte (2.6).
 

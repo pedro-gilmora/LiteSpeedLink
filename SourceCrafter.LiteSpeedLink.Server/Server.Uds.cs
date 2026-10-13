@@ -11,23 +11,18 @@ public static partial class Server
         RequestHandler handlers,
         Action onFinalize,
         CancellationToken token = default,
-        int maxInFlightPerConnection = MaxInFlightPerConnection,
-        int streamBatch = DefaultStreamBatch,
-        TimeSpan streamBatchMaxDelay = default)
-        => StartUdsServer(path, new DelegateRequestHandler(handlers), onFinalize, token, maxInFlightPerConnection, streamBatch, streamBatchMaxDelay);
+        int maxInFlightPerConnection = MaxInFlightPerConnection)
+        => StartUdsServer(path, new DelegateRequestHandler(handlers), onFinalize, token, maxInFlightPerConnection);
 
     public static Socket StartUdsServer<THandler>(
         string path,
         THandler handlers,
         Action onFinalize,
         CancellationToken token = default,
-        int maxInFlightPerConnection = MaxInFlightPerConnection,
-        int streamBatch = DefaultStreamBatch,
-        TimeSpan streamBatchMaxDelay = default)
+        int maxInFlightPerConnection = MaxInFlightPerConnection)
         where THandler : struct, IRequestHandler
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlightPerConnection, 1);
-        var batch = BatchPolicy.Create(streamBatch, streamBatchMaxDelay);
 
         File.Delete(path);
 
@@ -35,17 +30,17 @@ public static partial class Server
         listener.Bind(new UnixDomainSocketEndPoint(path));
         listener.Listen();
 
-        ListenClientsAsync(listener, handlers, onFinalize, maxInFlightPerConnection, batch, token);
+        ListenClientsAsync(listener, handlers, onFinalize, maxInFlightPerConnection, token);
 
         return listener;
 
         static async void ListenClientsAsync(Socket listener, THandler handlers,
-            Action onFinalize, int limit, BatchPolicy batch, CancellationToken token)
+            Action onFinalize, int limit, CancellationToken token)
         {
             try
             {
                 while (true)
-                    _ = HandleConnectionAsync(await listener.AcceptAsync(token).ConfigureAwait(false), handlers, limit, batch, token);
+                    _ = HandleConnectionAsync(await listener.AcceptAsync(token).ConfigureAwait(false), handlers, limit, token);
             }
             catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException)
             {
@@ -57,12 +52,12 @@ public static partial class Server
         }
 
         static async Task HandleConnectionAsync(Socket socket,
-            THandler handlers, int limit, BatchPolicy batch, CancellationToken token)
+            THandler handlers, int limit, CancellationToken token)
         {
             try
             {
                 await using var stream = new NetworkStream(socket, ownsSocket: true);
-                await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit, batch).ConfigureAwait(false);
+                await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException or IOException)
             {

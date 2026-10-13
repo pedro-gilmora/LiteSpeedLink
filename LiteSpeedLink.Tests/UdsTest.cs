@@ -80,6 +80,62 @@ public class UdsTest
         (await Task.WhenAll(calls)).Should().AllBeEquivalentTo(true);
     }
 
+    /// <summary>
+    /// Tabla de llamadas en curso: un stream abierto ocupa su slot mientras mas de 4096 unarias dan la vuelta al
+    /// contador; la que cae en ese slot salta al id siguiente y el stream sigue recibiendo solo lo suyo.
+    /// </summary>
+    [Fact]
+    public async Task TestPendingSlotWrapSkipsLiveStream()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"lsl-{Guid.NewGuid():N}.sock");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var uds = Server.StartUdsServer(path, async (id, ctx, token) =>
+            id == 1 ? await ctx.EnumerateAsync(() => Gated()) : await ctx.ReturnAsync(ctx.Get<int>() * 2), () => { });
+
+        await using var connection = new UdsConnection(path);
+        var token = new CancellationTokenSource(30_000).Token;
+
+        await using var stream = connection.EnumerateAsync<int>(1, token).GetAsyncEnumerator(token);
+        (await stream.MoveNextAsync()).Should().BeTrue();
+        stream.Current.Should().Be(-1);
+
+        for (int n = 0; n < 5000; n++) (await connection.GetAsync<int, int>(0, n, token)).Should().Be(n * 2);
+
+        release.SetResult();
+        var rest = new List<int>();
+        while (await stream.MoveNextAsync()) rest.Add(stream.Current);
+        rest.Should().Equal(Enumerable.Range(0, 100));
+
+        async IAsyncEnumerable<int> Gated()
+        {
+            yield return -1;
+            await release.Task;
+            for (int i = 0; i < 100; i++) yield return i;
+        }
+    }
+
+
+    /// <summary>
+    /// Escritura agrupada: muchas llamadas concurrentes encolan tramas de tamanos muy distintos en el mismo buffer
+    /// (que se realoja al crecer); cada cabecera debe quedar bien y cada llamada recibir su eco.
+    /// </summary>
+    [Fact]
+    public async Task TestBatchedSendKeepsFramesIntact()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"lsl-{Guid.NewGuid():N}.sock");
+        using var uds = Server.StartUdsServer(path, async (id, ctx, token) => await ctx.ReturnAsync(ctx.Get<string>()), () => { });
+
+        await using var connection = new UdsConnection(path);
+        var token = new CancellationTokenSource(30_000).Token;
+
+        var calls = Enumerable.Range(0, 2000).Select(n => Task.Run(async () =>
+        {
+            var text = new string((char)('a' + n % 26), n % 7 == 0 ? 20_000 + n : n % 300);
+            return await connection.GetAsync<string, string>(0, text, token) == text;
+        }));
+
+        (await Task.WhenAll(calls)).Should().AllBeEquivalentTo(true);
+    }
 
     private readonly struct Doubler : IRequestHandler
     {

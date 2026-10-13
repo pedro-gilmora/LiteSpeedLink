@@ -74,7 +74,7 @@ public partial class ServiceHandlersGenerator
     /// </summary>
     private static void EmitReader(CodeBuilder code, string name, IReadOnlyList<ITypeSymbol> types)
     {
-        code.Append("\n\nprivate static ").Append(TupleOf(types)).Append(' ').Append(name).Append("(global::System.ReadOnlySpan<byte> __b)")
+        code.PrependLine(2, "private static ").Append(TupleOf(types)).Append(' ').Append(name).Append("(global::System.ReadOnlySpan<byte> __b)")
             .Open()
             .Line("using var __s = global::MemoryPack.MemoryPackReaderOptionalStatePool.Rent(null);")
             .Line("var __r = new global::MemoryPack.MemoryPackReader(__b, __s);")
@@ -111,7 +111,7 @@ public partial class ServiceHandlersGenerator
 
         if (direct)
         {
-            code.Append("\n\nprivate static void ").Append(name).Append("(global::System.Buffers.IBufferWriter<byte> __out, ").Append(parameters).Append(')')
+            code.PrependLine(2, "private static void ").Append(name).Append("(global::System.Buffers.IBufferWriter<byte> __out, ").Append(parameters).Append(')')
                 .Open()
                 .Line("using var __s = global::MemoryPack.MemoryPackWriterOptionalStatePool.Rent(null);")
                 .Line("var __w = new global::MemoryPack.MemoryPackWriter<global::System.Buffers.IBufferWriter<byte>>(ref __out, __s);");
@@ -123,7 +123,7 @@ public partial class ServiceHandlersGenerator
             return;
         }
 
-        code.Append("\n\nprivate static global::System.ReadOnlyMemory<byte> ").Append(name).Append('(').Append(parameters).Append(')')
+        code.PrependLine(2, "private static global::System.ReadOnlyMemory<byte> ").Append(name).Append('(').Append(parameters).Append(')')
             .Open()
             // ponytail: un ArrayBufferWriter por llamada; solo para bytes que deben sobrevivir a la llamada (claves de cache).
             // Primitivos exactos; strings con cota UTF-8 (cabecera 8 + 3/char, sin recorrer el string: nunca crece); packables/valores parten de 64 y crecen.
@@ -335,7 +335,7 @@ public partial class ServiceHandlersGenerator
             };
             // Async con maquina de estados (pooled) solo si la capa interna espera; si no, devuelve el ValueTask ya completado.
             awaits = isAsync && inner.ToString().Contains("await ");
-            inner.Append("\n\nreturn ").Append(isAsync && !awaits ? "new global::System.Threading.Tasks.ValueTask<" + resType + ">(" + result + ")" : result).Append(';');
+            inner.PrependLine(2, "return ").Append(isAsync && !awaits ? "new global::System.Threading.Tasks.ValueTask<" + resType + ">(" + result + ")" : result).Append(';');
         }
 
         var assigned = results.Select((r, i) => (i == 0 && target != null) || outs[i - (target is null ? 0 : 1)].IsOut ? "var " + r.Name : r.Name).ToList();
@@ -448,7 +448,7 @@ public partial class ServiceHandlersGenerator
         // Solo devuelve GetRawAsync: su ValueTask sale tal cual, sin async ni maquina de estados.
         bool direct = valueTask && readsResponse && retry is null && cacheKey is null && asyncChain is not { Count: > 0 };
         // Los miembros del cliente van un nivel dentro de su clase.
-        code.Indent().Append("\n\n");
+        code.Indent().PrependLine(2);
         if (valueTask && !direct) code.Append(PooledBuilder(readsResponse)).Append('\n');
         code.Append(direct ? "public global::System.Threading.Tasks." : "public async global::System.Threading.Tasks.").Append(valueTask ? "ValueTask" : "Task")
             .Append(readsResponse ? "<" + TupleOf(responseTypes) + ">" : null).Append(' ').Append(name).Append('(').Append(asyncParams);
@@ -471,13 +471,13 @@ public partial class ServiceHandlersGenerator
 
         // Contrato async sin token: la sobrecarga publica anade uno opcional y no lo implementa.
         if (isTask && tokenName is null)
-            code.Append("\n\n").Append(method.ReturnType.GlobalNamespaced).Append(' ').Append(iFace.GlobalNamespaced).Append('.').Append(method.Name)
+            code.PrependLine(2, method.ReturnType.GlobalNamespaced).Append(' ').Append(iFace.GlobalNamespaced).Append('.').Append(method.Name)
                 .Append('(').Append(asyncParams).Append(") => ").Append(name).Append('(')
                 .Append(string.Join(", ", method.Parameters.Select(p => p.Name))).Append(");");
 
         if (!isTask)
         {
-            code.Append("\n\npublic ").Append(method.GlobalMemberSignature).Open();
+            code.PrependLine(2, "public ").Append(method.GlobalMemberSignature).Open();
             if (cacheKey != null) OpenClientCache(code, n, cacheKey, tokenName, false);
             returned = EmitCall(code, retry, $"{conn}.GetRaw({serviceId}, {reqArgs}, {reader}" + (tokenName is null ? "" : $", {tokenName}") + ")", readsResponse ? "__res" : null, tokenName, false, resType,
                 MiddlewareChain(mws, false, "__provider.", method, contribution), captures, ret: cacheKey is null && response.Count == 0);

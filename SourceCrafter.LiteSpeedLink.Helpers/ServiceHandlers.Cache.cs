@@ -280,8 +280,8 @@ public partial class ServiceHandlersGenerator
     {
         var manager = "global::SourceCrafter.LiteSpeedLink.CacheManager<" + key.Type + ", " + valueType + ">";
 
-        helpers.Append("\n\nprivate ").Append(manager).Append(" __cache").Append(n).Append(";\n\nprivate ").Append(manager).Append(" __Cache").Append(n)
-            .Append(" =>\n    global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache").Append(n).Append(", static () => new ").Append(manager)
+        helpers.PrependLine(2, "private ").Append(manager).Append(" __cache").Append(n).Append(';').PrependLine(2, "private ").Append(manager).Append(" __Cache").Append(n)
+            .Append(" =>").Line("global::System.Threading.LazyInitializer.EnsureInitialized(ref __cache", 1).Append(n).Append(", static () => new ").Append(manager)
             .Append('(').Append(cache.DurationMs).Append(", ").Append(cache.Capacity)
             .Append(key.Bytes ? ", global::SourceCrafter.LiteSpeedLink.ByteContentComparer.Instance" : null).Append("));");
 

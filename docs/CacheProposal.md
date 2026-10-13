@@ -1,6 +1,6 @@
 # Propuesta: `[ClientCache]` / `[ServerCache]`
 
-Estado: propuesta (revisión 3: clave de caché).
+Estado: **implementada** (revisión 3: clave de caché). `ClientCacheManager`/`ServerCacheManager`, `[CacheKey]` y SCLSL017-019; el cliente comparte la petición en vuelo entre llamadas idénticas concurrentes. Ejemplo combinado con retry, middleware y processor async: `LiteSpeedLink/ComplexSample.cs`.
 
 ## Objetivo
 

@@ -28,12 +28,21 @@ public static class Program
         {
             var t = args.FirstOrDefault(a => a is "tcp" or "uds" or "memory" or "quicstream");
             if (args.Contains("gen")) return AllocProbe.RunGeneratedAsync().GetAwaiter().GetResult();
+            if (args.Contains("lat")) return AllocProbe.RunCacheLatencyAsync().GetAwaiter().GetResult();
             if (args.Contains("conc")) return AllocProbe.RunConcurrencyAsync().GetAwaiter().GetResult();
+            if (args.Contains("memc")) return AllocProbe.RunMemoryAsync().GetAwaiter().GetResult();
             if (args.Contains("srv")) return AllocProbe.RunServerAsync().GetAwaiter().GetResult();
+            if (args.Contains("cmplat")) return AllocProbe.RunComparisonLatencyAsync().GetAwaiter().GetResult();
             if (args.Contains("cmp")) return AllocProbe.RunComparisonAsync(args.Contains("unary")).GetAwaiter().GetResult();
             return (args.Contains("quic") ? AllocProbe.RunQuicAsync()
                 : t is null ? AllocProbe.RunStreamAsync()
                 : AllocProbe.RunAsync(t == "quicstream" ? "quic" : t)).GetAwaiter().GetResult();
+        }
+
+        if (args.Contains("--leak") && OperatingSystem.IsWindows())
+        {
+            return LeakProbe.RunAsync(args.FirstOrDefault(a => !a.StartsWith('-') && !char.IsDigit(a[0])),
+                args.Select(a => int.TryParse(a, out var v) ? v : 0).FirstOrDefault(v => v > 3, 10)).GetAwaiter().GetResult();
         }
 
         if (args.Contains("--quicpool") && OperatingSystem.IsWindows())

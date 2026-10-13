@@ -18,6 +18,7 @@ public class DedicatedStreamTest
         public interface IContract : IServiceUnit
         {
             [DedicatedStream] byte[] Big(int size);
+            [DedicatedStream] System.Collections.Generic.IAsyncEnumerable<int> Feed(int count);
             int Small(int value);
         }
 
@@ -36,9 +37,27 @@ public class DedicatedStreamTest
 
         r.Errors.Should().BeEmpty();
         var client = r.Sources.Single(s => s.Key.Contains("Contract.client")).Value;
-        // Big: sync + async por la vista dedicada; Small sigue por el pool.
-        client.Split("__connection.Dedicated.").Length.Should().Be(dedicated ? 3 : 1);
+        // Big: sync + async por la vista dedicada; Feed: stream dedicado; Small sigue por el pool.
+        client.Split("__connection.Dedicated.").Length.Should().Be(dedicated ? 4 : 1);
         client.Should().Contain("__connection.GetRaw");
+    }
+
+    /// <summary>Punto 2: streams QUIC por el pool multiplexado (por defecto) y por la vista dedicada; concurrentes e intercalados.</summary>
+    [Fact]
+    [RequiresPreviewFeatures]
+    [SupportedOSPlatform("windows")]
+    public async Task StreamsRunOnPoolAndDedicated()
+    {
+        var cert = Constants.GetDevCert();
+        await using var server = await Server.StartQuicServerAsync(0, (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, (int)op)), () => { }, cert);
+        await using var connection = new DnsEndPoint("localhost", server.LocalEndPoint.Port).AsQuicConnection(cert, unaryStreams: 2);
+
+        static async Task<List<int>> Drain(IAsyncEnumerable<int> e) { var l = new List<int>(); await foreach (var i in e) l.Add(i); return l; }
+
+        var runs = Enumerable.Range(1, 40).Select(n => Drain((n % 2 == 0 ? connection : connection.Dedicated).EnumerateAsync<int>(n * 10))).ToArray();
+        var results = await Task.WhenAll(runs);
+
+        for (int n = 1; n <= 40; n++) results[n - 1].Should().Equal(Enumerable.Range(0, n * 10));
     }
 
     [Fact]

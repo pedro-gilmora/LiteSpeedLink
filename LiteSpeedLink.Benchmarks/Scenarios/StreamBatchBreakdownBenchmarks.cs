@@ -8,10 +8,9 @@ using System.Runtime.Versioning;
 namespace LiteSpeedLink.Benchmarks.Scenarios;
 
 /// <summary>
-/// Desglose por causa del coste de un stream de 1000 enteros:
-/// <c>Batch=0,Coalesce=false</c> = base (un frame, un handoff y un flush por item);
-/// <c>Coalesce=true</c> aisla el handoff por item del lector; <c>Batch&gt;0</c> aisla framing/copias/escrituras;
-/// barrer <c>Batch</c> mide el efecto del tamano de lote configurable.
+/// Stream de 1000 enteros con el lote por defecto del servidor; <c>Coalesce</c> aisla el agrupado del lector.
+/// El barrido de tamano de lote se retiro con el <c>streamBatch</c> de runtime (punto 7 de PerformanceMemoryEnhancements):
+/// la politica por operacion la fija <c>[Stream(Batch, MaxDelayMs)]</c> en compilacion.
 /// </summary>
 [MemoryDiagnoser]
 [SupportedOSPlatform("windows")]
@@ -27,10 +26,6 @@ public class StreamBatchBreakdownBenchmarks
 
     private const int Items = 1000;
 
-    // int.MaxValue = solo por bytes (32 KB) o cuando el productor va a esperar, como Memory.
-    [Params(0, 8, 64, 256, int.MaxValue)]
-    public int Batch { get; set; }
-
     [Params(false, true)]
     public bool Coalesce { get; set; }
 
@@ -39,15 +34,15 @@ public class StreamBatchBreakdownBenchmarks
     {
         RequestHandler handler = (op, ctx, _) => ctx.EnumerateAsync(() => Enumerable.Range(0, ctx.Get<int>()));
 
-        _tcpServer = Server.StartTcpServer(0, handler, () => { }, streamBatch: Batch);
+        _tcpServer = Server.StartTcpServer(0, handler, () => { });
         _tcp = new TcpConnection(new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)_tcpServer.LocalEndpoint).Port), coalesceStreams: Coalesce);
 
         var cert = Constants.GetDevCert();
-        _quicServer = await Server.StartQuicServerAsync(0, handler, () => { }, cert, default, Batch);
+        _quicServer = await Server.StartQuicServerAsync(0, handler, () => { }, cert);
         _quic = new DnsEndPoint("localhost", _quicServer.LocalEndPoint.Port).AsQuicConnection(cert);
 
         string path = Path.Combine(Path.GetTempPath(), $"Breakdown-{Guid.CreateVersion7():N}.sock");
-        _udsServer = Server.StartUdsServer(path, handler, () => { }, streamBatch: Batch);
+        _udsServer = Server.StartUdsServer(path, handler, () => { });
         _uds = new UdsConnection(path, coalesceStreams: Coalesce);
 
         await Tcp(); await Uds(); await Quic();

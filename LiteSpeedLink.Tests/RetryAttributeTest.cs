@@ -104,7 +104,7 @@ public class RetryAttributeTest
         // out declarado fuera del bucle para que la respuesta lo vea.
         host.Should().Contain("string value;").And.Contain("out value");
         // Server processors fuera del bucle.
-        var shout = host[host.IndexOf("IContract.Shout(")..];
+        var shout = host[host.IndexOf(" __Shout_")..];
         shout.IndexOf(".Process(").Should().BeLessThan(shout.IndexOf("for (var __attempt"));
     }
 

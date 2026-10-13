@@ -58,15 +58,16 @@ Las columnas 2 a 5 de las filas 5, 7, 9, 10, 12 y 14 se perdieron en ediciones a
 
 | # | Estado | Evidencia |
 |---|---|---|
-| 8 | Hecho | `Lsl_Unary` 41 → 39 µs, 2,07 KB → 903 B |
+| 8 | Hecho | `Lsl_Unary` 41 → 39 µs, 2,07 KB → 903 B (hoy 34 µs / 390 B) |
 | 1 | Hecho | `SourceGenPocBenchmarks.Policy_*`, `StreamPolicyTypeTest` |
 | 3 | Hecho (TCP/UDS/QUIC) | `UdsTest` |
 | 4 | Descartado | `DenseDispatchPoc` |
 | 12 | Hecho (salvo streams) | `ParamEncodingPoc`, `UdsTest.TestRawRoundtrip`, `RawCapacityTest`, POC `IAuth.TouchAsync` |
-| 15 | Hecho (defecto TCP/UDS) | `Comparison`: `Lsl_Stream` 196 µs vs `AspNetSlim_Stream` 229 µs |
+| 15 | Hecho (defecto TCP/UDS) | `Comparison`: `Lsl_Stream` 196 → 60 µs vs `AspNetSlim_Stream` 212 µs (con lotes por defecto) |
 | 2, 9, 10, 13 | Descartados | Ver inventario |
 | 5, 6, 7 | Diferidos | Solo si un perfil muestra la rama en el camino caliente |
 | 14 | Hecho (opt-in) | `QuicPoolContentionPoc`, `DedicatedStreamTest` |
+| 11 | Hecho (reabierto por Enhancements #2): streams QUIC por el pool; `[DedicatedStream]` para largos | `QuicOverheadBenchmarks.LslPooled` 135,8 → 74,6 µs, 6,9 → 1,4 KB; `DedicatedStreamTest.StreamsRunOnPoolAndDedicated` |
 | — | Hecho: generador dividido host/cliente | `GeneratorHarness`, suite 94/94 |
 
 **Siguiente en el generador:** nada abierto con ganancia medida. Candidatos solo con perfil: raw en streams (#12), #5/#6/#7, y modos de stream de `MemChannel` (`Take`/`Window`/`IdleTimeoutMs` como atributos, ver PLAN *Modos de stream en MemChannel*) cuando haya un caso real.

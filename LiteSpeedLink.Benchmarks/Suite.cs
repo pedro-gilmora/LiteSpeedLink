@@ -38,7 +38,7 @@ public enum Suite
     /// <summary>PoC aislado: stream por item vs agrupado en lector vs lotes en protocolo (TCP loopback).</summary>
     StreamBatching = 1 << 8,
 
-    /// <summary>Desglose por causa: tamano de lote (servidor) x agrupado en lector (cliente), TCP y QUIC.</summary>
+    /// <summary>Stream con el lote por defecto x agrupado en lector (cliente), TCP/UDS/QUIC.</summary>
     StreamBatchBreakdown = 1 << 9,
 
     /// <summary>POC estudio source-gen: runtime vs forma generada (framing, dispatch, stream), sin red.</summary>

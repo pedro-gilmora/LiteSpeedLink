@@ -42,8 +42,8 @@ internal static class QuicPoolContentionPoc
         for (int round = 0; round < 2; round++) // ronda 0 = calentamiento
         {
             await Measure(conn, "sin grande", null, round);
-            await Measure(conn, "grande en pool", async ct => _ = await conn.GetAsync<int, byte[]>(LargePooled, 0, ct), round);
-            await Measure(conn, "grande stream", async ct => { await foreach (var _ in conn.EnumerateAsync<int, byte[]>(LargeOwn, 0, ct)) { } }, round);
+            await Measure(conn, "grande en pool", ct => conn.GetAsync<int, byte[]>(LargePooled, 0, ct).AsTask(), round);
+            await Measure(conn, "grande stream", ct => Drain(conn.EnumerateAsync<int, byte[]>(LargeOwn, 0, ct)), round);
         }
         return 0;
 
@@ -53,32 +53,42 @@ internal static class QuicPoolContentionPoc
     private static async Task Measure(SourceCrafter.LiteSpeedLink.Client.QuicConnection conn, string name, Func<CancellationToken, Task>? large, int round)
     {
         using var stop = new CancellationTokenSource();
-        long larges = 0;
-        var bg = large is null ? [] : Enumerable.Range(0, LargeLoops).Select(_ => Task.Run(async () =>
-        {
-            try { while (!stop.IsCancellationRequested) { await large(stop.Token); Interlocked.Increment(ref larges); } }
-            catch (OperationCanceledException) { }
-        })).ToArray();
+        var bg = large is null ? [] : Enumerable.Range(0, LargeLoops).Select(_ => Task.Run(() => LargeLoop(large, stop.Token))).ToArray();
 
         await Task.Delay(50); // que las grandes esten en vuelo
         var lat = new long[Workers * CallsPerWorker];
         var sw = Stopwatch.StartNew();
-        await Task.WhenAll(Enumerable.Range(0, Workers).Select(w => Task.Run(async () =>
-        {
-            for (int i = 0; i < CallsPerWorker; i++)
-            {
-                long t = Stopwatch.GetTimestamp();
-                if (await conn.GetAsync<int, int>(Small, 0) != 7) throw new InvalidOperationException("small");
-                lat[w * CallsPerWorker + i] = Stopwatch.GetTimestamp() - t;
-            }
-        })));
+        await Task.WhenAll(Enumerable.Range(0, Workers).Select(w => Task.Run(() => SmallCalls(conn, lat, w))));
         var elapsed = sw.Elapsed.TotalSeconds;
         stop.Cancel();
-        await Task.WhenAll(bg);
+        long larges = (await Task.WhenAll(bg)).Sum();
         if (round == 0) return;
 
         Array.Sort(lat);
         static double Us(long ticks) => ticks * 1_000_000.0 / Stopwatch.Frequency;
         Console.WriteLine($"{name,-18}{Us((long)lat.Average()),10:F1}{Us(lat[lat.Length / 2]),10:F1}{Us(lat[(int)(lat.Length * 0.99)]),10:F1}{Us(lat[^1]),10:F1}{larges / elapsed,11:F1}");
+    }
+
+    private static async Task<long> LargeLoop(Func<CancellationToken, Task> large, CancellationToken stop)
+    {
+        long done = 0;
+        try { while (!stop.IsCancellationRequested) { await large(stop); done++; } }
+        catch (OperationCanceledException) { }
+        return done;
+    }
+
+    private static async Task SmallCalls(SourceCrafter.LiteSpeedLink.Client.QuicConnection conn, long[] lat, int w)
+    {
+        for (int i = 0; i < CallsPerWorker; i++)
+        {
+            long t = Stopwatch.GetTimestamp();
+            if (await conn.GetAsync<int, int>(Small, 0) != 7) throw new InvalidOperationException("small");
+            lat[w * CallsPerWorker + i] = Stopwatch.GetTimestamp() - t;
+        }
+    }
+
+    private static async Task Drain<T>(IAsyncEnumerable<T> items)
+    {
+        await foreach (var _ in items) { }
     }
 }

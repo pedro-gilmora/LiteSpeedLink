@@ -8,18 +8,31 @@ namespace LiteSpeedLink.Tests;
 
 public class StreamBatchConcurrencyTest
 {
+    private readonly struct Batched16 : IStreamPolicy
+    {
+        public static int Items => 16;
+        public static long MaxDelayTicks => long.MaxValue;
+    }
+
     /// <summary>Streams y unarias entrelazados en una misma conexion: cada llamada recibe solo lo suyo y en orden.</summary>
     [Theory]
     [InlineData(0, false)]
     [InlineData(0, true)]
-    [InlineData(16, false)]
-    [InlineData(16, true)]
-    public async Task ConcurrentCallsOnOneConnectionDoNotMix(int streamBatch, bool coalesce)
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public async Task ConcurrentCallsOnOneConnectionDoNotMix(int policy, bool coalesce)
     {
         using var cts = new CancellationTokenSource(10000);
         var server = Server.StartTcpServer(0, (op, ctx, _) => op == 0
             ? ctx.ReturnAsync(ctx.Get<int>() * 2)
-            : ctx.EnumerateAsync(() => Tagged(ctx.Get<int>())), () => { }, streamBatch: streamBatch);
+            : policy switch
+            {
+                0 => ctx.EnumerateAsync<int, Unbatched>(Tagged(ctx.Get<int>())),
+                1 => ctx.EnumerateAsync(Tagged(ctx.Get<int>())),
+                _ => ctx.EnumerateAsync<int, Batched16>(Tagged(ctx.Get<int>())),
+            }, () => { });
 
         try
         {

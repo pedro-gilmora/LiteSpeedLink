@@ -60,4 +60,33 @@ public class CodeBuilderTest
 
         code.ToString().Should().Be("{\n    x();");
     }
+
+    [Fact]
+    public void Line_offset_applies_to_that_line_only()
+    {
+        var code = new CodeBuilder(1);
+        code.Line("Run(").Line("a,", 1).Append("b").Append(",\nc").Line("done:", -1).Line("x();").Line("y", -5);
+
+        code.ToString().Should().Be("    Run(\n        a,b,\n    c\ndone:\n    x();\ny");
+        code.Depth.Should().Be(1);
+    }
+
+    [Fact]
+    public void PrependLine_breaks_exactly_n_times_like_appending_newlines()
+    {
+        var code = new CodeBuilder(1);
+        code.Append("a;").PrependLine(2, "b;").PrependLine(2, "c;").PrependLine(1);
+
+        code.ToString().Should().Be(new CodeBuilder(1).Append("a;\n\nb;\n\nc;\n").ToString())
+            .And.Be("    a;\n\n    b;\n\n    c;\n");
+    }
+
+    [Fact]
+    public void Parens_wraps_only_when_asked()
+    {
+        var code = new CodeBuilder();
+        code.Parens(() => code.Append("a, b")).Append(' ').Parens(() => code.Append("c"), wrap: false).Parens(null);
+
+        code.ToString().Should().Be("(a, b) c()");
+    }
 }

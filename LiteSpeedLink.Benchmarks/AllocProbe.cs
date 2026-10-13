@@ -64,7 +64,6 @@ internal sealed class AllocProbe : EventListener
         : [
             (nameof(bench.Lsl_Stream), bench.Lsl_Stream),
             (nameof(bench.AspNetSlim_Stream), bench.AspNetSlim_Stream),
-            (nameof(bench.Lsl_StreamBatched), bench.Lsl_StreamBatched),
             (nameof(bench.AspNetSlim_StreamBatched), bench.AspNetSlim_StreamBatched),
         ];
 
@@ -99,12 +98,87 @@ internal sealed class AllocProbe : EventListener
             (nameof(bench.Lsl_Processor), bench.Lsl_Processor),
             (nameof(bench.Lsl_ClientRetry), bench.Lsl_ClientRetry),
             (nameof(bench.Lsl_ServerRetry), bench.Lsl_ServerRetry),
+            (nameof(bench.Lsl_ServerCacheHit), bench.Lsl_ServerCacheHit),
+            (nameof(bench.Lsl_CacheKeyHit), bench.Lsl_CacheKeyHit),
         ];
 
         foreach (var (name, run) in rows) await Measure(name, run, 200_000);
 
         await bench.Cleanup();
         return 0;
+    }
+
+    /// <summary>
+    /// <c>--alloc lat</c>: Plain y aciertos de cache intercalados por rondas en el mismo proceso, latencia por llamada.
+    /// La deriva de loopback entre corridas de BDN (Plain 39 a 62 us) afecta a todas las filas por igual: lo publicable es el delta.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static async Task<int> RunCacheLatencyAsync()
+    {
+        var bench = new FeatureBenchmarks();
+        await bench.Setup();
+        (string Name, Func<Task> Run)[] rows =
+        [
+            (nameof(bench.Lsl_Plain), bench.Lsl_Plain),
+            (nameof(bench.Lsl_ServerCacheHit), bench.Lsl_ServerCacheHit),
+            (nameof(bench.Lsl_CacheKeyHit), bench.Lsl_CacheKeyHit),
+            (nameof(bench.AspNetSlim_Plain), bench.AspNetSlim_Plain),
+            (nameof(bench.AspNetSlim_ServerCacheHit), bench.AspNetSlim_ServerCacheHit),
+            (nameof(bench.AspNetSlim_CacheKeyHit), bench.AspNetSlim_CacheKeyHit),
+        ];
+        await Interleave(rows, 40, 2_000);
+        await bench.Cleanup();
+        return 0;
+    }
+
+    /// <summary><c>--alloc cmplat</c>: punto 7, filas por defecto frente a sus variantes opt-in, intercaladas en el mismo proceso.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static async Task<int> RunComparisonLatencyAsync()
+    {
+        var bench = new Comparison.ComparisonBenchmarks();
+        await bench.Setup();
+        await Interleave(
+        [
+            (nameof(bench.Lsl_Unary), bench.Lsl_Unary),
+            (nameof(bench.Lsl_UnaryRaw), bench.Lsl_UnaryRaw),
+        ], 40, 2_000);
+        await Interleave(
+        [
+            (nameof(bench.Lsl_Stream), bench.Lsl_Stream),
+            (nameof(bench.Lsl_StreamPerItem), bench.Lsl_StreamPerItem),
+        ], 40, 200);
+        await bench.Cleanup();
+        return 0;
+    }
+
+    private static async Task Interleave((string Name, Func<Task> Run)[] rows, int rounds, int chunk)
+    {
+        var ticks = rows.Select(_ => new long[rounds * chunk]).ToArray();
+        var bytes = new long[rows.Length];
+
+        foreach (var (_, run) in rows) for (int i = 0; i < chunk; i++) await run();
+
+        for (int r = 0; r < rounds; r++)
+            for (int k = 0; k < rows.Length; k++)
+            {
+                long b0 = GC.GetTotalAllocatedBytes(true);
+                for (int i = 0; i < chunk; i++)
+                {
+                    long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                    await rows[k].Run();
+                    ticks[k][r * chunk + i] = System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+                }
+                bytes[k] += GC.GetTotalAllocatedBytes(true) - b0;
+            }
+
+        double us(long t) => t * 1e6 / System.Diagnostics.Stopwatch.Frequency;
+        Console.WriteLine($"{rounds} rondas x {chunk} llamadas, intercaladas. us: p50 / p90 / p99 / media; B/op (proceso)");
+        for (int k = 0; k < rows.Length; k++)
+        {
+            var s = ticks[k];
+            Array.Sort(s);
+            Console.WriteLine($"{rows[k].Name,-26} {us(s[s.Length / 2]),7:F2} {us(s[s.Length * 9 / 10]),7:F2} {us(s[s.Length * 99 / 100]),7:F2} {us((long)s.Average()),7:F2} {bytes[k] / (double)(rounds * chunk),7:F0}");
+        }
     }
 
     /// <summary>
@@ -143,12 +217,77 @@ internal sealed class AllocProbe : EventListener
 
         await bench.Cleanup();
         return 0;
+    }
 
-        static Task Parallel(Func<Task<int>> run, int c, int calls) =>
-            Task.WhenAll(Enumerable.Range(0, c).Select(async _ =>
-            {
-                for (int i = calls / c; i > 0; i--) await run();
-            }));
+    /// <summary>
+    /// <c>--alloc memc</c>: MemoryConnection con el mismo arnes que la POC MemChannel (c workers en bucle, 20k llamadas,
+    /// us/llamada = tiempo / llamadas * c). Separa el coste del arnes BDN (Task.Run + WhenAll por ronda) del de la ruta.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static async Task<int> RunMemoryAsync()
+    {
+        var bench = new MemoryConcurrencyBenchmarks();
+        await bench.Setup();
+        var conn = new SourceCrafter.LiteSpeedLink.Client.MemoryConnection(bench.ContextId, 5000);
+        const int rounds = 20_000;
+
+        foreach (int c in (int[])[1, 8, 64])
+        {
+            await Workers(c, rounds / 10);
+            GC.Collect();
+            using var probe = new AllocProbe();
+            long before = GC.GetTotalAllocatedBytes(true);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await Workers(c, rounds);
+            sw.Stop();
+            long total = GC.GetTotalAllocatedBytes(true) - before;
+            Console.WriteLine($"MemoryConnection c={c}: {sw.Elapsed.TotalMicroseconds / rounds * c:F1} us/llamada, {total / (double)rounds:F0} B/llamada");
+            foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(6))
+                Console.WriteLine($"   {bytes / (double)rounds,7:F1} B/op  {type}");
+
+            bench.Concurrency = c;
+            await bench.Memory();
+            before = GC.GetTotalAllocatedBytes(true);
+            sw.Restart();
+            for (int i = 0; i < rounds / c; i++) await bench.Memory();
+            sw.Stop();
+            total = GC.GetTotalAllocatedBytes(true) - before;
+            Console.WriteLine($"  arnes BDN c={c}: {sw.Elapsed.TotalMicroseconds / (rounds / c):F1} us/op, {total / (double)(rounds / c):F0} B/op");
+        }
+
+        foreach (int c in (int[])[1, 64])
+        {
+            await Workers(c, rounds / 10, send: true);
+            GC.Collect();
+            using var probe = new AllocProbe();
+            long before = GC.GetTotalAllocatedBytes(true);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await Workers(c, rounds, send: true);
+            sw.Stop();
+            long total = GC.GetTotalAllocatedBytes(true) - before;
+            Console.WriteLine($"MemoryConnection.SendAsync c={c}: {sw.Elapsed.TotalMicroseconds / rounds * c:F1} us/llamada, {total / (double)rounds:F0} B/llamada");
+            foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(6))
+                Console.WriteLine($"   {bytes / (double)rounds,7:F1} B/op  {type}");
+        }
+
+        conn.Dispose();
+        await bench.Cleanup();
+        return 0;
+
+        async Task Workers(int c, int calls, bool send = false)
+        {
+            int next = -1;
+            var tasks = new Task[c];
+            for (int w = 0; w < c; w++)
+                tasks[w] = Task.Run(async () =>
+                {
+                    int i;
+                    while ((i = Interlocked.Increment(ref next)) < calls)
+                        if (send) await conn.SendAsync(0, i);
+                        else if (await conn.GetAsync<int, int>(0, i) != i + 1) throw new InvalidOperationException("respuesta ajena");
+                });
+            await Task.WhenAll(tasks);
+        }
     }
 
     /// <summary>Host con handler asincrono (POC S1-S3): cajas y registro del servidor por peticion.</summary>
@@ -177,12 +316,15 @@ internal sealed class AllocProbe : EventListener
 
         poc.Cleanup();
         return 0;
+    }
 
-        static Task Parallel(Func<Task> run, int c, int calls) =>
-            Task.WhenAll(Enumerable.Range(0, c).Select(async _ =>
-            {
-                for (int i = calls / c; i > 0; i--) await run();
-            }));
+    // Func<Task<int>> entra por covarianza.
+    private static Task Parallel(Func<Task> run, int c, int calls) =>
+        Task.WhenAll(Enumerable.Range(0, c).Select(_ => Loop(run, calls / c)));
+
+    private static async Task Loop(Func<Task> run, int n)
+    {
+        for (; n > 0; n--) await run();
     }
 
     private static async Task Measure(string name, Func<Task> run, int calls)
@@ -190,10 +332,12 @@ internal sealed class AllocProbe : EventListener
         for (int i = 0; i < 200; i++) await run();
         using var probe = new AllocProbe();
         long before = GC.GetTotalAllocatedBytes(true);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < calls; i++) await run();
+        sw.Stop();
         long total = GC.GetTotalAllocatedBytes(true) - before;
 
-        Console.WriteLine($"{name}: {total / (double)calls:F0} B/op");
+        Console.WriteLine($"{name}: {total / (double)calls:F0} B/op, {sw.Elapsed.TotalMicroseconds / calls:F2} us/op");
         foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(20))
             Console.WriteLine($"{bytes * 100.0 / total,6:F1}%  {bytes / (double)calls,7:F1} B/op  {type}");
         Console.WriteLine();

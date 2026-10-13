@@ -21,8 +21,8 @@ namespace LiteSpeedLink.Benchmarks.Comparison;
 #pragma warning disable CA2252 // QUIC es preview: el banco lo acepta a sabiendas
 public class QuicComparisonBenchmarks
 {
-    private QuicListener _lslServer = null!, _lslBatchServer = null!;
-    private SourceCrafter.LiteSpeedLink.Client.QuicConnection _lsl = null!, _lslBatched = null!;
+    private QuicListener _lslServer = null!;
+    private SourceCrafter.LiteSpeedLink.Client.QuicConnection _lsl = null!;
     private WebApplication _slim = null!;
     private HttpClient _slimClient = null!;
 
@@ -36,9 +36,6 @@ public class QuicComparisonBenchmarks
             ? ctx.ReturnAsync(ctx.Get<(int, int)>().Item1 + ctx.Get<(int, int)>().Item2)
             : ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { }, cert);
         _lsl = new DnsEndPoint("localhost", _lslServer.LocalEndPoint.Port).AsQuicConnection(cert);
-
-        _lslBatchServer = await Server.StartQuicServerAsync(0, static (op, ctx, _) => ctx.EnumerateAsync(Enumerable.Range(0, ctx.Get<int>())), () => { }, cert, default, StreamBatch);
-        _lslBatched = new DnsEndPoint("localhost", _lslBatchServer.LocalEndPoint.Port).AsQuicConnection(cert);
 
         int p;
         using (var probe = new System.Net.Sockets.UdpClient(new IPEndPoint(IPAddress.Loopback, 0))) p = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
@@ -62,14 +59,14 @@ public class QuicComparisonBenchmarks
 
         await Lsl_Unary(); await AspNetSlimH3_Unary();
         await Lsl_Stream(); await AspNetSlimH3_Stream();
-        await Lsl_StreamBatched(); await AspNetSlimH3_StreamBatched();
+        await AspNetSlimH3_StreamBatched();
     }
 
     [GlobalCleanup]
     public async Task Cleanup()
     {
-        await _lsl.DisposeAsync(); await _lslBatched.DisposeAsync();
-        await _lslServer.DisposeAsync(); await _lslBatchServer.DisposeAsync();
+        await _lsl.DisposeAsync();
+        await _lslServer.DisposeAsync();
         _slimClient.Dispose(); await _slim.DisposeAsync();
     }
 
@@ -89,14 +86,6 @@ public class QuicComparisonBenchmarks
 
     [Benchmark, BenchmarkCategory("Stream")]
     public Task<int> AspNetSlimH3_Stream() => SlimStream(_slimClient, $"/range/{Items}");
-
-    [Benchmark, BenchmarkCategory("Stream")]
-    public async Task<int> Lsl_StreamBatched()
-    {
-        int n = 0;
-        await foreach (var i in _lslBatched.EnumerateAsync<int, int>(1, Items)) if (i == n) n++;
-        return Count(n);
-    }
 
     [Benchmark, BenchmarkCategory("Stream")]
     public Task<int> AspNetSlimH3_StreamBatched() => SlimStream(_slimClient, $"/range-batched/{Items}");

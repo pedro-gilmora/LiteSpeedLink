@@ -99,10 +99,9 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         (long op,
          TIn payload,
          CancellationToken token = default,
-         [CallerMemberName] string name = "")
-    {
-        return OpenStream<TOut, TIn>((op, payload), token).ToBlockingEnumerable(token);
-    }
+         [CallerMemberName] string name = "") 
+        => 
+        OpenStream<TOut, TIn>((op, payload), token).ToBlockingEnumerable(token);
 
     public IEnumerable<TOut> Enumerate<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op,
@@ -116,44 +115,37 @@ public sealed class MemoryConnection(string contextId, int timeout = 5000, Syste
         (long op,
          TIn payload,
          CancellationToken token = default,
-         [CallerMemberName] string name = "")
-    {
-        return MemoryRpc.CallAsync((op, payload), WriteRequest, ReadValue<TOut>, this, _timeout, token);
-    }
+         [CallerMemberName] string name = "") => MemoryRpc.CallAsync((op, payload), WriteRequest, ReadValue<TOut>, this, _timeout, token);
 
     public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op,
          CancellationToken token = default,
-         [CallerMemberName] string name = "")
-    {
-        return MemoryRpc.CallAsync(op, WriteOp, ReadValue<TOut>, this, _timeout, token);
-    }
+         [CallerMemberName] string name = "") => MemoryRpc.CallAsync(op, WriteOp, ReadValue<TOut>, this, _timeout, token);
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
         (long op,
          TIn payload,
          CancellationToken token = default,
-         [CallerMemberName] string name = "")
-    {
+         [CallerMemberName] string name = "") 
+        => 
         await MemoryRpc.CallAsync((op, payload), WriteRequest, ReadValue<byte>, this, _timeout, token).ConfigureAwait(false);
-    }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SendAsync(
         long op,
         CancellationToken token = default,
-        [CallerMemberName] string name = "")
-    {
+        [CallerMemberName] string name = "") 
+        => 
         await MemoryRpc.CallAsync(op, WriteOp, ReadValue<byte>, this, _timeout, token).ConfigureAwait(false);
-    }
 
     public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op,
          TIn payload,
          CancellationToken token = default,
-         [CallerMemberName] string name = "")
-    {
-        return OpenStream<TOut, TIn>((op, payload), token);
-    }
+         [CallerMemberName] string name = "") 
+        => 
+        OpenStream<TOut, TIn>((op, payload), token);
 
     /// <summary>Como <see cref="EnumerateAsync{TIn, TOut}(long, TIn, CancellationToken, string)"/> con el watchdog fijado por el contrato ([Stream(IdleTimeoutMs)]).</summary>
     public IAsyncEnumerable<TOut> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
