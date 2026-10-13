@@ -166,28 +166,9 @@ jobs:
           dotnet pack "$project" -c Release -p:Version=${{ env.VERSION }} || exit 1
         done
 
-    - name: Detect packaged code changes
-      # Publicar solo aporta valor si cambio el codigo que se empaqueta: se miran
-      # los proyectos publicables, la metadata comun y los submodulos compilados dentro.
-      id: changes
-      env:
-        GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        PR_NUMBER: ${{ needs.resolve.outputs.number }}
-      run: |
-        if [ -n "${PR_NUMBER}" ]; then
-          files=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
-        else
-          files=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ needs.resolve.outputs.head_sha }}" --jq '.files[].filename')
-        fi
-
-        changed=$(grep -E '^(LiteSpeedLink\.Abstractions/.*\.(cs|csproj)|SourceCrafter\.LiteSpeedLink\.(Core|Client|Server|ClientGenerator|ServerGenerator|Helpers)/.*\.(cs|csproj|props)|Package\.props|external/(SharedMemory|SourceCrafter\.DependencyInjection))$' <<< "$files" | head -n 1)
-
-        echo "has_source_changes=$([ -n "$changed" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
     - name: Publish packages to Nuget
-      # La rama que decide es la destino del merge: en un evento de PR github.ref_name
-      # apunta a la referencia de la propia PR.
-      if: needs.resolve.outputs.base_ref == 'dev' && steps.changes.outputs.has_source_changes == 'true'
+      # Se publica solo si el commit (o la PR) empieza por [Release]; la rama que decide es la destino del merge.
+      if: needs.resolve.outputs.base_ref == 'dev' && startsWith(needs.resolve.outputs.title, '[Release]')
       id: publish
       run: |
         declare -A packages

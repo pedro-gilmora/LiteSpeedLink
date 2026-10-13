@@ -16,7 +16,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.283.228" />
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.286.181" />
 	</ItemGroup>
 
 </Project>
