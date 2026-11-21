@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\Package.props" />
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<Configurations>Debug;Release;DEBUG_SG</Configurations>
+		<IsTrimmable>true</IsTrimmable>
+		<IsAotCompatible>true</IsAotCompatible>
+		<Description>LiteSpeedLink on any .NET host (IHost): a generated host runs as a hosted service, using the app's services, settings and lifetime.</Description>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
+	</ItemGroup>
+
+</Project>

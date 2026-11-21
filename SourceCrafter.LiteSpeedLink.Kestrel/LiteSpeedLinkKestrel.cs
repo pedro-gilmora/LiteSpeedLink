@@ -1,9 +1,7 @@
 using System.Net;
-using System.Net.Security;
-using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,8 +13,10 @@ public static class LiteSpeedLinkKestrel
     /// <summary>
     /// Kestrel acepta las conexiones TCP de <paramref name="endpoint"/> (sin HTTP) y <typeparamref name="THost"/> las atiende.
     /// El host es un singleton de la app con <see cref="IHostedLiteSpeedLink.HostServices"/> = sus servicios.
-    /// Con <paramref name="certificate"/>: TLS de Kestrel con el modo y la validacion que <typeparamref name="THost"/> fija en compilacion
-    /// (<c>[ServiceHost(Tls, Check)]</c>), como <c>StartTcpServer</c>; las opciones se construyen una vez para todas las conexiones.
+    /// De Kestrel se toma su configuracion y su conexion: TLS con su adaptador HTTPS (sus valores por defecto: certificado, protocolos,
+    /// <c>HandshakeTimeout</c>) mas el modo y la validacion que <typeparamref name="THost"/> fija en compilacion (<c>[ServiceHost(Tls, Check)]</c>);
+    /// tope de conexiones (<c>Limits.MaxConcurrentConnections</c>); fin de conexion (cierre del cliente o su peticion de cierre al parar);
+    /// y plazo de una trama a medias (<c>Limits.RequestHeadersTimeout</c>).
     /// </summary>
     public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, IPEndPoint endpoint, X509Certificate2? certificate = null)
         where THost : class, IHostedLiteSpeedLink, new()
@@ -26,24 +26,47 @@ public static class LiteSpeedLinkKestrel
                 .AddHostedService(sp => new HostDisposer<THost>(sp.GetRequiredService<THost>())))
             .ConfigureKestrel(kestrel => kestrel.Listen(endpoint, listen =>
             {
-                if (TlsPolicy.ForServer(certificate, THost.Tls, THost.Check, SslProtocols.Tls12) is { } tls)
-                    listen.UseHttps(new TlsHandshakeCallbackOptions
+                if (THost.Tls is TlsMode.Server or TlsMode.Mutual || (THost.Tls is TlsMode.Default && certificate is not null))
+                    listen.UseHttps(https =>
                     {
-                        OnConnection = _ => new(tls),
-                        HandshakeTimeout = TimeSpan.FromMilliseconds(Server.TlsHandshakeTimeoutMs)
+                        // Parte de ConfigureHttpsDefaults; el certificado explicito gana.
+                        if (certificate is not null) https.ServerCertificate = certificate;
+
+                        https.CheckCertificateRevocation = false;
+
+                        if (THost.Tls is TlsMode.Server)
+                        {
+                            https.ClientCertificateMode = ClientCertificateMode.NoCertificate;
+                            return;
+                        }
+
+                        https.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
+
+                        // Validador construido una vez (pin SHA-256 precalculado) para todas las conexiones.
+                        var validate = TlsPolicy.Validator(THost.Check is CertificateCheck.Chain ? null : https.ServerCertificate
+                            ?? throw new InvalidOperationException($"CertificateCheck.{THost.Check} pins the server certificate: pass it to UseLiteSpeedLink or set it in ConfigureHttpsDefaults."), THost.Check);
+
+                        https.ClientCertificateValidation = (remote, chain, errors) => validate(https, remote, chain, errors);
                     });
 
                 var services = listen.ApplicationServices;
                 var host = services.GetRequiredService<THost>();
-                // Solo ConnectionClosed: Kestrel esperaria ShutdownTimeout con streams abiertos y luego abortaria.
+                // Sin la peticion de cierre de Kestrel (no deberia faltar): ApplicationStopping, para no agotar ShutdownTimeout con streams abiertos.
                 var stopping = services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping;
+                var limits = listen.KestrelServerOptions.Limits;
 
                 listen.Use(_ => async connection =>
                 {
-                    using var token = CancellationTokenSource.CreateLinkedTokenSource(connection.ConnectionClosed, stopping);
-                    await host.ServeAsync(connection.Transport.Input, connection.Transport.Output, token.Token);
+                    var closing = connection.Features.Get<IConnectionLifetimeNotificationFeature>()?.ConnectionClosedRequested ?? stopping;
+
+                    using var token = CancellationTokenSource.CreateLinkedTokenSource(connection.ConnectionClosed, closing);
+                    // Leido por conexion: la configuracion de Kestrel puede cambiar despues de UseLiteSpeedLink.
+                    await host.ServeAsync(connection.Transport.Input, connection.Transport.Output, token.Token, TimeoutMs(limits.RequestHeadersTimeout));
                 });
             }));
+
+    private static int TimeoutMs(TimeSpan timeout)
+        => timeout == Timeout.InfiniteTimeSpan || timeout.TotalMilliseconds >= int.MaxValue ? Timeout.Infinite : (int)timeout.TotalMilliseconds;
 
     /// <inheritdoc cref="UseLiteSpeedLink{THost}(IWebHostBuilder, IPEndPoint, X509Certificate2?)"/>
     public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, int port, X509Certificate2? certificate = null)

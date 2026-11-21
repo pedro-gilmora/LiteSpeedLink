@@ -60,6 +60,7 @@
     <Project Path="SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Core/SourceCrafter.LiteSpeedLink.Core.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Kestrel/SourceCrafter.LiteSpeedLink.Kestrel.csproj" />
+    <Project Path="SourceCrafter.LiteSpeedLink.Hosting/SourceCrafter.LiteSpeedLink.Hosting.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj" />
   </Folder>
 </Solution>

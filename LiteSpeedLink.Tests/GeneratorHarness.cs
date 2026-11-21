@@ -53,6 +53,8 @@ static class GeneratorHarness
         }
 
         foreach (var name in (string[])["LiteSpeedLink.Abstractions", "SourceCrafter.LiteSpeedLink.Core", "SourceCrafter.LiteSpeedLink.Server", "SourceCrafter.LiteSpeedLink.Client",
+            // Hosting: todo host generado emite tambien su Endpoint (AddLiteSpeedLink), compilado en cada test del generador.
+            "SourceCrafter.LiteSpeedLink.Hosting", "Microsoft.Extensions.Hosting.Abstractions", "Microsoft.Extensions.DependencyInjection.Abstractions",
             "SourceCrafter.DependencyInjection.Metadata", "MemoryPack.Core", "SourceCrafter.DependencyInjection.MsConfiguration.Metadata",
             "Microsoft.Extensions.Configuration", "Microsoft.Extensions.Configuration.Abstractions", "Microsoft.Extensions.Configuration.Binder",
             "Microsoft.Extensions.Configuration.Json", "Microsoft.Extensions.Configuration.FileExtensions", "Microsoft.Extensions.Primitives"])

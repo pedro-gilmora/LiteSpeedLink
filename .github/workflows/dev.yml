@@ -163,6 +163,7 @@ jobs:
           SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj \
           SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj \
           SourceCrafter.LiteSpeedLink.Kestrel/SourceCrafter.LiteSpeedLink.Kestrel.csproj \
+          SourceCrafter.LiteSpeedLink.Hosting/SourceCrafter.LiteSpeedLink.Hosting.csproj \
           SourceCrafter.LiteSpeedLink.ClientGenerator/SourceCrafter.LiteSpeedLink.ClientGenerator.csproj \
           SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj
         do

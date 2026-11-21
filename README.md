@@ -77,6 +77,26 @@ Each transport exposes its own entry points:
 
 The client implements the contract (sync members over network transports are sync-over-async) and adds `*Async` overloads with an optional `CancellationToken`. Async overloads return `out`/`ref` values in a tuple.
 
+### Hosting in an app
+
+Any .NET host (`IHost`: Generic Host, Worker Service, ASP.NET Core) can run a generated host as a hosted service, on any transport. Reference `SourceCrafter.LiteSpeedLink.Hosting`:
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddLiteSpeedLink(new ChatServer.Endpoint { Port = 5310 });
+```
+
+- The host is a singleton of the app with `HostServices` set to the app's services, so its `[Hosted<T>]` registrations resolve from them.
+- It starts listening with the app, stops on `ApplicationStopping`, and stops listening when the app stops.
+- `Endpoint` is generated per host. Whatever the transport and TLS mode need is `required` (`Port` or `Name`, plus `Certificate` when TLS requires one), so a missing value is a compile error. UDP also has `MaxAmplification`.
+- With `[JsonSetting<RemoteOptions|LocalOptions>("Section")]`, `Port`/`Name` become optional. At startup they're read from the app's configuration (`Section:Port`/`Section:Name`) if loaded, otherwise from the container's own settings. An invalid value fails the app's start.
+
+On Kestrel, `builder.WebHost.UseLiteSpeedLink<THost>(port, cert)` (`SourceCrafter.LiteSpeedLink.Kestrel`) serves Kestrel's own connections without HTTP. It takes Kestrel's configuration instead of its own:
+- TLS goes through Kestrel's HTTPS adapter, starting from `ConfigureHttpsDefaults` (certificate, protocols, handshake timeout), with the host's compile-time `Tls`/`Check`.
+- The connection cap is `Limits.MaxConcurrentConnections`.
+- The timeout for a half-received message is `Limits.RequestHeadersTimeout`.
+- Connections end when the client closes or when Kestrel asks them to close at shutdown.
+
 ### Security
 
 TLS is fixed at compile time on `[ServiceHost]`/`[ServiceClient]`. The generator emits the exact certificate parameter and the validation code, so nothing about TLS is decided at runtime, and the TLS options are built once per server or client, not per connection.
@@ -103,7 +123,8 @@ On the client, `cert` is the pin and, with `Mutual`, also the client certificate
 Hosts bound what one peer can hold:
 - **Tcp and Uds:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog.
 - **Tcp TLS:** the handshake must finish within 10 s.
-- **Tcp, Uds and Kestrel:** a connection that stops sending in the middle of a message is closed after 30 s. An idle connection is never closed.
+- **Tcp and Uds:** a connection that stops sending in the middle of a message is closed after 30 s. An idle connection is never closed.
+- **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, the HTTPS handshake timeout).
 - **Quic:** at most 256 streams per connection.
 
 A request id that repeats while its stream is still running is rejected.

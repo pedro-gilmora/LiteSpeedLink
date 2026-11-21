@@ -32,7 +32,8 @@ public interface IHostedLiteSpeedLink
     /// <summary>Servicios del host que acepta las conexiones; <c>null</c> si se arranco con <c>Start</c>.</summary>
     IServiceProvider? HostServices { get; init; }
 
-    Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default);
+    /// <summary><paramref name="partialFrameTimeoutMs"/>: el servidor que aloja el host lo toma de su configuracion (Kestrel: <c>RequestHeadersTimeout</c>).</summary>
+    Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default, int partialFrameTimeoutMs = Server.PartialFrameTimeoutMs);
 }
 
 public static partial class Server

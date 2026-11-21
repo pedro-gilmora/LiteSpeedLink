@@ -184,18 +184,25 @@ public partial class ServiceHandlersGenerator
         // entran al contenedor con [Hosted<T>] (singleton de la app) o [Hosted<T>(Lifetime.Scoped)] (por peticion).
         if (connectionType is 2)
         {
-            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default)")
-                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token);", 1);
+            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default, int partialFrameTimeoutMs = global::SourceCrafter.LiteSpeedLink.Server.PartialFrameTimeoutMs)")
+                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token, partialFrameTimeoutMs: partialFrameTimeoutMs);", 1);
 
             // Kestrel (UseLiteSpeedLink<THost>) lee el TLS fijado en compilacion de estas constantes.
             hostCode.Blank().Line("static global::SourceCrafter.LiteSpeedLink.TlsMode global::SourceCrafter.LiteSpeedLink.IHostedLiteSpeedLink.Tls => global::SourceCrafter.LiteSpeedLink.TlsMode.").Append(TlsModeNames[tls]).Append(';')
                 .Line("static global::SourceCrafter.LiteSpeedLink.CertificateCheck global::SourceCrafter.LiteSpeedLink.IHostedLiteSpeedLink.Check => global::SourceCrafter.LiteSpeedLink.CertificateCheck.").Append(CheckNames[check]).Append(';');
-
-            // Con [Hosted<T>] lo emite el generador de DI; si el usuario lo declara, tampoco.
-            if (serviceHost.GetMembers("HostServices").Length == 0
-                && !serviceHost.GetAttributes().Any(a => a.AttributeClass?.ConstructedFrom.ToDisplayString() == HostedAttr))
-                hostCode.Blank().Line("public global::System.IServiceProvider? HostServices { get; init; }");
         }
+
+        // Hospedable en cualquier IHost (paquete Hosting): solo si el proyecto lo referencia.
+        bool hostable = compilation.GetTypeByMetadataName("SourceCrafter.LiteSpeedLink.IHostedEndpoint`1") is not null;
+
+        // Con [Hosted<T>] lo emite el generador de DI; si el usuario lo declara, tampoco.
+        if ((connectionType is 2 || hostable)
+            && serviceHost.GetMembers("HostServices").Length == 0
+            && !serviceHost.GetAttributes().Any(a => a.AttributeClass?.ConstructedFrom.ToDisplayString() == HostedAttr))
+            hostCode.Blank().Line("public global::System.IServiceProvider? HostServices { get; init; }");
+
+        if (hostable)
+            AppendHostedEndpoint(hostCode, container, typeName!, connectionType, isLocal, certNullability, awaitKeyword is not null);
 
         // Un metodo por operacion: async (pooled) solo si algo de su camino espera (ver EndOperation).
         var pooled = PooledBuilder(true);
@@ -688,6 +695,45 @@ public partial class ServiceHandlersGenerator
             .Line("if (!__cache.TryLead(__cacheKey, out var __flight))")
             .Line("__cached = await __flight.Task.WaitAsync(__token).ConfigureAwait(false);", 1)
             .Open("else try");
+    }
+
+    /// <summary>
+    /// <c>THost.Endpoint</c> para <c>AddLiteSpeedLink</c> en cualquier <c>IHost</c>. Lo que el transporte y el TLS exigen es <c>required</c>
+    /// (puerto o nombre, certificado), asi que falta en compilacion; con <c>[JsonSetting]</c> el endpoint es opcional y en ejecucion se
+    /// toma de la configuracion de la app (si esta cargada) y si no del contenedor. El struct no hereda en el contenedor de DI.
+    /// </summary>
+    private static void AppendHostedEndpoint(CodeBuilder code, ServiceProviderInfo container, string typeName, int connectionType, bool isLocal, string? certNullability, bool isAsync)
+    {
+        bool remote = connectionType is 1 or 2 or 3;
+        string? settings = EndpointSettings(container, remote, out var section);
+        string member = remote ? "Port" : "Name";
+
+        code.Blank().Line("/// <summary>Endpoint de este host para <c>services.AddLiteSpeedLink(new ").Append(typeName).Append(".Endpoint { ... })</c> (paquete Hosting).</summary>")
+            .Line("public readonly struct Endpoint : global::SourceCrafter.LiteSpeedLink.IHostedEndpoint<").Append(typeName).Append('>')
+            .Open()
+            .Line("public ").Append(settings is null ? "required " : null).Append(remote ? "int" : "string").Append(settings is null ? null : "?").Append(' ').Append(member).Append(" { get; init; }");
+
+        if (certNullability is not null)
+            code.Line("public ").Append(certNullability is "" ? "required " : null).Append("global::System.Security.Cryptography.X509Certificates.X509Certificate2").Append(certNullability).Append(" Certificate { get; init; }");
+
+        if (connectionType is 1) code.Line("public int MaxAmplification { get; init; }");
+
+        code.Blank().Line("public ").Append(typeName).Append(" Create(global::System.IServiceProvider services) => new() { HostServices = services };")
+            .Blank().Line("public ").Append(isAsync ? "async " : null).Append("global::System.Threading.Tasks.ValueTask<global::System.IAsyncDisposable> StartAsync(").Append(typeName).Append(" host, global::System.Threading.CancellationToken token)")
+            .Line("=> ", 1).Append(isAsync ? "await " : "new(").Append(isLocal || isAsync ? null : "new global::SourceCrafter.LiteSpeedLink.LocalHost(").Append("__Start").Append(isAsync ? "Async" : null).Append("(host, ");
+
+        if (settings is null) code.Append(member);
+        else code.Append(member).Append(" ?? global::SourceCrafter.LiteSpeedLink.HostSettings.").Append(member).Append("(host.HostServices, \"").Append(section).Append("\") ?? host.").Append(settings).Append('.').Append(member);
+
+        // required no impide asignar null: el host no arranca sin el certificado que su TLS exige.
+        if (certNullability is not null)
+            code.Append(certNullability is ""
+                ? ", Certificate ?? throw new global::System.InvalidOperationException(\"" + typeName + ".Endpoint.Certificate is required by its TLS mode.\")"
+                : ", Certificate");
+
+        code.Append(", token").Append(connectionType is 1 ? ", MaxAmplification" : null).Append(')')
+            .Append(isAsync ? ".ConfigureAwait(false)" : isLocal ? ")" : "))").Append(';')
+            .Close();
     }
 
     /// <summary>

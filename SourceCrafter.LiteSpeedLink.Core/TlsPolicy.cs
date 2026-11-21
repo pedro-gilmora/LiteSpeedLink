@@ -21,6 +21,9 @@ public static class TlsPolicy
 
         ArgumentNullException.ThrowIfNull(certificate);
 
+        // Fallo al arrancar y no en cada handshake: sin clave privada SslStream no puede presentar el certificado.
+        if (!certificate.HasPrivateKey) throw new ArgumentException($"The server certificate '{certificate.Subject}' has no private key.", nameof(certificate));
+
         bool mutual = tls is not TlsMode.Server;
 
         return new()
@@ -41,7 +44,12 @@ public static class TlsPolicy
 
         bool mutual = tls is not TlsMode.Server;
 
-        if (mutual) ArgumentNullException.ThrowIfNull(certificate);
+        if (mutual)
+        {
+            ArgumentNullException.ThrowIfNull(certificate);
+
+            if (!certificate.HasPrivateKey) throw new ArgumentException($"The client certificate '{certificate.Subject}' has no private key.", nameof(certificate));
+        }
 
         return new()
         {

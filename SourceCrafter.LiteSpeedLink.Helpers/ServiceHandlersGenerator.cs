@@ -167,8 +167,13 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
     /// o <c>null</c> si no lo emitira (sin setting, sin <c>JsonConfiguration</c> con su <c>configKey</c> o sin
     /// <c>Microsoft.Extensions.Configuration</c>). Nombre con las mismas reglas: <c>nameFormat</c> con <c>key</c> en Pascal.
     /// </summary>
-    private static string? EndpointSettings(ServiceProviderInfo container, bool remote)
+    private static string? EndpointSettings(ServiceProviderInfo container, bool remote) => EndpointSettings(container, remote, out _);
+
+    /// <param name="section">Ruta de la seccion (<c>[JsonSetting&lt;T&gt;("Endpoint")]</c>): el host hospedado la busca tambien en la configuracion de la app.</param>
+    private static string? EndpointSettings(ServiceProviderInfo container, bool remote, out string section)
     {
+        section = "";
+
         if (container.Compilation.GetTypeByMetadataName("Microsoft.Extensions.Configuration.IConfiguration") is null) return null;
 
         var type = container.ContainerType;
@@ -179,10 +184,11 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
             if (attr.AttributeClass is not { IsGenericType: true } ac
                 || ac.ConstructedFrom.ToDisplayString() != JsonSettingAttr
                 || ac.TypeArguments[0].ToDisplayString() != optionsType
-                || attr.ConstructorArguments is not [{ Value: string { Length: > 0 } }, _, { Value: var key }, { Value: string nameFormat }, { Value: var configKey }, ..])
+                || attr.ConstructorArguments is not [{ Value: string { Length: > 0 } path }, _, { Value: var key }, { Value: string nameFormat }, { Value: var configKey }, ..])
                 continue;
 
             var cfgKey = (configKey?.ToString() ?? "").Trim();
+            section = path;
 
             return type.ContainingAssembly.GetAttributes().Concat(type.GetAttributes()).Any(a =>
                     a.AttributeClass?.ToDisplayString() == JsonConfigAttr
