@@ -4,11 +4,43 @@ namespace SourceCrafter.LiteSpeedLink;
 
 
 #pragma warning disable CS9113 // Parameter is unread.
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public sealed class ServiceHostAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
+/// <summary>TLS del transporte, fijado en compilacion: el generador emite la firma y la validacion exactas.</summary>
+public enum TlsMode
+{
+    /// <summary>Tcp: TLS mutuo si se pasa certificado, texto plano si no. Quic: <see cref="Mutual"/>.</summary>
+    Default,
+    /// <summary>Sin TLS, sin parametro de certificado (no valido en Quic).</summary>
+    None,
+    /// <summary>Solo el host presenta certificado; el cliente lo valida.</summary>
+    Server,
+    /// <summary>Ambos extremos presentan y validan certificado.</summary>
+    Mutual
+}
+
+/// <summary>Como se valida el certificado remoto; fijado en compilacion.</summary>
+public enum CertificateCheck
+{
+    /// <summary>Cadena valida o exactamente el certificado configurado (SHA-256).</summary>
+    ChainOrPinned,
+    /// <summary>Solo cadena valida (CA de confianza).</summary>
+    Chain,
+    /// <summary>Solo el certificado configurado (SHA-256); ignora la cadena.</summary>
+    Pinned
+}
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public sealed class ServiceClientAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute;
+public sealed class ServiceHostAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute
+{
+    public TlsMode Tls { get; set; }
+    public CertificateCheck Check { get; set; }
+}
+
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+public sealed class ServiceClientAttribute(ServiceConnectionType connectionType = ServiceConnectionType.Memory) : Attribute
+{
+    public TlsMode Tls { get; set; }
+    public CertificateCheck Check { get; set; }
+}
 
 /// <summary>Servicio expuesto por un [ServiceClient] como propiedad (IAuth -> Auth).</summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]

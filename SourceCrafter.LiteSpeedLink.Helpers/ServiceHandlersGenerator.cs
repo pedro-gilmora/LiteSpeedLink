@@ -77,16 +77,22 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
 
 #if CLIENT_PARTIAL
 
-            if (TryGetConnectionType(container.ContainerType, ServiceClientAttr, out var clientConnection))
+            if (TryGetConnectionType(container.ContainerType, ServiceClientAttr, out var clientConnection, out var tls, out var check))
             {
                 var isLocal = ResolveLocal(container, ref clientConnection);
-                GenerateServiceClient(container, contribution, clientConnection, isLocal, cancelToken);
+                if (clientConnection == 3 && tls == TlsNone)
+                    contribution.ReportDiagnostic(Diagnostic.Create(QuicWithoutTls, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name));
+                else
+                    GenerateServiceClient(container, contribution, clientConnection, isLocal, tls, check, cancelToken);
             }
 #else
-            if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection))
+            if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection, out var tls, out var check))
             {
                 var isLocal = ResolveLocal(container, ref hostConnection);
-                GenerateServiceHost(container, contribution, hostConnection, isLocal, cancelToken);
+                if (hostConnection == 3 && tls == TlsNone)
+                    contribution.ReportDiagnostic(Diagnostic.Create(QuicWithoutTls, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name));
+                else
+                    GenerateServiceHost(container, contribution, hostConnection, isLocal, tls, check, cancelToken);
             }
 #endif
         }
@@ -110,8 +116,8 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
     /// <summary>Transporte efectivo de <c>Local</c> fuera de Windows; no es un valor publico del enum.</summary>
     private const int UdsConnection = 5;
 
-    /// <summary>Ruta del socket UDS de <c>Local</c>; host y cliente la derivan igual del mismo nombre.</summary>
-    private const string LocalUdsPath = "global::System.IO.Path.Combine(global::System.IO.Path.GetTempPath(), name + \".lsl\")";
+    /// <summary>Ruta del socket UDS de <c>Local</c>; host y cliente la derivan igual del mismo nombre (directorio privado del usuario).</summary>
+    private const string LocalUdsPath = "global::SourceCrafter.LiteSpeedLink.LocalSocket.GetPath(name)";
 
     /// <summary>
     /// <c>[SupportedOSPlatform]</c>/<c>[RequiresPreviewFeatures]</c> del transporte efectivo, emitidos en la clase generada para que el
@@ -192,19 +198,56 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
     private static bool TryGetConnectionType(
         INamedTypeSymbol containerType,
         string attributeMetadataName,
-        out int connectionType)
+        out int connectionType,
+        out int tls,
+        out int check)
     {
         foreach (var attr in containerType.GetAttributes())
         {
             if (attr.AttributeClass?.ToDisplayString() != attributeMetadataName) continue;
 
             connectionType = (int?)attr.ConstructorArguments.FirstOrDefault().Value ?? 0;
+            (tls, check) = (0, 0);
+
+            foreach (var arg in attr.NamedArguments)
+            {
+                if (arg.Key == "Tls" && arg.Value.Value is int t) tls = t;
+                else if (arg.Key == "Check" && arg.Value.Value is int c) check = c;
+            }
+
             return true;
         }
 
-        connectionType = 0;
+        (connectionType, tls, check) = (0, 0, 0);
         return false;
     }
+
+    // Espejo de SourceCrafter.LiteSpeedLink.TlsMode/CertificateCheck (Abstractions): el generador no la referencia.
+    private const int TlsDefault = 0, TlsNone = 1, TlsServer = 2, CheckChain = 1;
+    private static readonly string[] TlsModeNames = ["Default", "None", "Server", "Mutual"];
+    private static readonly string[] CheckNames = ["ChainOrPinned", "Chain", "Pinned"];
+
+    /// <summary>
+    /// Firma del certificado fijada en compilacion: <c>null</c> = sin parametro; <c>"?"</c> = opcional (Tcp por defecto: sin el, texto plano);
+    /// <c>""</c> = obligatorio. Solo cuenta para Tcp (2) y Quic (3).
+    /// </summary>
+    private static string? CertificateNullability(int connectionType, int tls, int check, bool client)
+    {
+        if (connectionType is not (2 or 3) || tls == TlsNone) return null;
+
+        // Cliente que solo valida la cadena del host: no presenta certificado ni necesita pin.
+        if (client && tls == TlsServer && check == CheckChain) return null;
+
+        return connectionType == 2 && tls == TlsDefault ? "?" : "";
+    }
+
+    private static readonly DiagnosticDescriptor QuicWithoutTls = new(
+        "SCLSL022",
+        "QUIC always uses TLS",
+        "'{0}' uses QUIC with Tls = TlsMode.None: QUIC always encrypts, use Server or Mutual",
+        "SourceCrafter.LiteSpeedLink",
+        DiagnosticSeverity.Error,
+        true);
 
     /// <summary>
     /// Indexa los servicios por <c>(lifetime, tipo expuesto, clave)</c>, que es como los

@@ -15,7 +15,8 @@ public static class LiteSpeedLinkKestrel
     /// <summary>
     /// Kestrel acepta las conexiones TCP de <paramref name="endpoint"/> (sin HTTP) y <typeparamref name="THost"/> las atiende.
     /// El host es un singleton de la app con <see cref="IHostedLiteSpeedLink.HostServices"/> = sus servicios.
-    /// Con <paramref name="certificate"/>: TLS mutuo de Kestrel, como <c>StartTcpServer</c> (el cliente generado pasa el mismo certificado).
+    /// Con <paramref name="certificate"/>: TLS de Kestrel con el modo y la validacion que <typeparamref name="THost"/> fija en compilacion
+    /// (<c>[ServiceHost(Tls, Check)]</c>), como <c>StartTcpServer</c>; las opciones se construyen una vez para todas las conexiones.
     /// </summary>
     public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, IPEndPoint endpoint, X509Certificate2? certificate = null)
         where THost : class, IHostedLiteSpeedLink, new()
@@ -25,16 +26,11 @@ public static class LiteSpeedLinkKestrel
                 .AddHostedService(sp => new HostDisposer<THost>(sp.GetRequiredService<THost>())))
             .ConfigureKestrel(kestrel => kestrel.Listen(endpoint, listen =>
             {
-                if (certificate is not null)
-                    listen.UseHttps(new HttpsConnectionAdapterOptions
+                if (TlsPolicy.ForServer(certificate, THost.Tls, THost.Check, SslProtocols.Tls12) is { } tls)
+                    listen.UseHttps(new TlsHandshakeCallbackOptions
                     {
-                        ServerCertificate = certificate,
-                        SslProtocols = SslProtocols.Tls12,
-                        ClientCertificateMode = ClientCertificateMode.RequireCertificate,
-                        CheckCertificateRevocation = false,
-                        // Pinning: cadena valida o exactamente el certificado configurado (autofirmado de desarrollo).
-                        ClientCertificateValidation = (remote, _, errors) =>
-                            errors == SslPolicyErrors.None || remote.GetCertHashString() == certificate.GetCertHashString()
+                        OnConnection = _ => new(tls),
+                        HandshakeTimeout = TimeSpan.FromMilliseconds(Server.TlsHandshakeTimeoutMs)
                     });
 
                 var services = listen.ApplicationServices;

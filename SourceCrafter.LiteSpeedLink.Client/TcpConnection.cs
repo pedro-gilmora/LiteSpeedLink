@@ -6,8 +6,13 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace SourceCrafter.LiteSpeedLink.Client;
 
-public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default, bool coalesceStreams = true) : StreamConnection(coalesceStreams)
+/// <summary>
+/// <paramref name="cert"/>: pin del servidor y, en TLS mutuo, el certificado del cliente. <paramref name="tls"/>/<paramref name="check"/>
+/// los fija el cliente generado en compilacion; las opciones TLS se construyen una vez, no en cada reconexion.
+/// </summary>
+public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default, bool coalesceStreams = true, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned) : StreamConnection(coalesceStreams)
 {
+    private readonly SslClientAuthenticationOptions? _tls = TlsPolicy.ForClient(endpoint, cert, tls, check, SslProtocols.Tls12);
     private TcpClient? _client;
 
     private protected override async Task<(Stream, string)> OpenAsync()
@@ -15,18 +20,14 @@ public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = de
         var client = new TcpClient { NoDelay = true };
         try
         {
-            string targetHost;
-
             switch (endpoint)
             {
                 case DnsEndPoint { Host: string host, Port: int port }:
                     await client.ConnectAsync(host, port).ConfigureAwait(false);
-                    targetHost = host;
                     break;
 
                 case IPEndPoint ip:
                     await client.ConnectAsync(ip).ConfigureAwait(false);
-                    targetHost = ip.Address.ToString();
                     break;
 
                 default:
@@ -35,20 +36,11 @@ public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = de
 
             Stream stream = client.GetStream();
 
-            if (cert is not null)
+            if (_tls is not null)
             {
                 var ssl = new SslStream(stream, false);
 
-                await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                {
-                    TargetHost = targetHost,
-                    ClientCertificates = [cert],
-                    EnabledSslProtocols = SslProtocols.Tls12,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                    // Pinning: valido por cadena o si es exactamente el certificado configurado (autofirmado de desarrollo).
-                    RemoteCertificateValidationCallback = (_, remote, _, errors) =>
-                        errors == SslPolicyErrors.None || remote?.GetCertHashString() == cert.GetCertHashString()
-                }).ConfigureAwait(false);
+                await ssl.AuthenticateAsClientAsync(_tls).ConfigureAwait(false);
 
                 stream = ssl;
             }

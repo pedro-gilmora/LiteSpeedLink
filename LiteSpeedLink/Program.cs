@@ -87,8 +87,10 @@ finally { tcpHost.Stop(); }
 
 if (QuicListener.IsSupported)
 {
-    await using var quicHost = await QuicTextService.StartAsync(5103, Constants.GetDevCert());
-    await using var quicClient = new QuicTextServiceClient("localhost", 5103);
+    var quicCert = Constants.GetDevCert();
+    await using var quicHost = await QuicTextService.StartAsync(5103, quicCert);
+    // QUIC: TLS mutuo por defecto; el cliente presenta el mismo certificado y lo usa de pin.
+    await using var quicClient = new QuicTextServiceClient("localhost", 5103, quicCert);
     var auth = quicClient.Auth;
     await Demo.RunAsync("Quic", auth, auth.GreetAsync);
 

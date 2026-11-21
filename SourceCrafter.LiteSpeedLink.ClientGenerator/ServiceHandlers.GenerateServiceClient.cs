@@ -26,6 +26,8 @@ public partial class ServiceHandlersGenerator
         PartialContribution contribution,
         int connectionType,
         bool isLocal,
+        int tls,
+        int check,
         System.Threading.CancellationToken cancellationToken)
     {
         var compilation = container.Compilation;
@@ -69,16 +71,25 @@ namespace ").Append(nsStr = nss.ToDisplayString()).Append(@";
         string Or(string arg, string member) => settings is null ? arg : arg + " ?? " + settings + "." + member;
         string Param(string type, string name) => settings is null ? type + " " + name : type + (type is "int" ? "?" : null) + " " + name + " = null";
 
+        // TLS fijado en compilacion por [ServiceClient(Tls, Check)]: la firma y la validacion salen exactas, sin decidir en ejecucion.
+        // Con settings los parametros previos son opcionales, asi que el certificado tambien (Mutual lo exige al conectar).
+        string? certNullability = CertificateNullability(connectionType, tls, check, client: true);
+        string? certDecl = certNullability is null ? null
+            : ", global::System.Security.Cryptography.X509Certificates.X509Certificate2" + (certNullability == "?" || settings is not null ? "? certificate = null" : " certificate");
+        string connArgs = connectionType is 2 or 3
+            ? (certNullability is null ? null : "certificate, ") + "tls: global::SourceCrafter.LiteSpeedLink.TlsMode." + TlsModeNames[tls] + ", check: global::SourceCrafter.LiteSpeedLink.CertificateCheck." + CheckNames[check]
+            : "";
+
         clientCode.Append(PlatformAttributes(connectionType)).Append(@"
 public partial class ").Append(typeShortName).Append(@"
 {
     private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
     public ").Append(typeShortName).Append(connectionType > 0 && !isLocal
-            // QUIC, TCP, UDP; TCP con certificado = TLS mutuo (el mismo certificado en ambos extremos o una cadena valida).
-            ? @"(" + Param("string", "hostname") + ", " + Param("int", "port") + (connectionType is 2 ? ", global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = null" : null) + @")
+            // QUIC, TCP, UDP; con certificado: pin del host y, en TLS mutuo, el del cliente.
+            ? @"(" + Param("string", "hostname") + ", " + Param("int", "port") + certDecl + @")
     {
-        __connection = new global::System.Net.DnsEndPoint(" + Or("hostname", "Host") + ", " + Or("port", "Port") + ").As" + connTypeName + "Connection(" + (connectionType is 2 ? "certificate" : null) + ");"
+        __connection = new global::System.Net.DnsEndPoint(" + Or("hostname", "Host") + ", " + Or("port", "Port") + ").As" + connTypeName + "Connection(" + connArgs + ");"
             : "(" + Param("string", isLocal ? "name" : "rpcName") + @")
     {" + (settings is null ? null : @"
         " + (isLocal ? "name" : "rpcName") + " ??= " + settings + ".Name;") + (connectionType is 0

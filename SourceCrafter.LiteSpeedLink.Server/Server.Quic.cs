@@ -22,8 +22,13 @@ public static partial class Server
         RequestHandler handlers,
         Action onFinalize,
         X509Certificate2 cert,
-        CancellationToken token = default)
-        => StartQuicServerAsync(port, new DelegateRequestHandler(handlers), onFinalize, cert, token);
+        CancellationToken token = default,
+        TlsMode tls = TlsMode.Default,
+        CertificateCheck check = CertificateCheck.ChainOrPinned)
+        => StartQuicServerAsync(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, tls, check);
+
+    /// <summary>Streams bidireccionales por conexion; al llegar, QUIC hace esperar al cliente (control de flujo, sin error).</summary>
+    public const int MaxQuicStreamsPerConnection = 256;
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
@@ -34,23 +39,22 @@ public static partial class Server
         THandler handlers,
         Action onFinalize,
         X509Certificate2 cert,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        TlsMode tls = TlsMode.Default,
+        CertificateCheck check = CertificateCheck.ChainOrPinned)
         where THandler : struct, IRequestHandler
     {
+        // QUIC siempre cifra: Default es TLS mutuo, como TCP con certificado.
+        if (tls is TlsMode.None) throw new ArgumentException("QUIC always uses TLS.", nameof(tls));
+
         QuicServerConnectionOptions connectionOptions = new()
         {
             IdleTimeout = TimeSpan.FromMinutes(5),
-            MaxInboundBidirectionalStreams = 1000,
+            MaxInboundBidirectionalStreams = MaxQuicStreamsPerConnection,
             MaxInboundUnidirectionalStreams = 10,
             DefaultStreamErrorCode = 0x0A,
             DefaultCloseErrorCode = 0x0B,
-            ServerAuthenticationOptions = new()
-            {
-                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                ApplicationProtocols = [Constants.protocol, Constants.protocolStream],
-                ServerCertificate = cert,
-                ClientCertificateRequired = false
-            }
+            ServerAuthenticationOptions = TlsPolicy.ForServer(cert, tls is TlsMode.Default ? TlsMode.Mutual : tls, check, SslProtocols.Tls12 | SslProtocols.Tls13)!
         };
 
         var listenerOptions = new QuicListenerOptions

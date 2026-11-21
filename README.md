@@ -70,12 +70,47 @@ Each transport exposes its own entry points:
 | Transport | Host | Client |
 |---|---|---|
 | Memory | `X.Start(name)` | `new XClient(name)` |
-| Udp | `X.Start(port)` | `new XClient(host, port)` |
-| Tcp | `X.Start(port, cert)` | `new XClient(host, port)` |
-| Quic | `await X.StartAsync(port, cert)` | `new XClient(host, port)` |
+| Udp | `X.Start(port, maxAmplification: 0)` | `new XClient(host, port)` |
+| Tcp | `X.Start(port, cert)` | `new XClient(host, port, cert)` |
+| Quic | `await X.StartAsync(port, cert)` | `new XClient(host, port, cert)` |
 | Local | `X.Start(name)` | `new XClient(name)` |
 
 The client implements the contract (sync members over network transports are sync-over-async) and adds `*Async` overloads with an optional `CancellationToken`. Async overloads return `out`/`ref` values in a tuple.
+
+### Security
+
+TLS is fixed at compile time on `[ServiceHost]`/`[ServiceClient]`. The generator emits the exact certificate parameter and the validation code, so nothing about TLS is decided at runtime, and the TLS options are built once per server or client, not per connection.
+
+```csharp
+[ServiceHost(ServiceConnectionType.Quic, Tls = TlsMode.Mutual, Check = CertificateCheck.Pinned)]
+```
+
+| `Tls` | Effect |
+|---|---|
+| `Default` | Tcp: mutual TLS when a certificate is passed, plaintext otherwise. Quic: `Mutual` |
+| `None` | No TLS and no certificate parameter. Not allowed on Quic (SCLSL022) |
+| `Server` | Only the host presents a certificate; the client validates it |
+| `Mutual` | Both ends present and validate a certificate |
+
+| `Check` | Remote certificate accepted when |
+|---|---|
+| `ChainOrPinned` (default) | it has a valid chain, or it is exactly the configured certificate (SHA-256) |
+| `Chain` | it has a valid chain (trusted CA) |
+| `Pinned` | it is exactly the configured certificate (SHA-256), whatever its chain |
+
+On the client, `cert` is the pin and, with `Mutual`, also the client certificate. With `Server` + `Chain`, the client takes no certificate.
+
+Hosts bound what one peer can hold:
+- **Tcp and Uds:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog.
+- **Tcp TLS:** the handshake must finish within 10 s.
+- **Tcp, Uds and Kestrel:** a connection that stops sending in the middle of a message is closed after 30 s. An idle connection is never closed.
+- **Quic:** at most 256 streams per connection.
+
+A request id that repeats while its stream is still running is rejected.
+
+`Local` outside Windows puts its socket in a per-user private directory: `$XDG_RUNTIME_DIR`, or `<tmp>/lsl-<user>` created with mode 0700. It fails closed if that directory isn't private.
+
+**Udp has no authentication, and replies go to the source address of the request, which can be spoofed.** Use it only on trusted networks. To limit reflection, start the host with `maxAmplification: N`, so a reply is never larger than N × the request.
 
 ## Processors
 
@@ -196,6 +231,7 @@ public interface IStreams : IServiceUnit
 | SCLSL019 | Error | Invalid cache key |
 | SCLSL020 | Error | Invalid middleware |
 | SCLSL021 | Warning | Middleware ignored on streams |
+| SCLSL022 | Error | QUIC with `Tls = TlsMode.None` (QUIC always encrypts) |
 
 ## Benchmarks
 

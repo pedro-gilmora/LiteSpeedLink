@@ -52,7 +52,7 @@ static class GeneratorHarness
             try { refs.Add(MetadataReference.CreateFromFile(dll)); } catch (Exception) { }
         }
 
-        foreach (var name in (string[])["LiteSpeedLink.Abstractions", "SourceCrafter.LiteSpeedLink.Server", "SourceCrafter.LiteSpeedLink.Client",
+        foreach (var name in (string[])["LiteSpeedLink.Abstractions", "SourceCrafter.LiteSpeedLink.Core", "SourceCrafter.LiteSpeedLink.Server", "SourceCrafter.LiteSpeedLink.Client",
             "SourceCrafter.DependencyInjection.Metadata", "MemoryPack.Core", "SourceCrafter.DependencyInjection.MsConfiguration.Metadata",
             "Microsoft.Extensions.Configuration", "Microsoft.Extensions.Configuration.Abstractions", "Microsoft.Extensions.Configuration.Binder",
             "Microsoft.Extensions.Configuration.Json", "Microsoft.Extensions.Configuration.FileExtensions", "Microsoft.Extensions.Primitives"])

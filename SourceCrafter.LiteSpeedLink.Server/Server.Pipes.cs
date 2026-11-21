@@ -23,6 +23,12 @@ public readonly struct DelegateRequestHandler(RequestHandler handler) : IRequest
 /// <summary>Host TCP generado alojado en otro servidor (p.ej. Kestrel): atiende sus conexiones y toma sus servicios.</summary>
 public interface IHostedLiteSpeedLink
 {
+    /// <summary>TLS fijado en compilacion por <c>[ServiceHost(Tls = ...)]</c>.</summary>
+    static abstract TlsMode Tls { get; }
+
+    /// <summary>Validacion fijada en compilacion por <c>[ServiceHost(Check = ...)]</c>.</summary>
+    static abstract CertificateCheck Check { get; }
+
     /// <summary>Servicios del host que acepta las conexiones; <c>null</c> si se arranco con <c>Start</c>.</summary>
     IServiceProvider? HostServices { get; init; }
 
@@ -39,19 +45,32 @@ public static partial class Server
     /// <summary>Limite por defecto de peticiones concurrentes por conexion; al llegar se deja de leer el socket (back-pressure TCP).</summary>
     public const int MaxInFlightPerConnection = 256;
 
-    public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection)
+    /// <summary>Plazo sin bytes nuevos mientras hay una trama a medias; una conexion ociosa (sin trama empezada) no lo tiene.</summary>
+    public const int PartialFrameTimeoutMs = 30_000;
+
+    public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection, int partialFrameTimeoutMs = PartialFrameTimeoutMs)
         where THandler : struct, IRequestHandler
     {
         var responses = new ResponseChannel(writer);
         var inflight = new Inflight();
         using var slots = new SemaphoreSlim(maxInFlight);
+        // Uno por conexion y solo si llega una trama a medias: rearmar el temporizador no asigna.
+        CancellationTokenSource? partial = null;
+        bool pending = false;
 
         try
         {
             while (true)
             {
-                var result = await reader.ReadAsync(token).ConfigureAwait(false);
+                var result = await reader.ReadAsync(pending ? partial!.Token : token).ConfigureAwait(false);
                 var buffer = result.Buffer;
+
+                // Llego algo: el plazo solo cubre la espera de bytes, no la de un hueco libre (slots).
+                if (pending)
+                {
+                    partial!.CancelAfter(Timeout.Infinite);
+                    pending = false;
+                }
 
                 while (Framing.TryReadFrame(ref buffer, out var correlationId, out var content))
                 {
@@ -64,14 +83,15 @@ public static partial class Server
 
                     if (content.Length < Framing.OpIdSize) throw new InvalidDataException($"Request too short: {content.Length}.");
 
+                    // Hueco antes de alquilar: con el limite lleno no se retiene un cuerpo mas (la trama sigue en el pipe).
+                    await slots.WaitAsync(token).ConfigureAwait(false);
+
                     // El lector avanza antes de que el handler termine: el cuerpo se copia a un
                     // buffer alquilado que vive lo que dura la peticion.
                     var op = Framing.ReadOpId(content);
                     int length = (int)content.Length - Framing.OpIdSize;
                     var body = ArrayPool<byte>.Shared.Rent(length);
                     content.Slice(Framing.OpIdSize).CopyTo(body);
-
-                    await slots.WaitAsync(token).ConfigureAwait(false);
 
                     var ctx = RequestContext.Rent(correlationId, body.AsMemory(0, length), responses, token);
                     ctx.Track(body, slots, inflight);
@@ -81,9 +101,17 @@ public static partial class Server
                     ctx.Observe(request);
                 }
 
+                bool partialFrame = !buffer.IsEmpty;
+
                 reader.AdvanceTo(buffer.Start, buffer.End);
 
                 if (result.IsCompleted || result.IsCanceled) break;
+
+                if (partialFrame)
+                {
+                    (partial ??= CancellationTokenSource.CreateLinkedTokenSource(token)).CancelAfter(partialFrameTimeoutMs);
+                    pending = true;
+                }
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or InvalidDataException)
@@ -91,6 +119,7 @@ public static partial class Server
         }
         finally
         {
+            partial?.Dispose();
             await inflight.DrainAsync().ConfigureAwait(false);
             responses.DisposeStreams();
 
@@ -177,7 +206,14 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         lock (streams)
         {
             cts = _spareStreams is { Count: > 0 } spare ? spare.Pop() : CancellationTokenSource.CreateLinkedTokenSource(token);
-            streams[correlationId] = cts;
+
+            // Id repetido mientras el primero sigue vivo: pisarlo filtraria este CTS y dejaria que uno cancele al otro.
+            if (!streams.TryAdd(correlationId, cts))
+            {
+                (_spareStreams ??= new()).Push(cts);
+                cts = null;
+                throw new InvalidDataException($"Stream {correlationId} is already running on this connection.");
+            }
         }
 
         return cts.Token;
@@ -189,8 +225,10 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
 
         lock (streams)
         {
-            // Ausente: la trama de cancelacion se lo llevo; su work item lo cancela y lo libera.
-            if (!streams.Remove(correlationId)) return;
+            // Ausente u otro: la trama de cancelacion se lo llevo (su work item lo cancela y lo libera) y el id ya es de otro stream.
+            if (!streams.TryGetValue(correlationId, out var current) || current != cts) return;
+
+            streams.Remove(correlationId);
 
             // Los CTS sobrantes siguen enlazados al token del servidor: DisposeStreams los suelta al cerrar la conexion.
             if (cts.TryReset())

@@ -32,12 +32,6 @@
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlers.Raw.cs" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlersGenerator.cs" />
   </Folder>
-  <Folder Name="/test/" />
-  <Folder Name="/test/POC/">
-    <Project Path="test/POC/KestrelPoc/KestrelPoc.csproj">
-      <BuildType Solution="DEBUG_SG|*" Project="Debug" />
-    </Project>
-  </Folder>
   <Folder Name="/Tests/">
     <Project Path="Application.Contracts/Application.Contracts.csproj" />
     <Project Path="LiteSpeedLink.Benchmarks/LiteSpeedLink.Benchmarks.csproj" />
