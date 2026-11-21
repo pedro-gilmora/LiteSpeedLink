@@ -20,12 +20,23 @@
     <Project Path="samples/Jobs/Jobs.Cli/Jobs.Cli.csproj" />
     <Project Path="samples/Jobs/Jobs.Contracts/Jobs.Contracts.csproj" />
   </Folder>
+  <Folder Name="/Samples/WinChat/">
+    <Project Path="samples/WinChat/WinChat.Contracts/WinChat.Contracts.csproj" />
+    <Project Path="samples/WinChat/WinChat.Desktop/WinChat.Desktop.csproj" />
+    <Project Path="samples/WinChat/WinChat.Server/WinChat.Server.csproj" />
+  </Folder>
   <Folder Name="/Generators/Shared/">
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/Generator.props" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/Helpers.cs" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlers.Pipelines.cs" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlers.Raw.cs" />
     <File Path="SourceCrafter.LiteSpeedLink.Helpers/ServiceHandlersGenerator.cs" />
+  </Folder>
+  <Folder Name="/test/" />
+  <Folder Name="/test/POC/">
+    <Project Path="test/POC/KestrelPoc/KestrelPoc.csproj">
+      <BuildType Solution="DEBUG_SG|*" Project="Debug" />
+    </Project>
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="Application.Contracts/Application.Contracts.csproj" />
@@ -35,6 +46,9 @@
   </Folder>
   <Folder Name="/Tests/POC/">
     <Project Path="test/POC/AuthRetryPoc/AuthRetryPoc.csproj">
+      <BuildType Solution="DEBUG_SG|*" Project="Debug" />
+    </Project>
+    <Project Path="test/POC/KestrelPoc/KestrelPoc.csproj">
       <BuildType Solution="DEBUG_SG|*" Project="Debug" />
     </Project>
     <Project Path="test/POC/PipelineMiddlewarePoc/PipelineMiddlewarePoc.csproj">
@@ -51,6 +65,7 @@
     <Project Path="SourceCrafter.LiteSpeedLink.ClientGenerator/SourceCrafter.LiteSpeedLink.ClientGenerator.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Core/SourceCrafter.LiteSpeedLink.Core.csproj" />
+    <Project Path="SourceCrafter.LiteSpeedLink.Kestrel/SourceCrafter.LiteSpeedLink.Kestrel.csproj" />
     <Project Path="SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj" />
   </Folder>
 </Solution>

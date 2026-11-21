@@ -20,6 +20,15 @@ public readonly struct DelegateRequestHandler(RequestHandler handler) : IRequest
     public ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token) => handler(id, ctx, token);
 }
 
+/// <summary>Host TCP generado alojado en otro servidor (p.ej. Kestrel): atiende sus conexiones y toma sus servicios.</summary>
+public interface IHostedLiteSpeedLink
+{
+    /// <summary>Servicios del host que acepta las conexiones; <c>null</c> si se arranco con <c>Start</c>.</summary>
+    IServiceProvider? HostServices { get; init; }
+
+    Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default);
+}
+
 public static partial class Server
 {
     /// <summary>
@@ -30,7 +39,7 @@ public static partial class Server
     /// <summary>Limite por defecto de peticiones concurrentes por conexion; al llegar se deja de leer el socket (back-pressure TCP).</summary>
     public const int MaxInFlightPerConnection = 256;
 
-    internal static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection)
+    public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection)
         where THandler : struct, IRequestHandler
     {
         var responses = new ResponseChannel(writer);

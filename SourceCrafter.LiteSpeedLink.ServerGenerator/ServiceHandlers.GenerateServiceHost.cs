@@ -95,7 +95,8 @@ public partial class ServiceHandlersGenerator
         if (serviceHost.ContainingNamespace is { IsGlobalNamespace: false } ns)
             hostCode.Blank().Line("namespace ").Append(nsStr = ns.ToDisplayString()).Append(';');
 
-        hostCode.Blank().Append(PlatformAttributes(connectionType).TrimStart()).Line("public partial class ").Append(typeName).Open();
+        hostCode.Blank().Append(PlatformAttributes(connectionType).TrimStart()).Line("public partial class ").Append(typeName)
+            .Append(connectionType is 2 ? " : global::SourceCrafter.LiteSpeedLink.IHostedLiteSpeedLink" : null).Open();
 
         if (isMsLoggerInstalled)
         {
@@ -158,6 +159,23 @@ public partial class ServiceHandlersGenerator
                 .Line("public global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleAsync(long id, global::SourceCrafter.LiteSpeedLink.RequestContext ctx, global::System.Threading.CancellationToken token)")
                 .Line("=> provider.HandleRequestsAsync(id, ctx, token);", 1)
                 .Close();
+
+        // TCP: el mismo protocolo sobre conexiones aceptadas por otro servidor (p.ej. Kestrel), cuyos servicios
+        // quedan al alcance de los metodos factoria del contenedor ([Singleton<T>(source: ...)] + [Root]).
+        if (connectionType is 2)
+        {
+            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default)")
+                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token);", 1);
+
+            // Con [Hosted<T>] lo emite el generador de DI; si el usuario lo declara, tampoco.
+            if (serviceHost.GetMembers("HostServices").Length == 0
+                && !serviceHost.GetAttributes().Any(a => a.AttributeClass?.ConstructedFrom.ToDisplayString() == HostedAttr))
+                hostCode.Blank().Line("public global::System.IServiceProvider? HostServices { get; init; }");
+
+            hostCode.Blank().Line("// GetService(Type) y no GetRequiredService<T>: el analizador de SourceCrafter.DependencyInjection intercepta este ultimo (SCDI11).")
+                .Line("private T HostService<T>() where T : notnull")
+                .Line("=> (T)(HostServices?.GetService(typeof(T)) ?? throw new global::System.InvalidOperationException($\"{typeof(T)} is not available in HostServices.\"));", 1);
+        }
 
         // Un metodo por operacion: async (pooled) solo si algo de su camino espera (ver EndOperation).
         var pooled = PooledBuilder(true);

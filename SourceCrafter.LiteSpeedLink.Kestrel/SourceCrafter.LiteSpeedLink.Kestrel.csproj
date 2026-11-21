@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="..\Package.props" />
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<Configurations>Debug;Release;DEBUG_SG</Configurations>
+		<IsTrimmable>true</IsTrimmable>
+		<IsAotCompatible>true</IsAotCompatible>
+		<Description>LiteSpeedLink on Kestrel: Kestrel accepts the TCP connections and a generated host serves them, using the app's services and lifetime.</Description>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+		<ProjectReference Include="..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
+	</ItemGroup>
+
+</Project>

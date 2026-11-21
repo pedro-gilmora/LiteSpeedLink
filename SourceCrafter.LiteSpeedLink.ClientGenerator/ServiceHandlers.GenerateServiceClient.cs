@@ -75,10 +75,10 @@ public partial class ").Append(typeShortName).Append(@"
     private readonly global::SourceCrafter.LiteSpeedLink.Client.").Append(connTypeName).Append(@"Connection __connection;
 
     public ").Append(typeShortName).Append(connectionType > 0 && !isLocal
-            // QUIC, TCP, UDP
-            ? @"(" + Param("string", "hostname") + ", " + Param("int", "port") + @")
+            // QUIC, TCP, UDP; TCP con certificado = TLS mutuo (el mismo certificado en ambos extremos o una cadena valida).
+            ? @"(" + Param("string", "hostname") + ", " + Param("int", "port") + (connectionType is 2 ? ", global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = null" : null) + @")
     {
-        __connection = new global::System.Net.DnsEndPoint(" + Or("hostname", "Host") + ", " + Or("port", "Port") + ").As" + connTypeName + "Connection();"
+        __connection = new global::System.Net.DnsEndPoint(" + Or("hostname", "Host") + ", " + Or("port", "Port") + ").As" + connTypeName + "Connection(" + (connectionType is 2 ? "certificate" : null) + ");"
             : "(" + Param("string", isLocal ? "name" : "rpcName") + @")
     {" + (settings is null ? null : @"
         " + (isLocal ? "name" : "rpcName") + " ??= " + settings + ".Name;") + (connectionType is 0

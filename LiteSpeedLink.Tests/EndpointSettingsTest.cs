@@ -90,6 +90,17 @@ public class EndpointSettingsTest
 
         r.Errors.Should().BeEmpty();
         r.Sources.Single(s => s.Key.Contains("Host.host")).Value.Should().NotContain("Settings");
-        r.Sources.Single(s => s.Key.Contains("Client.client")).Value.Should().Contain("(string hostname, int port)");
+        r.Sources.Single(s => s.Key.Contains("Client.client")).Value.Should().Contain("(string hostname, int port, global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = null)");
+    }
+
+    [Fact]
+    public void TcpHostServesExternalConnections()
+    {
+        var r = GeneratorHarness.Run(Source.Replace("[assembly: JsonConfiguration]", "").Replace("TRANSPORT", "Tcp").Replace("SETTING", "").Replace("USE", """
+            IHostedLiteSpeedLink host = new Host { HostServices = null };
+            _ = host.ServeAsync(System.IO.Pipelines.PipeReader.Create(System.IO.Stream.Null), System.IO.Pipelines.PipeWriter.Create(System.IO.Stream.Null));
+            """), msConfig: true);
+
+        r.Errors.Should().BeEmpty();
     }
 }

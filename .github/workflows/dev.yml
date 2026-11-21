@@ -19,6 +19,8 @@ permissions:
   contents: write
   pull-requests: read
   actions: read
+  # Trusted publishing en nuget.org: NuGet/login canjea el token OIDC por una clave de 1 hora.
+  id-token: write
 
 jobs:
   # Cada disparador trae los datos en un sitio distinto: el push los lleva en el
@@ -160,11 +162,19 @@ jobs:
           SourceCrafter.LiteSpeedLink.Core/SourceCrafter.LiteSpeedLink.Core.csproj \
           SourceCrafter.LiteSpeedLink.Client/SourceCrafter.LiteSpeedLink.Client.csproj \
           SourceCrafter.LiteSpeedLink.Server/SourceCrafter.LiteSpeedLink.Server.csproj \
+          SourceCrafter.LiteSpeedLink.Kestrel/SourceCrafter.LiteSpeedLink.Kestrel.csproj \
           SourceCrafter.LiteSpeedLink.ClientGenerator/SourceCrafter.LiteSpeedLink.ClientGenerator.csproj \
           SourceCrafter.LiteSpeedLink.ServerGenerator/SourceCrafter.LiteSpeedLink.ServerGenerator.csproj
         do
           dotnet pack "$project" -c Release -p:Version=${{ env.VERSION }} || exit 1
         done
+
+    - name: NuGet login (trusted publishing)
+      if: needs.resolve.outputs.base_ref == 'dev' && startsWith(needs.resolve.outputs.title, '[Release]')
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: pedro.gilmora
 
     - name: Publish packages to Nuget
       # Se publica solo si el commit (o la PR) empieza por [Release]; la rama que decide es la destino del merge.
@@ -180,11 +190,10 @@ jobs:
           version="${filename##$package_name.}" # everything after
           packages[$package_name]=$version
 
-          output=$(dotnet nuget push "$package" --api-key ${{ secrets.NUGET_API_KEY }} --source "https://api.nuget.org/v3/index.json" 2>&1)
-
-          if [ $? -ne 0 ]; then
+          # 'if !' para que 'bash -e' no aborte antes de registrar el error.
+          if ! output=$(dotnet nuget push "$package" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source "https://api.nuget.org/v3/index.json" 2>&1); then
             unset packages["$package_name"]
-            echo -e "Nuget errors for $package:\n$output\n" >> errors.log
+            echo -e "Nuget errors for $package:\n$output\n" | tee -a errors.log
           fi
         done
 
@@ -196,6 +205,8 @@ jobs:
         json=$(IFS=,; echo "[${json_parts[*]}]")
 
         echo "$json" >> nuget_pkgs.json
+
+        if [ -f errors.log ]; then exit 1; fi
 
     - name: Notify Telegram & GitHub Release
       if: always()

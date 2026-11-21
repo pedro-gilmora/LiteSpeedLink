@@ -7,4 +7,9 @@
 	<Project Path="Jobs/Jobs.Agent/Jobs.Agent.csproj" />
 	<Project Path="Jobs/Jobs.Cli/Jobs.Cli.csproj" />
   </Folder>
+  <Folder Name="/WinChat/">
+	<Project Path="WinChat/WinChat.Contracts/WinChat.Contracts.csproj" />
+	<Project Path="WinChat/WinChat.Server/WinChat.Server.csproj" />
+	<Project Path="WinChat/WinChat.Desktop/WinChat.Desktop.csproj" />
+  </Folder>
 </Solution>

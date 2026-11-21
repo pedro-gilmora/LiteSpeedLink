@@ -7,6 +7,7 @@ Proyectos independientes que consumen los paquetes publicados en nuget.org (`Lit
 | [Hello](Hello) | File-based app (`dotnet run hello.cs`) | Shared memory | boilerplate mínimo: contrato, handler, host y cliente |
 | [Chat](Chat) | Console | TCP | streams en vivo, pipeline de servidor (moderación), estado compartido entre conexiones |
 | [Jobs](Jobs) | Worker Service + CLI | Local (shared memory / UDS) | contrato compartido, agente en segundo plano, CLI que habla con él |
+| [WinChat](WinChat) | ASP.NET Core + WinForms | TCP (sockets de Kestrel) | Kestrel acepta las conexiones y el host generado las atiende (sin HTTP), servicios de la app (`ILogger`) en el contenedor generado, cliente de escritorio |
 
 ## Chat
 
@@ -27,3 +28,11 @@ dotnet run --project Jobs.Cli -- list
 ```
 
 El agente es un Worker Service: se instala como servicio de Windows o unidad systemd sin cambios.
+
+## WinChat
+
+```powershell
+cd samples/WinChat
+dotnet run --project WinChat.Server            # Kestrel: LiteSpeedLink en :5310
+dotnet run --project WinChat.Desktop           # una o varias ventanas: Connect y a chatear
+```

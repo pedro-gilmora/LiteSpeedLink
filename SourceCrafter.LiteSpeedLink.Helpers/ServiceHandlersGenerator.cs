@@ -34,6 +34,7 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
     private const string ServiceHostAttr = "SourceCrafter.LiteSpeedLink.ServiceHostAttribute";
     private const string ServiceClientAttr = "SourceCrafter.LiteSpeedLink.ServiceClientAttribute";
     private const string ServiceUnitAttr = "SourceCrafter.LiteSpeedLink.ServiceUnitAttribute<TService>";
+    private const string HostedAttr = "SourceCrafter.DependencyInjection.Attributes.HostedAttribute<T>";
     private const string cancelTokenFullTypeName = "global::System.Threading.CancellationToken";
 
     /// <summary>

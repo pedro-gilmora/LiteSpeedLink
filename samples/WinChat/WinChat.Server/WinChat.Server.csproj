@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<ItemGroup>
+		<ProjectReference Include="..\WinChat.Contracts\WinChat.Contracts.csproj" />
+		<!--<PackageReference Include="SourceCrafter.LiteSpeedLink.Server" Version="$(LiteSpeedLinkVersion)" />
+		<PackageReference Include="SourceCrafter.LiteSpeedLink.Kestrel" Version="$(LiteSpeedLinkVersion)" />
+		<PackageReference Include="SourceCrafter.LiteSpeedLink.ServerGenerator" Version="$(LiteSpeedLinkVersion)" PrivateAssets="all" />-->
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.325.281" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.Server\SourceCrafter.LiteSpeedLink.Server.csproj" />
+		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.Kestrel\SourceCrafter.LiteSpeedLink.Kestrel.csproj" />
+		<ProjectReference Include="..\..\..\SourceCrafter.LiteSpeedLink.ServerGenerator\SourceCrafter.LiteSpeedLink.ServerGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+	</ItemGroup>
+
+</Project>
