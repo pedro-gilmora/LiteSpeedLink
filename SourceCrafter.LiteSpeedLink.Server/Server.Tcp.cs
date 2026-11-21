@@ -1,4 +1,5 @@
 ﻿using System.IO.Pipelines;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -10,6 +11,12 @@ public static partial class Server
 {
     /// <summary>Limite por defecto de conexiones simultaneas por servidor TCP/UDS; las demas esperan en el backlog del SO.</summary>
     public const int MaxConnections = 1024;
+
+    /// <summary>
+    /// Conexiones simultaneas por direccion remota (IPv6: por /64): una direccion ocupa como mucho 1/16 de <see cref="MaxConnections"/>,
+    /// asi que bloquear a todos exige al menos 16 direcciones; un NAT con hasta 64 clientes (una conexion multiplexada cada uno) sigue entrando.
+    /// </summary>
+    public const int MaxConnectionsPerAddress = MaxConnections / 16;
 
     /// <summary>Plazo del handshake TLS: un cliente que no lo completa no retiene la conexion.</summary>
     public const int TlsHandshakeTimeoutMs = 10_000;
@@ -23,8 +30,9 @@ public static partial class Server
         int maxInFlightPerConnection = MaxInFlightPerConnection,
         int maxConnections = MaxConnections,
         TlsMode tls = TlsMode.Default,
-        CertificateCheck check = CertificateCheck.ChainOrPinned)
-        => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, maxConnections, tls, check);
+        CertificateCheck check = CertificateCheck.ChainOrPinned,
+        int maxConnectionsPerAddress = MaxConnectionsPerAddress)
+        => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, maxConnections, tls, check, maxConnectionsPerAddress);
 
     public static TcpListener StartTcpServer<THandler>(
         int port,
@@ -35,11 +43,13 @@ public static partial class Server
         int maxInFlightPerConnection = MaxInFlightPerConnection,
         int maxConnections = MaxConnections,
         TlsMode tls = TlsMode.Default,
-        CertificateCheck check = CertificateCheck.ChainOrPinned)
+        CertificateCheck check = CertificateCheck.ChainOrPinned,
+        int maxConnectionsPerAddress = MaxConnectionsPerAddress)
         where THandler : struct, IRequestHandler
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlightPerConnection, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxConnections, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConnectionsPerAddress, 1);
 
         // Una vez por servidor: cada conexion reutiliza las mismas opciones y el mismo validador.
         var options = TlsPolicy.ForServer(cert, tls, check, SslProtocols.Tls12);
@@ -49,7 +59,7 @@ public static partial class Server
 
         tcpServer.Start();
 
-        ListenClientsAsync(tcpServer, handlers, onFinalize, options, maxInFlightPerConnection, new SemaphoreSlim(maxConnections), token);
+        ListenClientsAsync(tcpServer, handlers, onFinalize, options, maxInFlightPerConnection, new SemaphoreSlim(maxConnections), new AddressLimiter(maxConnectionsPerAddress), token);
 
         return tcpServer;
 
@@ -60,6 +70,7 @@ public static partial class Server
             SslServerAuthenticationOptions? options,
             int limit,
             SemaphoreSlim connections,
+            AddressLimiter addresses,
             CancellationToken token)
         {
             try
@@ -73,7 +84,26 @@ public static partial class Server
                     try { client = await tcpServer.AcceptTcpClientAsync(token).ConfigureAwait(false); }
                     catch { connections.Release(); throw; }
 
-                    _ = HandleConnectionAsync(client, handlers, options, limit, connections, token);
+                    // Direccion por encima de su limite: se cierra ya (esperar dejaria a una direccion parar el bucle de todos).
+                    IPAddress? address;
+                    try
+                    {
+                        if (!addresses.TryEnter(client.Client.RemoteEndPoint, out address))
+                        {
+                            client.Dispose();
+                            connections.Release();
+                            continue;
+                        }
+                    }
+                    catch (SocketException)
+                    {
+                        // El cliente ya se fue (RemoteEndPoint de un socket reseteado).
+                        client.Dispose();
+                        connections.Release();
+                        continue;
+                    }
+
+                    _ = HandleConnectionAsync(client, handlers, options, limit, connections, addresses, address, token);
                 }
             }
             catch (Exception ex)
@@ -93,14 +123,17 @@ public static partial class Server
             SslServerAuthenticationOptions? options,
             int limit,
             SemaphoreSlim connections,
+            AddressLimiter addresses,
+            IPAddress? address,
             CancellationToken token)
         {
             using var client = tcpClient;
 
-            client.NoDelay = true;
-
             try
             {
+                // Dentro del try: si falla (socket ya reseteado por el par), el finally devuelve los huecos.
+                client.NoDelay = true;
+
                 Stream stream = client.GetStream();
 
                 if (options != null)
@@ -118,11 +151,12 @@ public static partial class Server
                     await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex) when (ex is OperationCanceledException or IOException or AuthenticationException or TimeoutException)
+            catch (Exception ex) when (ex is OperationCanceledException or IOException or AuthenticationException or TimeoutException or SocketException)
             {
             }
             finally
             {
+                addresses.Exit(address);
                 connections.Release();
             }
         }

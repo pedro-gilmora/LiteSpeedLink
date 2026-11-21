@@ -1,5 +1,6 @@
 ﻿using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
@@ -32,8 +33,9 @@ public interface IHostedLiteSpeedLink
     /// <summary>Servicios del host que acepta las conexiones; <c>null</c> si se arranco con <c>Start</c>.</summary>
     IServiceProvider? HostServices { get; init; }
 
-    /// <summary><paramref name="partialFrameTimeoutMs"/>: el servidor que aloja el host lo toma de su configuracion (Kestrel: <c>RequestHeadersTimeout</c>).</summary>
-    Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default, int partialFrameTimeoutMs = Server.PartialFrameTimeoutMs);
+    /// <summary>Plazos de una trama a medias: el servidor que aloja el host los toma de su configuracion (Kestrel: <c>RequestHeadersTimeout</c>, <c>MinRequestBodyDataRate</c>).</summary>
+    Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default, int partialFrameTimeoutMs = Server.PartialFrameTimeoutMs,
+        int minDataRate = Server.MinDataRateBytesPerSecond, int dataRateGraceMs = Server.DataRateGraceMs);
 }
 
 public static partial class Server
@@ -49,7 +51,17 @@ public static partial class Server
     /// <summary>Plazo sin bytes nuevos mientras hay una trama a medias; una conexion ociosa (sin trama empezada) no lo tiene.</summary>
     public const int PartialFrameTimeoutMs = 30_000;
 
-    public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection, int partialFrameTimeoutMs = PartialFrameTimeoutMs)
+    /// <summary>
+    /// Ritmo minimo de una trama a medias, como <c>MinRequestBodyDataRate</c> de Kestrel (240 B/s, 5 s de gracia): cada trama tiene un plazo
+    /// total gracia + longitud / ritmo, asi que goteando bytes por debajo de <see cref="PartialFrameTimeoutMs"/> no se retiene para siempre. 0 = sin ritmo.
+    /// </summary>
+    public const int MinDataRateBytesPerSecond = 240;
+
+    /// <inheritdoc cref="MinDataRateBytesPerSecond"/>
+    public const int DataRateGraceMs = 5_000;
+
+    public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection,
+        int partialFrameTimeoutMs = PartialFrameTimeoutMs, int minDataRate = MinDataRateBytesPerSecond, int dataRateGraceMs = DataRateGraceMs)
         where THandler : struct, IRequestHandler
     {
         var responses = new ResponseChannel(writer);
@@ -58,6 +70,8 @@ public static partial class Server
         // Uno por conexion y solo si llega una trama a medias: rearmar el temporizador no asigna.
         CancellationTokenSource? partial = null;
         bool pending = false;
+        // Primer byte (Stopwatch) de la trama a medias en curso; 0 = ninguna empezada.
+        long frameStart = 0;
 
         try
         {
@@ -69,12 +83,23 @@ public static partial class Server
                 // Llego algo: el plazo solo cubre la espera de bytes, no la de un hueco libre (slots).
                 if (pending)
                 {
-                    partial!.CancelAfter(Timeout.Infinite);
+                    // Vencio a la vez que llegaban datos: un CTS cancelado no se puede rearmar, se descarta.
+                    if (partial!.IsCancellationRequested)
+                    {
+                        partial.Dispose();
+                        partial = null;
+                    }
+                    else partial.CancelAfter(Timeout.Infinite);
+
                     pending = false;
                 }
 
+                bool consumed = false;
+
                 while (Framing.TryReadFrame(ref buffer, out var correlationId, out var content))
                 {
+                    consumed = true;
+
                     // [len][corrId] sin opId: el cliente abandono ese stream.
                     if (content.IsEmpty)
                     {
@@ -102,20 +127,38 @@ public static partial class Server
                     ctx.Observe(request);
                 }
 
-                bool partialFrame = !buffer.IsEmpty;
+                long partialFrame = buffer.Length;
+                int frameLength = partialFrame >= Framing.LengthPrefixSize ? Framing.ReadLength(buffer) : 0;
 
                 reader.AdvanceTo(buffer.Start, buffer.End);
 
                 if (result.IsCompleted || result.IsCanceled) break;
 
-                if (partialFrame)
+                if (partialFrame == 0)
                 {
-                    (partial ??= CancellationTokenSource.CreateLinkedTokenSource(token)).CancelAfter(partialFrameTimeoutMs);
-                    pending = true;
+                    frameStart = 0;
+                    continue;
                 }
+
+                // Trama nueva (no habia o se acaba de consumir la anterior): su plazo total cuenta desde ahora.
+                long now = Stopwatch.GetTimestamp();
+                if (frameStart == 0 || consumed) frameStart = now;
+
+                int timeoutMs = partialFrameTimeoutMs;
+
+                if (minDataRate > 0)
+                {
+                    // Plazo total de la trama: gracia + longitud / ritmo, contado desde su primer byte.
+                    long remainingMs = dataRateGraceMs + frameLength * 1000L / minDataRate - (now - frameStart) * 1000 / Stopwatch.Frequency;
+                    if (remainingMs <= 0) throw new TimeoutException("Partial frame below the minimum data rate.");
+                    timeoutMs = timeoutMs < 0 ? (int)Math.Min(remainingMs, int.MaxValue) : (int)Math.Min(timeoutMs, remainingMs);
+                }
+
+                (partial ??= CancellationTokenSource.CreateLinkedTokenSource(token)).CancelAfter(timeoutMs);
+                pending = true;
             }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or InvalidDataException)
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or InvalidDataException or TimeoutException)
         {
         }
         finally

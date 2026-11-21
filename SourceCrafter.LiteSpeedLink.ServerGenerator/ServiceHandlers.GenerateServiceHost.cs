@@ -184,8 +184,8 @@ public partial class ServiceHandlersGenerator
         // entran al contenedor con [Hosted<T>] (singleton de la app) o [Hosted<T>(Lifetime.Scoped)] (por peticion).
         if (connectionType is 2)
         {
-            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default, int partialFrameTimeoutMs = global::SourceCrafter.LiteSpeedLink.Server.PartialFrameTimeoutMs)")
-                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token, partialFrameTimeoutMs: partialFrameTimeoutMs);", 1);
+            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default, int partialFrameTimeoutMs = global::SourceCrafter.LiteSpeedLink.Server.PartialFrameTimeoutMs, int minDataRate = global::SourceCrafter.LiteSpeedLink.Server.MinDataRateBytesPerSecond, int dataRateGraceMs = global::SourceCrafter.LiteSpeedLink.Server.DataRateGraceMs)")
+                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token, partialFrameTimeoutMs: partialFrameTimeoutMs, minDataRate: minDataRate, dataRateGraceMs: dataRateGraceMs);", 1);
 
             // Kestrel (UseLiteSpeedLink<THost>) lee el TLS fijado en compilacion de estas constantes.
             hostCode.Blank().Line("static global::SourceCrafter.LiteSpeedLink.TlsMode global::SourceCrafter.LiteSpeedLink.IHostedLiteSpeedLink.Tls => global::SourceCrafter.LiteSpeedLink.TlsMode.").Append(TlsModeNames[tls]).Append(';')

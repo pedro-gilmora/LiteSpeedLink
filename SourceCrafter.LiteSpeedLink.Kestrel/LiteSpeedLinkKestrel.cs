@@ -16,9 +16,10 @@ public static class LiteSpeedLinkKestrel
     /// De Kestrel se toma su configuracion y su conexion: TLS con su adaptador HTTPS (sus valores por defecto: certificado, protocolos,
     /// <c>HandshakeTimeout</c>) mas el modo y la validacion que <typeparamref name="THost"/> fija en compilacion (<c>[ServiceHost(Tls, Check)]</c>);
     /// tope de conexiones (<c>Limits.MaxConcurrentConnections</c>); fin de conexion (cierre del cliente o su peticion de cierre al parar);
-    /// y plazo de una trama a medias (<c>Limits.RequestHeadersTimeout</c>).
+    /// plazos de una trama a medias (<c>Limits.RequestHeadersTimeout</c> sin bytes nuevos y ritmo minimo <c>Limits.MinRequestBodyDataRate</c>).
+    /// Kestrel no limita por direccion: <paramref name="maxConnectionsPerAddress"/> (IPv6 por /64) se aplica antes del handshake TLS.
     /// </summary>
-    public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, IPEndPoint endpoint, X509Certificate2? certificate = null)
+    public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, IPEndPoint endpoint, X509Certificate2? certificate = null, int maxConnectionsPerAddress = Server.MaxConnectionsPerAddress)
         where THost : class, IHostedLiteSpeedLink, new()
         => builder
             .ConfigureServices(services => services
@@ -26,6 +27,23 @@ public static class LiteSpeedLinkKestrel
                 .AddHostedService(sp => new HostDisposer<THost>(sp.GetRequiredService<THost>())))
             .ConfigureKestrel(kestrel => kestrel.Listen(endpoint, listen =>
             {
+                ArgumentOutOfRangeException.ThrowIfLessThan(maxConnectionsPerAddress, 1);
+
+                // Primero: una direccion por encima de su limite se corta sin gastar un handshake TLS.
+                var addresses = new AddressLimiter(maxConnectionsPerAddress);
+
+                listen.Use(next => async connection =>
+                {
+                    if (!addresses.TryEnter(connection.RemoteEndPoint, out var address))
+                    {
+                        connection.Abort();
+                        return;
+                    }
+
+                    try { await next(connection); }
+                    finally { addresses.Exit(address); }
+                });
+
                 if (THost.Tls is TlsMode.Server or TlsMode.Mutual || (THost.Tls is TlsMode.Default && certificate is not null))
                     listen.UseHttps(https =>
                     {
@@ -61,17 +79,19 @@ public static class LiteSpeedLinkKestrel
 
                     using var token = CancellationTokenSource.CreateLinkedTokenSource(connection.ConnectionClosed, closing);
                     // Leido por conexion: la configuracion de Kestrel puede cambiar despues de UseLiteSpeedLink.
-                    await host.ServeAsync(connection.Transport.Input, connection.Transport.Output, token.Token, TimeoutMs(limits.RequestHeadersTimeout));
+                    var rate = limits.MinRequestBodyDataRate;
+                    await host.ServeAsync(connection.Transport.Input, connection.Transport.Output, token.Token, TimeoutMs(limits.RequestHeadersTimeout),
+                        rate is null ? 0 : (int)Math.Ceiling(rate.BytesPerSecond), rate is null ? 0 : TimeoutMs(rate.GracePeriod));
                 });
             }));
 
     private static int TimeoutMs(TimeSpan timeout)
         => timeout == Timeout.InfiniteTimeSpan || timeout.TotalMilliseconds >= int.MaxValue ? Timeout.Infinite : (int)timeout.TotalMilliseconds;
 
-    /// <inheritdoc cref="UseLiteSpeedLink{THost}(IWebHostBuilder, IPEndPoint, X509Certificate2?)"/>
-    public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, int port, X509Certificate2? certificate = null)
+    /// <inheritdoc cref="UseLiteSpeedLink{THost}(IWebHostBuilder, IPEndPoint, X509Certificate2?, int)"/>
+    public static IWebHostBuilder UseLiteSpeedLink<THost>(this IWebHostBuilder builder, int port, X509Certificate2? certificate = null, int maxConnectionsPerAddress = Server.MaxConnectionsPerAddress)
         where THost : class, IHostedLiteSpeedLink, new()
-        => builder.UseLiteSpeedLink<THost>(new IPEndPoint(IPAddress.Any, port), certificate);
+        => builder.UseLiteSpeedLink<THost>(new IPEndPoint(IPAddress.Any, port), certificate, maxConnectionsPerAddress);
 
     /// <summary>
     /// Libera el host tras vaciar Kestrel y antes de que la app libere sus servicios: los propios del host aun pueden usarlos.

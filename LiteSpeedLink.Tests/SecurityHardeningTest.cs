@@ -192,13 +192,84 @@ public class SecurityHardeningTest
             ensure.Invoke(null, [dir]);
             File.GetUnixFileMode(dir).Should().Be(Private);
 
+            // Propio con permisos abiertos: el chmod (que solo puede hacer el dueno) lo cierra a 0700.
             File.SetUnixFileMode(dir, Private | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
-            var reuse = () => ensure.Invoke(null, [dir]);
-            reuse.Should().Throw<TargetInvocationException>().WithInnerException<UnauthorizedAccessException>();
+            ensure.Invoke(null, [dir]);
+            File.GetUnixFileMode(dir).Should().Be(Private);
+
+            // Un enlace se rechaza antes del chmod (chmod lo seguiria).
+            var link = dir + "-link";
+            Directory.CreateSymbolicLink(link, dir);
+            try
+            {
+                var viaLink = () => ensure.Invoke(null, [link]);
+                viaLink.Should().Throw<TargetInvocationException>().WithInnerException<UnauthorizedAccessException>();
+            }
+            finally { File.Delete(link); }
         }
         finally
         {
             Directory.Delete(dir);
+        }
+    }
+
+    /// <summary>Revision del diff: una direccion por encima de su limite se corta al aceptar; las demas y la misma al liberar, entran.</summary>
+    [Fact]
+    public async Task ThePerAddressLimitClosesExtraConnectionsFromTheSameAddress()
+    {
+        using var server = Server.StartTcpServer(0, (op, ctx, _) => ctx.ReturnAsync(ctx.Get<int>()), () => { }, maxConnectionsPerAddress: 1);
+        var endpoint = new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)server.LocalEndpoint).Port);
+
+        var first = new TcpConnection(endpoint);
+        (await first.GetAsync<int, int>(0, 1, Within())).Should().Be(1);
+
+        await using (var second = new TcpConnection(endpoint))
+        {
+            var call = async () => await second.GetAsync<int, int>(0, 2, Within());
+            await call.Should().ThrowAsync<Exception>();
+        }
+
+        await first.DisposeAsync();
+        await Task.Delay(200);
+
+        await using var third = new TcpConnection(endpoint);
+        (await third.GetAsync<int, int>(0, 3, Within())).Should().Be(3);
+    }
+
+    /// <summary>Revision del diff: goteando bytes por debajo del plazo sin bytes, la trama a medias se corta por ritmo minimo (plazo total).</summary>
+    [Fact]
+    public async Task ATrickledFrameIsClosedByTheMinimumDataRate()
+    {
+        var trickled = await TrickleAsync(minDataRate: 1000);
+        trickled.Should().BeLessThan(TimeSpan.FromSeconds(1.5));
+
+        // Sin ritmo minimo, el mismo goteo (por debajo del plazo sin bytes) sigue abierto: el plazo total es lo que lo corta.
+        var unlimited = await TrickleAsync(minDataRate: 0);
+        unlimited.Should().BeGreaterThan(TimeSpan.FromSeconds(1.5));
+
+        // Trama de 300 B: plazo total = 100 ms de gracia + 300 B / 1000 B/s = 400 ms; un byte cada 100 ms (< 1 s sin bytes).
+        static async Task<TimeSpan> TrickleAsync(int minDataRate)
+        {
+            var input = new Pipe();
+            var output = new Pipe();
+            var serving = Server.ServePipeAsync(input.Reader, output.Writer, new DelegateRequestHandler((op, ctx, _) => ctx.ReturnAsync(0)), default,
+                partialFrameTimeoutMs: 1000, minDataRate: minDataRate, dataRateGraceMs: 100);
+
+            var header = new byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(header, 300);
+            await input.Writer.WriteAsync(header);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (!serving.IsCompleted && sw.Elapsed < TimeSpan.FromSeconds(2))
+            {
+                await Task.Delay(100);
+                await input.Writer.WriteAsync(new byte[1]);
+            }
+
+            var elapsed = sw.Elapsed;
+            await input.Writer.CompleteAsync();
+            await serving.WaitAsync(TimeSpan.FromSeconds(5));
+            return elapsed;
         }
     }
 

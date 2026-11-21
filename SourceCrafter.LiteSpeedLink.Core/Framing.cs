@@ -45,6 +45,16 @@ public static class Framing
     public static void WriteLength(Span<byte> destination, int length) =>
         BinaryPrimitives.WriteInt32LittleEndian(destination, length);
 
+    /// <summary>Longitud anunciada por el prefijo de <paramref name="buffer"/> (al menos <see cref="LengthPrefixSize"/> bytes), sin consumirlo.</summary>
+    public static int ReadLength(in ReadOnlySequence<byte> buffer)
+    {
+        if (buffer.FirstSpan.Length >= LengthPrefixSize) return BinaryPrimitives.ReadInt32LittleEndian(buffer.FirstSpan);
+
+        Span<byte> length = stackalloc byte[LengthPrefixSize];
+        buffer.Slice(0, LengthPrefixSize).CopyTo(length);
+        return BinaryPrimitives.ReadInt32LittleEndian(length);
+    }
+
     /// <summary>
     /// Intenta extraer un mensaje completo del buffer. TCP es un flujo: una lectura no equivale
     /// a un mensaje, puede entregar fragmentos o varios mensajes juntos.

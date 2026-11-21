@@ -122,14 +122,15 @@ On the client, `cert` is the pin and, with `Mutual`, also the client certificate
 
 Hosts bound what one peer can hold:
 - **Tcp and Uds:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog.
+- **Tcp and Kestrel:** at most 64 connections per remote address (`maxConnectionsPerAddress`, 1/16 of the global cap). IPv6 counts per /64 prefix. Extra connections from that address are closed as soon as they're accepted (before any TLS handshake on Kestrel), so filling the server takes at least 16 addresses.
 - **Tcp TLS:** the handshake must finish within 10 s.
-- **Tcp and Uds:** a connection that stops sending in the middle of a message is closed after 30 s. An idle connection is never closed.
-- **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, the HTTPS handshake timeout).
+- **Tcp and Uds:** a half-received message is closed after 30 s without new bytes, or once it falls below a minimum data rate (240 B/s after a 5 s grace period, like Kestrel's `MinRequestBodyDataRate`). An idle connection is never closed.
+- **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, `MinRequestBodyDataRate`, the HTTPS handshake timeout).
 - **Quic:** at most 256 streams per connection.
 
 A request id that repeats while its stream is still running is rejected.
 
-`Local` outside Windows puts its socket in a per-user private directory: `$XDG_RUNTIME_DIR`, or `<tmp>/lsl-<user>` created with mode 0700. It fails closed if that directory isn't private.
+`Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `<tmp>/lsl-<user>` with mode 0700 for anyone else. Startup fails if that directory is a link or belongs to another user.
 
 **Udp has no authentication, and replies go to the source address of the request, which can be spoofed.** Use it only on trusted networks. To limit reflection, start the host with `maxAmplification: N`, so a reply is never larger than N × the request.
 
