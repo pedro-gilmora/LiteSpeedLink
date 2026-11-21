@@ -181,7 +181,7 @@ public partial class ServiceHandlersGenerator
                 .Close();
 
         // TCP: el mismo protocolo sobre conexiones aceptadas por otro servidor (p.ej. Kestrel), cuyos servicios
-        // quedan al alcance de los metodos factoria del contenedor ([Singleton<T>(source: ...)] + [Root]).
+        // entran al contenedor con [Hosted<T>] (singleton de la app) o [Hosted<T>(Lifetime.Scoped)] (por peticion).
         if (connectionType is 2)
         {
             hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default)")
@@ -195,10 +195,6 @@ public partial class ServiceHandlersGenerator
             if (serviceHost.GetMembers("HostServices").Length == 0
                 && !serviceHost.GetAttributes().Any(a => a.AttributeClass?.ConstructedFrom.ToDisplayString() == HostedAttr))
                 hostCode.Blank().Line("public global::System.IServiceProvider? HostServices { get; init; }");
-
-            hostCode.Blank().Line("// GetService(Type) y no GetRequiredService<T>: el analizador de SourceCrafter.DependencyInjection intercepta este ultimo (SCDI11).")
-                .Line("private T HostService<T>() where T : notnull")
-                .Line("=> (T)(HostServices?.GetService(typeof(T)) ?? throw new global::System.InvalidOperationException($\"{typeof(T)} is not available in HostServices.\"));", 1);
         }
 
         // Un metodo por operacion: async (pooled) solo si algo de su camino espera (ver EndOperation).

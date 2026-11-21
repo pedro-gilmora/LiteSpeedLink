@@ -46,9 +46,6 @@ public sealed class ChatHandler(ChatRooms rooms, ILogger<ChatHandler> logger) : 
 [ServiceHost(ServiceConnectionType.Tcp)]
 [ServiceProvider]
 [Singleton<ChatRooms>]
-[Singleton<ILogger<ChatHandler>>(source: nameof(GetLogger))]
+[Hosted<ILogger<ChatHandler>>]
 [Scoped<IChat, ChatHandler>]
-public partial class ChatServer
-{
-    static ILogger<ChatHandler> GetLogger([Root] ChatServer host) => host.HostService<ILogger<ChatHandler>>();
-}
+public partial class ChatServer;
