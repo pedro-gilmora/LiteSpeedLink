@@ -87,6 +87,31 @@ internal sealed class AllocProbe : EventListener
         return 0;
     }
 
+    /// <summary>`--alloc quiccmp`: QuicComparison.Lsl_Unary/Lsl_Stream (canal multiplexado sobre streams QUIC del pool) por tipo.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static async Task<int> RunQuicComparisonAsync()
+    {
+        var bench = new Comparison.QuicComparisonBenchmarks();
+        await bench.Setup();
+        (string Name, Func<Task<int>> Run, int Calls)[] rows = [(nameof(bench.Lsl_Unary), bench.Lsl_Unary, 100_000), (nameof(bench.Lsl_Stream), bench.Lsl_Stream, 5000)];
+
+        foreach (var (name, run, calls) in rows)
+        {
+            for (int i = 0; i < 500; i++) await run();
+            using var probe = new AllocProbe();
+            long before = GC.GetTotalAllocatedBytes(true);
+            for (int i = 0; i < calls; i++) await run();
+            long total = GC.GetTotalAllocatedBytes(true) - before;
+
+            Console.WriteLine($"{name}: {total / (double)calls:F0} B/op");
+            foreach (var (type, bytes) in probe._bytes.OrderByDescending(kv => kv.Value).Take(15))
+                Console.WriteLine($"{bytes * 100.0 / total,6:F1}%  {bytes / (double)calls,7:F1} B/op  {type}");
+            Console.WriteLine();
+        }
+
+        await bench.Cleanup();
+        return 0;
+    }
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public static async Task<int> RunGeneratedAsync()
     {

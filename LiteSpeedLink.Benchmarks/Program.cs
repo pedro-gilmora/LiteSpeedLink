@@ -1,4 +1,4 @@
-﻿using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Running;
 
 namespace LiteSpeedLink.Benchmarks;
 
@@ -32,6 +32,7 @@ public static class Program
             if (args.Contains("conc")) return AllocProbe.RunConcurrencyAsync().GetAwaiter().GetResult();
             if (args.Contains("memc")) return AllocProbe.RunMemoryAsync().GetAwaiter().GetResult();
             if (args.Contains("srv")) return AllocProbe.RunServerAsync().GetAwaiter().GetResult();
+            if (args.Contains("quiccmp")) return AllocProbe.RunQuicComparisonAsync().GetAwaiter().GetResult();
             if (args.Contains("cmplat")) return AllocProbe.RunComparisonLatencyAsync().GetAwaiter().GetResult();
             if (args.Contains("cmp")) return AllocProbe.RunComparisonAsync(args.Contains("unary")).GetAwaiter().GetResult();
             return (args.Contains("quic") ? AllocProbe.RunQuicAsync()
