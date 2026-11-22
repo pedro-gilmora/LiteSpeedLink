@@ -126,7 +126,7 @@ Hosts bound what one peer can hold:
 - **Tcp TLS:** the handshake must finish within 10 s.
 - **Tcp and Uds:** a half-received message is closed after 30 s without new bytes, or once it falls below a minimum data rate (240 B/s after a 5 s grace period, like Kestrel's `MinRequestBodyDataRate`). An idle connection is never closed.
 - **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, `MinRequestBodyDataRate`, the HTTPS handshake timeout).
-- **Quic:** at most 256 streams per connection.
+- **Quic:** at most 256 streams per connection. Every stream has the same read deadline (30 s without new bytes, 240 B/s minimum rate after a 5 s grace period), including the wait for its first bytes, so a stream that's opened and left idle doesn't hold one of the 256.
 
 Message size and memory per connection:
 - **Request bodies:** up to 4 MB by default (like gRPC). A contract operation that needs more declares it at compile time:

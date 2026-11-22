@@ -107,6 +107,43 @@ public class SecurityHardeningTest
         await serving.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    /// <summary>
+    /// Plazo de lectura de un stream QUIC: un stream que se queda sin los 8 bytes del opId, o con ellos pero sin FIN, se corta
+    /// (antes retenia uno de los 256 huecos de la conexion hasta que el IdleTimeout de 5 min cerraba la conexion).
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(8)]
+    [System.Runtime.Versioning.RequiresPreviewFeatures]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task AStalledQuicStreamIsCutByTheReadDeadline(int bytes)
+    {
+        if (!QuicListener.IsSupported) return;
+
+        var cert = Constants.GetDevCert();
+        await using var server = await Server.StartQuicServerAsync(0, (op, ctx, _) => ctx.ReturnAsync(1), () => { }, cert, partialFrameTimeoutMs: 300, dataRateGraceMs: 300);
+        var endpoint = new DnsEndPoint("localhost", server.LocalEndPoint.Port);
+
+        await using var connection = await System.Net.Quic.QuicConnection.ConnectAsync(new QuicClientConnectionOptions
+        {
+            RemoteEndPoint = endpoint,
+            DefaultStreamErrorCode = 0x0A,
+            DefaultCloseErrorCode = 0x0B,
+            ClientAuthenticationOptions = TlsPolicy.ForClient(endpoint, cert, TlsMode.Mutual, CertificateCheck.ChainOrPinned,
+                System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, [Constants.protocol])!
+        });
+
+        await using var stream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional);
+        // opId 0 (no es el marcador del canal multiplexado) y sin FIN.
+        await stream.WriteAsync(new byte[bytes]);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try { await stream.ReadAsync(new byte[16]).AsTask().WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (QuicException) { }
+
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3));
+    }
+
     /// <summary>Hallazgo 3: con el limite de conexiones lleno, la siguiente espera en el backlog hasta que se libera una.</summary>
     [Fact]
     public async Task TheConnectionCapQueuesExtraConnections()
