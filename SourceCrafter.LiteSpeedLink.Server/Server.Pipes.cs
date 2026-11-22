@@ -13,12 +13,17 @@ public delegate ValueTask<ResponseStatus> RequestHandler(long id, RequestContext
 public interface IRequestHandler
 {
     ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token);
+
+    /// <summary>Cuerpo maximo de una peticion de <paramref name="id"/>: el host generado emite un switch con los <c>[MaxMessageSize]</c> del contrato.</summary>
+    int MaxMessageSize(long id);
 }
 
 /// <summary>Adaptador para handlers escritos a mano (lambdas); los hosts generados no pasan por aqui.</summary>
-public readonly struct DelegateRequestHandler(RequestHandler handler) : IRequestHandler
+public readonly struct DelegateRequestHandler(RequestHandler handler, int maxMessageSize = Framing.DefaultMaxMessageSize) : IRequestHandler
 {
     public ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token) => handler(id, ctx, token);
+
+    public int MaxMessageSize(long id) => maxMessageSize;
 }
 
 /// <summary>Host TCP generado alojado en otro servidor (p.ej. Kestrel): atiende sus conexiones y toma sus servicios.</summary>
@@ -33,9 +38,12 @@ public interface IHostedLiteSpeedLink
     /// <summary>Servicios del host que acepta las conexiones; <c>null</c> si se arranco con <c>Start</c>.</summary>
     IServiceProvider? HostServices { get; init; }
 
-    /// <summary>Plazos de una trama a medias: el servidor que aloja el host los toma de su configuracion (Kestrel: <c>RequestHeadersTimeout</c>, <c>MinRequestBodyDataRate</c>).</summary>
+    /// <summary>
+    /// Plazos y limites de una conexion: el servidor que aloja el host los toma de su configuracion
+    /// (Kestrel: <c>RequestHeadersTimeout</c>, <c>MinRequestBodyDataRate</c>, <c>MaxRequestBodySize</c>).
+    /// </summary>
     Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default, int partialFrameTimeoutMs = Server.PartialFrameTimeoutMs,
-        int minDataRate = Server.MinDataRateBytesPerSecond, int dataRateGraceMs = Server.DataRateGraceMs);
+        int minDataRate = Server.MinDataRateBytesPerSecond, int dataRateGraceMs = Server.DataRateGraceMs, int maxMessageSize = Framing.MaxMessageSize);
 }
 
 public static partial class Server
@@ -60,18 +68,31 @@ public static partial class Server
     /// <inheritdoc cref="MinDataRateBytesPerSecond"/>
     public const int DataRateGraceMs = 5_000;
 
+    /// <summary>
+    /// Bytes de cuerpos en curso por conexion (4 MB: un mensaje del maximo por defecto o muchos pequenos), como la ventana de conexion de
+    /// HTTP/2: al pasarlo se deja de leer hasta que terminen peticiones. Con la conexion vacia se admite siempre la siguiente.
+    /// </summary>
+    public const int MaxBufferedBytesPerConnection = 4 * 1024 * 1024;
+
     public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection,
-        int partialFrameTimeoutMs = PartialFrameTimeoutMs, int minDataRate = MinDataRateBytesPerSecond, int dataRateGraceMs = DataRateGraceMs)
+        int partialFrameTimeoutMs = PartialFrameTimeoutMs, int minDataRate = MinDataRateBytesPerSecond, int dataRateGraceMs = DataRateGraceMs,
+        int maxBufferedBytes = MaxBufferedBytesPerConnection, int maxMessageSize = Framing.MaxMessageSize)
         where THandler : struct, IRequestHandler
     {
         var responses = new ResponseChannel(writer);
         var inflight = new Inflight();
         using var slots = new SemaphoreSlim(maxInFlight);
+        var budget = new ByteBudget(maxBufferedBytes);
         // Uno por conexion y solo si llega una trama a medias: rearmar el temporizador no asigna.
         CancellationTokenSource? partial = null;
         bool pending = false;
         // Primer byte (Stopwatch) de la trama a medias en curso; 0 = ninguna empezada.
         long frameStart = 0;
+        // Cuerpo de una trama a medias que se copia a su buffer final segun llega: el transporte no retiene el mensaje (sin doble buffer
+        // ni dependencia de su umbral de pausa: un pipe que deja de escribir con N bytes sin consumir no bloquea mensajes mayores que N).
+        byte[]? filling = null;
+        int fillLength = 0, filled = 0, fillCorrelation = 0;
+        long fillOp = 0;
 
         try
         {
@@ -96,7 +117,22 @@ public static partial class Server
 
                 bool consumed = false;
 
-                while (Framing.TryReadFrame(ref buffer, out var correlationId, out var content))
+                if (filling is not null)
+                {
+                    int take = (int)Math.Min(buffer.Length, fillLength - filled);
+                    buffer.Slice(0, take).CopyTo(filling.AsSpan(filled));
+                    filled += take;
+                    buffer = buffer.Slice(take);
+
+                    if (filled == fillLength)
+                    {
+                        Dispatch(handlers, fillOp, fillCorrelation, filling, fillLength, responses, slots, budget, inflight, token);
+                        filling = null;
+                        consumed = true;
+                    }
+                }
+
+                while (filling is null && Framing.TryReadFrame(ref buffer, out var correlationId, out var content))
                 {
                     consumed = true;
 
@@ -109,26 +145,42 @@ public static partial class Server
 
                     if (content.Length < Framing.OpIdSize) throw new InvalidDataException($"Request too short: {content.Length}.");
 
-                    // Hueco antes de alquilar: con el limite lleno no se retiene un cuerpo mas (la trama sigue en el pipe).
+                    var op = Framing.ReadOpId(content);
+                    int length = (int)content.Length - Framing.OpIdSize;
+                    CheckSize(handlers, op, length, maxMessageSize);
+
+                    // Hueco y presupuesto antes de alquilar: con el limite lleno no se retiene un cuerpo mas (la trama sigue en el pipe).
                     await slots.WaitAsync(token).ConfigureAwait(false);
+                    await budget.EnterAsync(length, token).ConfigureAwait(false);
 
                     // El lector avanza antes de que el handler termine: el cuerpo se copia a un
                     // buffer alquilado que vive lo que dura la peticion.
-                    var op = Framing.ReadOpId(content);
-                    int length = (int)content.Length - Framing.OpIdSize;
                     var body = ArrayPool<byte>.Shared.Rent(length);
                     content.Slice(Framing.OpIdSize).CopyTo(body);
 
-                    var ctx = RequestContext.Rent(correlationId, body.AsMemory(0, length), responses, token);
-                    ctx.Track(body, slots, inflight);
-                    ValueTask<ResponseStatus> request;
-                    try { request = handlers.HandleAsync(op, ctx, token); }
-                    catch (Exception ex) { request = ValueTask.FromException<ResponseStatus>(ex); }
-                    ctx.Observe(request);
+                    Dispatch(handlers, op, correlationId, body, length, responses, slots, budget, inflight, token);
                 }
 
-                long partialFrame = buffer.Length;
-                int frameLength = partialFrame >= Framing.LengthPrefixSize ? Framing.ReadLength(buffer) : 0;
+                // Trama a medias con cabecera y opId: se valida su tamano antes de retener nada y su cuerpo pasa a llenarse segun llega.
+                if (filling is null && buffer.Length >= Framing.FrameHeaderSize + Framing.OpIdSize)
+                {
+                    // TryReadFrame ya valido la longitud; a medias con 16 bytes implica longitud > corrId + opId.
+                    fillLength = Framing.ReadLength(buffer) - Framing.CorrelationIdSize - Framing.OpIdSize;
+                    (fillCorrelation, fillOp) = ReadIds(buffer);
+                    CheckSize(handlers, fillOp, fillLength, maxMessageSize);
+
+                    await slots.WaitAsync(token).ConfigureAwait(false);
+                    await budget.EnterAsync(fillLength, token).ConfigureAwait(false);
+
+                    filling = ArrayPool<byte>.Shared.Rent(fillLength);
+                    var available = buffer.Slice(Framing.FrameHeaderSize + Framing.OpIdSize);
+                    available.CopyTo(filling);
+                    filled = (int)available.Length;
+                    buffer = buffer.Slice(buffer.End);
+                }
+
+                long partialFrame = filling is not null ? fillLength - filled : buffer.Length;
+                int rateLength = filling is not null ? fillLength : partialFrame >= Framing.LengthPrefixSize ? Framing.ReadLength(buffer) : 0;
 
                 reader.AdvanceTo(buffer.Start, buffer.End);
 
@@ -149,7 +201,7 @@ public static partial class Server
                 if (minDataRate > 0)
                 {
                     // Plazo total de la trama: gracia + longitud / ritmo, contado desde su primer byte.
-                    long remainingMs = dataRateGraceMs + frameLength * 1000L / minDataRate - (now - frameStart) * 1000 / Stopwatch.Frequency;
+                    long remainingMs = dataRateGraceMs + rateLength * 1000L / minDataRate - (now - frameStart) * 1000 / Stopwatch.Frequency;
                     if (remainingMs <= 0) throw new TimeoutException("Partial frame below the minimum data rate.");
                     timeoutMs = timeoutMs < 0 ? (int)Math.Min(remainingMs, int.MaxValue) : (int)Math.Min(timeoutMs, remainingMs);
                 }
@@ -164,12 +216,52 @@ public static partial class Server
         finally
         {
             partial?.Dispose();
+
+            // Trama a medias al cerrar: su cuerpo, hueco y presupuesto nunca llegaron a un handler.
+            if (filling is not null)
+            {
+                ArrayPool<byte>.Shared.Return(filling);
+                budget.Release(fillLength);
+                slots.Release();
+            }
+
             await inflight.DrainAsync().ConfigureAwait(false);
             responses.DisposeStreams();
+            budget.Dispose();
 
             await reader.CompleteAsync().ConfigureAwait(false);
             await writer.CompleteAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Limite por operacion fijado en compilacion (<c>[MaxMessageSize]</c>), acotado por el del servidor que aloja el host (<paramref name="cap"/>;
+    /// Kestrel: <c>MaxRequestBodySize</c>): por encima se corta la conexion antes de retener el cuerpo.
+    /// </summary>
+    private static void CheckSize<THandler>(THandler handlers, long op, int length, int cap = Framing.MaxMessageSize) where THandler : struct, IRequestHandler
+    {
+        if (length > Math.Min(handlers.MaxMessageSize(op), cap)) throw new InvalidDataException($"Request of {length} bytes exceeds the limit of operation {op}.");
+    }
+
+    /// <summary>corrId y opId de una trama a medias (al menos cabecera + opId en <paramref name="buffer"/>).</summary>
+    private static (int CorrelationId, long Op) ReadIds(in ReadOnlySequence<byte> buffer)
+    {
+        Span<byte> ids = stackalloc byte[Framing.CorrelationIdSize + Framing.OpIdSize];
+        buffer.Slice(Framing.LengthPrefixSize, ids.Length).CopyTo(ids);
+
+        return (System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(ids), Framing.ReadOpId(ids[Framing.CorrelationIdSize..]));
+    }
+
+    private static void Dispatch<THandler>(THandler handlers, long op, int correlationId, byte[] body, int length, ResponseChannel responses,
+        SemaphoreSlim slots, ByteBudget budget, Inflight inflight, CancellationToken token)
+        where THandler : struct, IRequestHandler
+    {
+        var ctx = RequestContext.Rent(correlationId, body.AsMemory(0, length), responses, token);
+        ctx.Track(body, slots, inflight, budget, length);
+        ValueTask<ResponseStatus> request;
+        try { request = handlers.HandleAsync(op, ctx, token); }
+        catch (Exception ex) { request = ValueTask.FromException<ResponseStatus>(ex); }
+        ctx.Observe(request);
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
@@ -597,17 +689,21 @@ public sealed class RequestContext
     private byte[]? _rented;
     private SemaphoreSlim? _slots;
     private Inflight? _inflight;
+    private ByteBudget? _budget;
+    private int _budgeted;
     private ValueTask<ResponseStatus> _pending;
     private Action? _onCompleted;
 
     private RequestContext() { }
 
-    /// <summary>Recursos de la conexion que se liberan al terminar el handler (cuerpo alquilado, hueco y contador).</summary>
-    internal void Track(byte[] body, SemaphoreSlim slots, Inflight inflight)
+    /// <summary>Recursos de la conexion que se liberan al terminar el handler (cuerpo alquilado, hueco, presupuesto y contador).</summary>
+    internal void Track(byte[] body, SemaphoreSlim slots, Inflight inflight, ByteBudget budget, int budgeted)
     {
         _rented = body;
         _slots = slots;
         _inflight = inflight;
+        _budget = budget;
+        _budgeted = budgeted;
         inflight.Enter();
     }
 
@@ -664,12 +760,15 @@ public sealed class RequestContext
 
     private void Release()
     {
-        var (body, slots, inflight) = (_rented!, _slots, _inflight);
+        var (body, slots, inflight, budget, budgeted) = (_rented!, _slots, _inflight, _budget, _budgeted);
         _rented = null;
         _slots = null;
         _inflight = null;
+        _budget = null;
         Return();
         ArrayPool<byte>.Shared.Return(body);
+        // Presupuesto antes que el hueco: el lector puede estar esperando cualquiera de los dos.
+        budget?.Release(budgeted);
         slots?.Release();
         inflight?.Exit();
     }

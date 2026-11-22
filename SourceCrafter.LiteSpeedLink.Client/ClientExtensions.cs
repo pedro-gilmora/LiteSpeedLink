@@ -12,7 +12,8 @@ public static partial class ClientExtensions
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QuicConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default, int unaryStreams = QuicConnection.DefaultUnaryStreams, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned)
+    public static QuicConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default, int unaryStreams = QuicConnection.DefaultUnaryStreams, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned,
+        Func<long, int>? maxMessageSize = null)
     {
         // QUIC siempre cifra: Default es TLS mutuo; el servidor se valida siempre (antes se aceptaba cualquier certificado).
         if (tls is TlsMode.None) throw new ArgumentException("QUIC always uses TLS.", nameof(tls));
@@ -24,7 +25,7 @@ public static partial class ClientExtensions
             DefaultCloseErrorCode = 0x0B,
             ClientAuthenticationOptions = TlsPolicy.ForClient(ip, cert, tls is TlsMode.Default ? TlsMode.Mutual : tls, check,
                 System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, [Constants.protocol])!
-        }, unaryStreams);
+        }, unaryStreams, maxMessageSize);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -35,8 +36,9 @@ public static partial class ClientExtensions
     public static MemoryConnection AsMemoryConnection(this string ctxName, int timeout = 5000, System.Text.Encoding? encoding = null) => new(ctxName, timeout, encoding);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TcpConnection AsTcpConnection(this EndPoint ip, X509Certificate2? cert = null, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned)
-        => new(ip, cert, tls: tls, check: check);
+    public static TcpConnection AsTcpConnection(this EndPoint ip, X509Certificate2? cert = null, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned,
+        Func<long, int>? maxMessageSize = null)
+        => new(ip, cert, tls: tls, check: check, maxMessageSize: maxMessageSize);
 
     // Miembros sincronos del contrato sobre transportes de red (Tcp/Udp/Quic): comparten socket con un read loop
     // async y correlacion por corrId, asi que no hay ruta sincrona nativa. Solo Memory (RpcBuffer) es sincrono de

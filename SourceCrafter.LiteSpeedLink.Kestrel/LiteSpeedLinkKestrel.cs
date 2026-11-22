@@ -80,8 +80,10 @@ public static class LiteSpeedLinkKestrel
                     using var token = CancellationTokenSource.CreateLinkedTokenSource(connection.ConnectionClosed, closing);
                     // Leido por conexion: la configuracion de Kestrel puede cambiar despues de UseLiteSpeedLink.
                     var rate = limits.MinRequestBodyDataRate;
+                    var bodySize = limits.MaxRequestBodySize;
                     await host.ServeAsync(connection.Transport.Input, connection.Transport.Output, token.Token, TimeoutMs(limits.RequestHeadersTimeout),
-                        rate is null ? 0 : (int)Math.Ceiling(rate.BytesPerSecond), rate is null ? 0 : TimeoutMs(rate.GracePeriod));
+                        rate is null ? 0 : (int)Math.Ceiling(rate.BytesPerSecond), rate is null ? 0 : TimeoutMs(rate.GracePeriod),
+                        bodySize is null ? Framing.MaxMessageSize : (int)Math.Min(bodySize.Value, Framing.MaxMessageSize));
                 });
             }));
 

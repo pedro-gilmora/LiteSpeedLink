@@ -52,6 +52,13 @@ public sealed class ServiceAttribute(string? name = null) : Attribute;
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class ServiceHandlerAttribute : Attribute;
 
+/// <summary>
+/// Tamano maximo del cuerpo de una peticion de esta operacion, fijado en compilacion (por defecto 4 MB, como gRPC). Host y cliente generados
+/// lo aplican antes de recibir o enviar el cuerpo. Para operaciones que lo necesitan (p.ej. subidas); el tope del protocolo son 16 MB.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+public sealed class MaxMessageSizeAttribute(int bytes) : Attribute;
+
 //[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 //internal sealed class PipelineAttribute<TPipeline>(SourceCrafter.DependencyInjection.Constants.Lifetime lifetime = SourceCrafter.DependencyInjection.Constants.Lifetime.Scoped, string nameOrFormat = "GetPipeline{0}") : Attribute where TPipeline : IPipeline;
 

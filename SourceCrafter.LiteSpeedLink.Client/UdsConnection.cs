@@ -3,7 +3,7 @@
 namespace SourceCrafter.LiteSpeedLink.Client;
 
 /// <summary>Cliente sobre Unix Domain Socket. Mismo canal multiplexado que TCP.</summary>
-public sealed class UdsConnection(string path, bool coalesceStreams = true) : StreamConnection(coalesceStreams)
+public sealed class UdsConnection(string path, bool coalesceStreams = true, Func<long, int>? maxMessageSize = null) : StreamConnection(coalesceStreams, maxMessageSize)
 {
     private Socket? _socket;
 

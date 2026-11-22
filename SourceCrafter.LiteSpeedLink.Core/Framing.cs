@@ -41,6 +41,15 @@ public static class Framing
     /// <summary>Tamano maximo aceptado para un mensaje; por encima se corta la conexion.</summary>
     public const int MaxFrameSize = 16 * 1024 * 1024;
 
+    /// <summary>
+    /// Cuerpo maximo de una peticion por defecto (4 MB, como gRPC); <c>[MaxMessageSize]</c> lo cambia por operacion en compilacion,
+    /// hasta lo que cabe en <see cref="MaxFrameSize"/>.
+    /// </summary>
+    public const int DefaultMaxMessageSize = 4 * 1024 * 1024;
+
+    /// <summary>Cuerpo maximo que admite una trama multiplexada: <see cref="MaxFrameSize"/> menos corrId y opId.</summary>
+    public const int MaxMessageSize = MaxFrameSize - CorrelationIdSize - OpIdSize;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteLength(Span<byte> destination, int length) =>
         BinaryPrimitives.WriteInt32LittleEndian(destination, length);

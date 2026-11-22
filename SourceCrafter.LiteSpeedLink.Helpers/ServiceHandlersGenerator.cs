@@ -255,6 +255,49 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
         DiagnosticSeverity.Error,
         true);
 
+    private const string MaxMessageSizeAttr = "SourceCrafter.LiteSpeedLink.MaxMessageSizeAttribute";
+
+    // Espejo de Framing.MaxMessageSize (Core): tope del protocolo menos corrId y opId.
+    private const int MaxMessageSizeLimit = 16 * 1024 * 1024 - 4 - 8;
+
+    private static readonly DiagnosticDescriptor InvalidMaxMessageSize = new(
+        "SCLSL023",
+        "Invalid MaxMessageSize",
+        "[MaxMessageSize({0})] on '{1}' must be between 1 and {2} bytes (the protocol limit)",
+        "SourceCrafter.LiteSpeedLink",
+        DiagnosticSeverity.Error,
+        true);
+
+    /// <summary><c>[MaxMessageSize]</c> de las operaciones de <paramref name="contract"/>, con su id; los invalidos dan SCLSL023.</summary>
+    private static void CollectMaxMessageSizes(INamedTypeSymbol contract, List<(long Id, int Size)> sizes, PartialContribution contribution)
+    {
+        foreach (var member in contract.GetMembers())
+        {
+            if (member is not IMethodSymbol { MethodKind: MethodKind.Ordinary, IsStatic: false } method) continue;
+
+            foreach (var attr in method.GetAttributes())
+            {
+                if (attr.AttributeClass?.ToDisplayString() != MaxMessageSizeAttr || attr.ConstructorArguments is not [{ Value: int bytes }]) continue;
+
+                if (bytes is > 0 and <= MaxMessageSizeLimit) sizes.Add((GetServiceId(method.GlobalNamespaced), bytes));
+                else contribution.ReportDiagnostic(Diagnostic.Create(InvalidMaxMessageSize,
+                    attr.ApplicationSyntaxReference?.GetSyntax().GetLocation() ?? method.Locations.FirstOrDefault(), bytes, method.Name, MaxMessageSizeLimit));
+            }
+        }
+    }
+
+    /// <summary>Cuerpo de <c>__MaxMessageSize(long id)</c>: el limite por defecto o un switch con los de <c>[MaxMessageSize]</c>, en compilacion.</summary>
+    private static string MaxMessageSizeBody(List<(long Id, int Size)> sizes)
+    {
+        const string Default = "global::SourceCrafter.LiteSpeedLink.Framing.DefaultMaxMessageSize";
+
+        if (sizes.Count == 0) return Default;
+
+        var body = new System.Text.StringBuilder("id switch { ");
+        foreach (var (id, size) in sizes) body.Append(id).Append(" => ").Append(size).Append(", ");
+        return body.Append("_ => ").Append(Default).Append(" }").ToString();
+    }
+
     /// <summary>
     /// Indexa los servicios por <c>(lifetime, tipo expuesto, clave)</c>, que es como los
     /// referencian los parametros anotados de un metodo de servicio.

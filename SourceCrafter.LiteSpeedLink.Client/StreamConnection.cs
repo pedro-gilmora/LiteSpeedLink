@@ -17,9 +17,12 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
     private Stream? _stream;
 
     private readonly bool _coalesce;
+    private readonly Func<long, int>? _maxMessageSize;
 
     /// <param name="coalesceStreams">Por defecto: el lector agrupa los items de stream de cada lectura en una sola entrega (sin espera ni cambio de cable).</param>
-    private protected StreamConnection(bool coalesceStreams = true) => _coalesce = coalesceStreams;
+    /// <param name="maxMessageSize">Limite por operacion (<c>[MaxMessageSize]</c>) que emite el cliente generado; null = <see cref="Framing.DefaultMaxMessageSize"/>.</param>
+    private protected StreamConnection(bool coalesceStreams = true, Func<long, int>? maxMessageSize = null)
+        => (_coalesce, _maxMessageSize) = (coalesceStreams, maxMessageSize);
 
     /// <summary>Abre el flujo ya conectado (y autenticado, si aplica). <c>name</c> identifica al remoto en errores.</summary>
     private protected abstract Task<(Stream Stream, string Name)> OpenAsync();
@@ -50,7 +53,7 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
     {
         var (stream, name) = await OpenAsync().ConfigureAwait(false);
         _stream = stream;
-        var channel = new MultiplexedChannel(PipeReader.Create(stream), PipeWriter.Create(stream), name, _coalesce);
+        var channel = new MultiplexedChannel(PipeReader.Create(stream), PipeWriter.Create(stream), name, _coalesce, _maxMessageSize);
         Volatile.Write(ref _channel, channel);
         return channel;
     }

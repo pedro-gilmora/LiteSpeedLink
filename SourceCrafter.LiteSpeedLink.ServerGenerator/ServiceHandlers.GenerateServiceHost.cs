@@ -178,14 +178,16 @@ public partial class ServiceHandlersGenerator
                 .Open()
                 .Line("public global::System.Threading.Tasks.ValueTask<global::SourceCrafter.LiteSpeedLink.ResponseStatus> HandleAsync(long id, global::SourceCrafter.LiteSpeedLink.RequestContext ctx, global::System.Threading.CancellationToken token)")
                 .Line("=> provider.HandleRequestsAsync(id, ctx, token);", 1)
+                .Blank()
+                .Line("public int MaxMessageSize(long id) => __MaxMessageSize(id);")
                 .Close();
 
         // TCP: el mismo protocolo sobre conexiones aceptadas por otro servidor (p.ej. Kestrel), cuyos servicios
         // entran al contenedor con [Hosted<T>] (singleton de la app) o [Hosted<T>(Lifetime.Scoped)] (por peticion).
         if (connectionType is 2)
         {
-            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default, int partialFrameTimeoutMs = global::SourceCrafter.LiteSpeedLink.Server.PartialFrameTimeoutMs, int minDataRate = global::SourceCrafter.LiteSpeedLink.Server.MinDataRateBytesPerSecond, int dataRateGraceMs = global::SourceCrafter.LiteSpeedLink.Server.DataRateGraceMs)")
-                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token, partialFrameTimeoutMs: partialFrameTimeoutMs, minDataRate: minDataRate, dataRateGraceMs: dataRateGraceMs);", 1);
+            hostCode.Blank().Line("public global::System.Threading.Tasks.Task ServeAsync(global::System.IO.Pipelines.PipeReader reader, global::System.IO.Pipelines.PipeWriter writer, global::System.Threading.CancellationToken token = default, int partialFrameTimeoutMs = global::SourceCrafter.LiteSpeedLink.Server.PartialFrameTimeoutMs, int minDataRate = global::SourceCrafter.LiteSpeedLink.Server.MinDataRateBytesPerSecond, int dataRateGraceMs = global::SourceCrafter.LiteSpeedLink.Server.DataRateGraceMs, int maxMessageSize = global::SourceCrafter.LiteSpeedLink.Framing.MaxMessageSize)")
+                .Line("=> global::SourceCrafter.LiteSpeedLink.Server.ServePipeAsync(reader, writer, new __Handler(this), token, partialFrameTimeoutMs: partialFrameTimeoutMs, minDataRate: minDataRate, dataRateGraceMs: dataRateGraceMs, maxMessageSize: maxMessageSize);", 1);
 
             // Kestrel (UseLiteSpeedLink<THost>) lee el TLS fijado en compilacion de estas constantes.
             hostCode.Blank().Line("static global::SourceCrafter.LiteSpeedLink.TlsMode global::SourceCrafter.LiteSpeedLink.IHostedLiteSpeedLink.Tls => global::SourceCrafter.LiteSpeedLink.TlsMode.").Append(TlsModeNames[tls]).Append(';')
@@ -207,6 +209,8 @@ public partial class ServiceHandlersGenerator
         // Un metodo por operacion: async (pooled) solo si algo de su camino espera (ver EndOperation).
         var pooled = PooledBuilder(true);
         List<(long Id, string Signature, string Name, bool Sync)> operations = [];
+        // [MaxMessageSize] por operacion: el servidor lo aplica antes de retener el cuerpo (TCP, UDS, QUIC).
+        List<(long Id, int Size)> messageSizes = [];
 
         int providerTypeId = SymbolEqualityComparer.Default.GetHashCode(serviceHost);
 
@@ -257,6 +261,8 @@ public partial class ServiceHandlersGenerator
 
             // Solo los contratos (IServiceUnit) son operaciones remotas; pipelines y demas dependencias se consumen desde los handlers.
             if (!exportType.AllInterfaces.Any(i => i.GlobalNamespaced == IServiceUnit)) continue;
+
+            if (exportType is INamedTypeSymbol contract) CollectMaxMessageSizes(contract, messageSizes, contribution);
 
             foreach (var member in exportType.GetMembers())
             {
@@ -672,6 +678,9 @@ public partial class ServiceHandlersGenerator
 
         hostCode.Line("_ => ").Append(connectionType is 0 ? wrapOpen + "__context.NotFound()" + wrapClose : "__context.NotFoundAsync()")
             .Close(";");
+
+        if (connectionType > 1)
+            hostCode.Blank().Line("private static int __MaxMessageSize(long id) => ").Append(MaxMessageSizeBody(messageSizes)).Append(';');
 
         hostCode.Append(policyTypes).Close();
 

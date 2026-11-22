@@ -35,6 +35,8 @@ internal sealed class MultiplexedChannel
     private int _nextId;
     private Exception? _fault;
     private readonly bool _coalesce;
+    // Limite por operacion fijado en compilacion por el cliente generado; null = Framing.DefaultMaxMessageSize para todas.
+    private readonly Func<long, int>? _maxMessageSize;
 
     private readonly record struct Response(ResponseStatus Status, byte[] Body, int Length) : IDisposable
     {
@@ -43,12 +45,13 @@ internal sealed class MultiplexedChannel
         public void Dispose() => ArrayPool<byte>.Shared.Return(Body);
     }
 
-    public MultiplexedChannel(PipeReader reader, PipeWriter writer, string remote, bool coalesce = false)
+    public MultiplexedChannel(PipeReader reader, PipeWriter writer, string remote, bool coalesce = false, Func<long, int>? maxMessageSize = null)
     {
         _coalesce = coalesce;
         _reader = reader;
         _writer = writer;
         _remote = remote;
+        _maxMessageSize = maxMessageSize;
         _readLoop = ReadLoopAsync();
     }
 
@@ -413,6 +416,7 @@ internal sealed class MultiplexedChannel
 
         int id = Register(sink);
         Exception? invalid = null;
+        int oversize = 0;
         bool flush;
 
         lock (_send)
@@ -438,15 +442,30 @@ internal sealed class MultiplexedChannel
                 }
             }
 
+            // Mayor que el limite de la operacion: el host cortaria la conexion (y con ella las demas llamadas). Se retira de la cola
+            // y falla solo esta llamada; la copia solo ocurre en este caso de error.
+            if (invalid is null && queued.WrittenCount - start - header > (_maxMessageSize?.Invoke(op) ?? Framing.DefaultMaxMessageSize))
+            {
+                oversize = queued.WrittenCount - start - header;
+                var kept = new ArrayBufferWriter<byte>(Math.Max(256, start));
+                kept.Write(queued.WrittenSpan[..start]);
+                _queued = queued = kept;
+            }
             // Por posicion: el buffer pudo realojarse al serializar.
-            if (invalid is null)
+            else if (invalid is null)
             {
                 var frame = MemoryMarshal.AsMemory(queued.WrittenMemory).Span[start..];
                 Framing.WriteFrameHeader(frame, id, frame.Length - Framing.FrameHeaderSize);
             }
 
-            flush = !_flushing;
-            _flushing = true;
+            flush = oversize == 0 && !_flushing;
+            if (flush) _flushing = true;
+        }
+
+        if (oversize > 0)
+        {
+            Unregister(id, sink);
+            throw new ArgumentException($"Request of {oversize} bytes exceeds the limit of operation {op} ([MaxMessageSize]).");
         }
 
         try
@@ -672,12 +691,16 @@ internal sealed class MultiplexedChannel
 
     public async ValueTask DisposeAsync()
     {
-        await _writer.CompleteAsync().ConfigureAwait(false);
+        // El transporte puede estar ya cerrado (el remoto corto a mitad de un envio): completar intentaria volcar lo pendiente en un stream
+        // liberado. Liberar no debe lanzar; lo pendiente ya fallo a sus llamadas.
+        try { await _writer.CompleteAsync().ConfigureAwait(false); }
+        catch (Exception ex) when (ex is ObjectDisposedException or IOException or InvalidOperationException) { }
 
         // Desbloquea el ReadAsync pendiente aunque el socket siga abierto; el lector se completa cuando el bucle ha salido.
         _reader.CancelPendingRead();
         try { await _readLoop.ConfigureAwait(false); } catch { }
 
-        await _reader.CompleteAsync().ConfigureAwait(false);
+        try { await _reader.CompleteAsync().ConfigureAwait(false); }
+        catch (Exception ex) when (ex is ObjectDisposedException or IOException or InvalidOperationException) { }
     }
 }

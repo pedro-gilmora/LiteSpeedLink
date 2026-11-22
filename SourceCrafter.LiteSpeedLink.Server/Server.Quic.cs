@@ -155,7 +155,9 @@ public static partial class Server
 
             while (!(result = await reader.ReadAsync(token).ConfigureAwait(false)).IsCompleted)
             {
-                if (result.Buffer.Length > Framing.MaxFrameSize) throw new InvalidDataException($"Request too large: {result.Buffer.Length}.");
+                // Limite de la operacion en cuanto se conoce (primeros 8 bytes): no se retiene un cuerpo mayor hasta el FIN.
+                if (result.Buffer.Length >= Framing.OpIdSize)
+                    CheckSize(handlers, Framing.ReadOpId(result.Buffer), (int)Math.Min(result.Buffer.Length - Framing.OpIdSize, int.MaxValue));
 
                 reader.AdvanceTo(result.Buffer.Start, result.Buffer.End);
             }
@@ -166,6 +168,7 @@ public static partial class Server
 
             long op = Framing.ReadOpId(request);
             int length = (int)request.Length - Framing.OpIdSize;
+            CheckSize(handlers, op, length);
             byte[] body = ArrayPool<byte>.Shared.Rent(length);
             request.Slice(Framing.OpIdSize).CopyTo(body);
             reader.AdvanceTo(request.End);

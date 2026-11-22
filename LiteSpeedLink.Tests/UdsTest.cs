@@ -140,6 +140,8 @@ public class UdsTest
     private readonly struct Doubler : IRequestHandler
     {
         public ValueTask<ResponseStatus> HandleAsync(long id, RequestContext ctx, CancellationToken token) => ctx.ReturnAsync(ctx.Get<int>() * 2);
+
+        public int MaxMessageSize(long id) => Framing.DefaultMaxMessageSize;
     }
 
     /// <summary>Estudio #3: host como struct IRequestHandler (lo que emite el generador), sin delegado.</summary>

@@ -10,7 +10,8 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 /// <paramref name="cert"/>: pin del servidor y, en TLS mutuo, el certificado del cliente. <paramref name="tls"/>/<paramref name="check"/>
 /// los fija el cliente generado en compilacion; las opciones TLS se construyen una vez, no en cada reconexion.
 /// </summary>
-public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default, bool coalesceStreams = true, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned) : StreamConnection(coalesceStreams)
+public sealed class TcpConnection(EndPoint endpoint, X509Certificate2? cert = default, bool coalesceStreams = true, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned,
+    Func<long, int>? maxMessageSize = null) : StreamConnection(coalesceStreams, maxMessageSize)
 {
     private readonly SslClientAuthenticationOptions? _tls = TlsPolicy.ForClient(endpoint, cert, tls, check, SslProtocols.Tls12);
     private TcpClient? _client;

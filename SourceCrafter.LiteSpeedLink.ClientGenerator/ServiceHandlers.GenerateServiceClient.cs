@@ -80,6 +80,19 @@ namespace ").Append(nsStr = nss.ToDisplayString()).Append(@";
             ? (certNullability is null ? null : "certificate, ") + "tls: global::SourceCrafter.LiteSpeedLink.TlsMode." + TlsModeNames[tls] + ", check: global::SourceCrafter.LiteSpeedLink.CertificateCheck." + CheckNames[check]
             : "";
 
+        // [MaxMessageSize]: el cliente rechaza la peticion antes de enviarla (el host cortaria la conexion). Sin ninguno, sin consulta por llamada.
+        System.Collections.Generic.List<(long Id, int Size)> messageSizes = [];
+        if (connectionType is 2 or 3 or UdsConnection)
+            foreach (var contract in serviceClient.GetAttributes()
+                .Where(a => a.AttributeClass is { IsGenericType: true } ac && ac.ConstructedFrom.ToDisplayString() == ServiceUnitAttr)
+                .Select(a => a.AttributeClass!.TypeArguments[0])
+                .OfType<INamedTypeSymbol>()
+                .Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default))
+                CollectMaxMessageSizes(contract, messageSizes, contribution);
+
+        string? sizeArg = messageSizes.Count > 0 ? "maxMessageSize: static id => __MaxMessageSize(id)" : null;
+        if (sizeArg is not null && connArgs.Length > 0) connArgs += ", " + sizeArg;
+
         clientCode.Append(PlatformAttributes(connectionType)).Append(@"
 public partial class ").Append(typeShortName).Append(@"
 {
@@ -96,10 +109,15 @@ public partial class ").Append(typeShortName).Append(@"
                 ? @"
         __connection = " + (isLocal ? "name" : "rpcName") + ".AsMemoryConnection(" + (settings is null ? null : "(int)" + settings + ".Timeout.TotalMilliseconds") + ");"
                 : @"
-        __connection = new global::SourceCrafter.LiteSpeedLink.Client.UdsConnection(" + LocalUdsPath + ");")).Append(@"
+        __connection = new global::SourceCrafter.LiteSpeedLink.Client.UdsConnection(" + LocalUdsPath + (sizeArg is null ? null : ", " + sizeArg) + ");")).Append(@"
     }").Append(@"
 
     private readonly global::System.Threading.Lock __servicesLock = new();");
+
+        if (sizeArg is not null)
+            clientCode.Append(@"
+
+    private static int __MaxMessageSize(long id) => ").Append(MaxMessageSizeBody(messageSizes)).Append(';');
 
         string header = nsStr.Length > 0
             ? "#nullable enable annotations\nusing SourceCrafter.LiteSpeedLink.Client;\n\nnamespace " + nsStr + ";\n"

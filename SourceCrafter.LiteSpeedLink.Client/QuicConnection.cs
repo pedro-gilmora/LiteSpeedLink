@@ -15,7 +15,7 @@ namespace SourceCrafter.LiteSpeedLink.Client;
 [SupportedOSPlatform("windows")]
 [SupportedOSPlatform("linux")]
 [SupportedOSPlatform("macos")]
-public sealed class QuicConnection(QuicClientConnectionOptions options, int unaryStreams = QuicConnection.DefaultUnaryStreams) : IAsyncConnection, IAsyncDisposable
+public sealed class QuicConnection(QuicClientConnectionOptions options, int unaryStreams = QuicConnection.DefaultUnaryStreams, Func<long, int>? maxMessageSize = null) : IAsyncConnection, IAsyncDisposable
 {
     /// <summary>Streams reutilizables para unarias (0 = un stream por llamada). Medido: -35% latencia, -69% memoria.</summary>
     public const int DefaultUnaryStreams = 4;
@@ -27,7 +27,9 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
     private readonly SemaphoreSlim _init = new(1, 1);
     private readonly QuicConnection? _parent;
 
-    private QuicConnection(QuicConnection parent) : this(parent.Options, 0) => _parent = parent;
+    private QuicConnection(QuicConnection parent) : this(parent.Options, 0, parent._maxMessageSize) => _parent = parent;
+
+    private readonly Func<long, int>? _maxMessageSize = maxMessageSize;
 
     private QuicClientConnectionOptions Options => options;
 
@@ -74,7 +76,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
         Framing.WriteOpId(writer.GetSpan(Framing.OpIdSize), MuxMarker);
         writer.Advance(Framing.OpIdSize);
         await writer.FlushAsync().ConfigureAwait(false);
-        return new(PipeReader.Create(stream), writer, options.RemoteEndPoint.ToString()!);
+        return new(PipeReader.Create(stream), writer, options.RemoteEndPoint.ToString()!, maxMessageSize: _maxMessageSize);
     }
 
     internal async ValueTask<System.Net.Quic.QuicConnection> TryInitializeAsync(CancellationToken token)

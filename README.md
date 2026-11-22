@@ -128,6 +128,16 @@ Hosts bound what one peer can hold:
 - **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, `MinRequestBodyDataRate`, the HTTPS handshake timeout).
 - **Quic:** at most 256 streams per connection.
 
+Message size and memory per connection:
+- **Request bodies:** up to 4 MB by default (like gRPC). A contract operation that needs more declares it at compile time:
+  ```csharp
+  [MaxMessageSize(64 * 1024 * 1024)]   // only this operation (protocol ceiling: 16 MB)
+  int Upload(byte[] data);
+  ```
+  The generated client rejects an oversized request before sending it (only that call fails). The host checks the limit as soon as it has read the operation id, before holding the body, and closes the connection. On Kestrel, `Limits.MaxRequestBodySize` also caps it.
+- **Bytes in flight per connection:** at most 4 MB of request bodies (`maxBufferedBytes`), like HTTP/2's connection window. Beyond that the host stops reading the connection until earlier requests finish; the client just waits. A connection with nothing in flight always accepts its next request, so a single message larger than the budget still goes through.
+- Bodies are copied into their final buffer as they arrive, so the transport never holds a whole message.
+
 A request id that repeats while its stream is still running is rejected.
 
 `Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `<tmp>/lsl-<user>` with mode 0700 for anyone else. Startup fails if that directory is a link or belongs to another user.
@@ -254,6 +264,7 @@ public interface IStreams : IServiceUnit
 | SCLSL020 | Error | Invalid middleware |
 | SCLSL021 | Warning | Middleware ignored on streams |
 | SCLSL022 | Error | QUIC with `Tls = TlsMode.None` (QUIC always encrypts) |
+| SCLSL023 | Error | `[MaxMessageSize]` outside 1 byte – 16 MB (the protocol limit) |
 
 ## Benchmarks
 
