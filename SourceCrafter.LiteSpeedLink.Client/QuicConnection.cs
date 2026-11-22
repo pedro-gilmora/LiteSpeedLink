@@ -60,7 +60,8 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
     {
         int i = (int)((uint)Interlocked.Increment(ref _next) % (uint)_mux.Length);
         var t = Volatile.Read(ref _mux[i]);
-        if (t is null or { IsFaulted: true } or { IsCanceled: true })
+        // Tambien si el canal ya se cerro (trama de cierre del host, conexion QUIC caida): se abre otro stream, y otra conexion si hace falta.
+        if (t is null or { IsFaulted: true } or { IsCanceled: true } or { IsCompletedSuccessfully: true, Result.IsUsable: false })
         {
             var created = OpenMuxAsync();
             t = Interlocked.CompareExchange(ref _mux[i], created, t) == t ? created : Volatile.Read(ref _mux[i])!;
@@ -70,13 +71,45 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
 
     private async Task<MultiplexedChannel> OpenMuxAsync()
     {
-        var conn = await TryInitializeAsync(default).ConfigureAwait(false);
-        var stream = await conn.OpenOutboundStreamAsync(QuicStreamType.Bidirectional).ConfigureAwait(false);
+        var stream = await OpenStreamAsync(default).ConfigureAwait(false);
         var writer = PipeWriter.Create(stream);
         Framing.WriteOpId(writer.GetSpan(Framing.OpIdSize), MuxMarker);
         writer.Advance(Framing.OpIdSize);
         await writer.FlushAsync().ConfigureAwait(false);
-        return new(PipeReader.Create(stream), writer, options.RemoteEndPoint.ToString()!, maxMessageSize: _maxMessageSize);
+        return new(PipeReader.Create(stream), writer, options.RemoteEndPoint.ToString()!, maxMessageSize: _maxMessageSize, reconnect: _reconnect ??= GetMuxAsync);
+    }
+
+    private Func<CancellationToken, ValueTask<MultiplexedChannel>>? _reconnect;
+
+    /// <summary>
+    /// Stream nuevo; si la conexion QUIC ya murio (ociosa, servidor reiniciado) se reconecta una vez: abrir un stream no envia nada.
+    /// Antes la conexion muerta se quedaba para siempre y toda llamada posterior fallaba.
+    /// </summary>
+    private async ValueTask<QuicStream> OpenStreamAsync(CancellationToken token)
+    {
+        var conn = await TryInitializeAsync(token).ConfigureAwait(false);
+
+        try
+        {
+            return await conn.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, token).ConfigureAwait(false);
+        }
+        catch (QuicException)
+        {
+            (_parent ?? this).Reset(conn);
+            conn = await TryInitializeAsync(token).ConfigureAwait(false);
+            return await conn.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, token).ConfigureAwait(false);
+        }
+    }
+
+    private void Reset(System.Net.Quic.QuicConnection dead)
+    {
+        if (Interlocked.CompareExchange(ref connection, null, dead) == dead) _ = DisposeQuietlyAsync(dead);
+
+        static async Task DisposeQuietlyAsync(System.Net.Quic.QuicConnection dead)
+        {
+            try { await dead.DisposeAsync().ConfigureAwait(false); }
+            catch { }
+        }
     }
 
     internal async ValueTask<System.Net.Quic.QuicConnection> TryInitializeAsync(CancellationToken token)
@@ -176,8 +209,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
 
     private async ValueTask<Call> StartAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn? payload, bool hasPayload, CancellationToken token)
     {
-        var conn = await TryInitializeAsync(token).ConfigureAwait(false);
-        var stream = await conn.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, token).ConfigureAwait(false);
+        var stream = await OpenStreamAsync(token).ConfigureAwait(false);
 
         try
         {

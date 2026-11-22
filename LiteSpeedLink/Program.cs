@@ -76,7 +76,7 @@ using (UdpTextService.Start(5101))
     await Demo.RunAsync("Udp", auth, auth.GreetAsync);
 }
 
-var tcpHost = TcpTextService.Start(5102, null);
+var tcpHost = TcpTextService.Start(5102);
 try
 {
     await using var tcpClient = new TcpTextServiceClient("localhost", 5102);
@@ -101,7 +101,7 @@ if (QuicListener.IsSupported)
 }
 
 // Streams: IEnumerable/IAsyncEnumerable con política de lotes por operación ([Stream(Batch, MaxDelayMs)]).
-var streamHost = StreamService.Start(5104, null);
+var streamHost = StreamService.Start(5104);
 try
 {
     await using var streamClient = new StreamServiceClient("localhost", 5104);

@@ -27,7 +27,7 @@ public sealed class AsyncWorkImpl : IAsyncWork
     }
 }
 
-[ServiceHost(ServiceConnectionType.Tcp),
+[ServiceHost(ServiceConnectionType.Tcp, Tls = TlsMode.None),
  ServiceProvider,
  Scoped<IAsyncWork, AsyncWorkImpl>]
 public partial class AsyncWorkService;
@@ -44,7 +44,7 @@ public sealed class AsyncHandlerPoc
 
     public void Setup()
     {
-        _host = AsyncWorkService.Start(0, null);
+        _host = AsyncWorkService.Start(0);
         _client = new AsyncWorkServiceClient("127.0.0.1", ((IPEndPoint)_host.LocalEndpoint).Port).AsyncWork;
     }
 

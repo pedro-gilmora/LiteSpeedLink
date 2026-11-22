@@ -92,7 +92,12 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
                 if (hostConnection == 3 && tls == TlsNone)
                     contribution.ReportDiagnostic(Diagnostic.Create(QuicWithoutTls, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name));
                 else
+                {
+                    if (hostConnection == 2 && tls == TlsDefault)
+                        contribution.ReportDiagnostic(Diagnostic.Create(PlaintextTcpHost, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name));
+
                     GenerateServiceHost(container, contribution, hostConnection, isLocal, tls, check, cancelToken);
+                }
             }
 #endif
         }
@@ -256,6 +261,14 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
         true);
 
     private const string MaxMessageSizeAttr = "SourceCrafter.LiteSpeedLink.MaxMessageSizeAttribute";
+
+    private static readonly DiagnosticDescriptor PlaintextTcpHost = new(
+        "SCLSL024",
+        "TCP host may run without TLS",
+        "'{0}' is a TCP host with Tls = TlsMode.Default: started without a certificate it accepts plaintext, unauthenticated connections. Set Tls = TlsMode.Mutual (or Server) to require TLS, or Tls = TlsMode.None to accept plaintext explicitly.",
+        "SourceCrafter.LiteSpeedLink",
+        DiagnosticSeverity.Warning,
+        true);
 
     // Espejo de Framing.MaxMessageSize (Core): tope del protocolo menos corrId y opId.
     private const int MaxMessageSizeLimit = 16 * 1024 * 1024 - 4 - 8;

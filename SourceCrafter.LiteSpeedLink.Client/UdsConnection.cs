@@ -21,7 +21,8 @@ public sealed class UdsConnection(string path, bool coalesceStreams = true, Func
         }
 
         _socket = socket;
-        return (new NetworkStream(socket), path);
+        // Dueno del socket: al reconectar, liberar el flujo anterior cierra su socket.
+        return (new NetworkStream(socket, ownsSocket: true), path);
     }
 
     private protected override void Close() => _socket?.Dispose();

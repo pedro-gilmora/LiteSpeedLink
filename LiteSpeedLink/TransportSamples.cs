@@ -31,7 +31,7 @@ public partial class UdpTextService;
 [Singleton<IntToString>]
 public sealed partial class UdpTextServiceClient;
 
-[ServiceHost(ServiceConnectionType.Tcp)]
+[ServiceHost(ServiceConnectionType.Tcp, Tls = TlsMode.None)]
 [ServiceProvider]
 [Singleton<TrimName>]
 [Singleton<Upper>]

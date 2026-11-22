@@ -7,7 +7,7 @@ using SourceCrafter.DependencyInjection.Attributes;
 namespace SourceCrafter.LiteSpeedLink;
 
 /// <summary>Host TCP con todas las combinaciones de stream x politica; valida lo que emite el generador.</summary>
-[ServiceHost(ServiceConnectionType.Tcp)]
+[ServiceHost(ServiceConnectionType.Tcp, Tls = TlsMode.None)]
 [ServiceProvider]
 [Scoped<IStreams, Streams>]
 public partial class StreamService;

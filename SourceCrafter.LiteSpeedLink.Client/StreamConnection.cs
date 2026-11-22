@@ -39,11 +39,12 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
 
     private protected ValueTask<MultiplexedChannel> GetChannelAsync(CancellationToken token)
     {
-        if (Volatile.Read(ref _channel) is { } ready) return new(ready);
+        if (Volatile.Read(ref _channel) is { IsUsable: true } ready) return new(ready);
 
-        // Una sola conexion en curso; si fallo o se cancelo, el siguiente llamador reintenta.
+        // Una sola conexion en curso; si fallo, se cancelo o la ya abierta se cerro (trama de cierre del host, corte), la siguiente
+        // llamada reconecta.
         lock (_gate)
-            if (_connecting is null or { IsFaulted: true } or { IsCanceled: true })
+            if (_connecting is null or { IsFaulted: true } or { IsCanceled: true } || _connecting is { IsCompletedSuccessfully: true, Result.IsUsable: false })
                 _connecting = ConnectAsync();
 
         return new(_connecting.WaitAsync(token));
@@ -51,39 +52,60 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
 
     private async Task<MultiplexedChannel> ConnectAsync()
     {
+        var (previous, previousStream) = (_channel, _stream);
         var (stream, name) = await OpenAsync().ConfigureAwait(false);
         _stream = stream;
-        var channel = new MultiplexedChannel(PipeReader.Create(stream), PipeWriter.Create(stream), name, _coalesce, _maxMessageSize);
+        var channel = new MultiplexedChannel(PipeReader.Create(stream), PipeWriter.Create(stream), name, _coalesce, _maxMessageSize,
+            _reconnect ??= GetChannelAsync);
         Volatile.Write(ref _channel, channel);
+
+        // La anterior ya no admite llamadas y lo pendiente en ella ya fallo o se reintento aqui.
+        if (previous is not null) _ = CloseAsync(previous, previousStream);
+
         return channel;
+    }
+
+    private Func<CancellationToken, ValueTask<MultiplexedChannel>>? _reconnect;
+
+    private static async Task CloseAsync(MultiplexedChannel channel, Stream? stream)
+    {
+        try
+        {
+            await channel.DisposeAsync().ConfigureAwait(false);
+            if (stream is not null) await stream.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Ya cerrada por el remoto.
+        }
     }
 
     // Canal ya conectado: se devuelve la llamada del canal sin maquina de estados propia (como EnumerateAsync).
     public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.GetAsync<TIn, TOut>(op, payload, true, token)
             : ConnectThenGetAsync<TIn, TOut>(op, payload, true, token);
 
     public ValueTask<TOut?> GetAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.GetAsync<byte, TOut>(op, default, false, token)
             : ConnectThenGetAsync<byte, TOut>(op, default, false, token);
 
     public ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token = default) =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.GetRawAsync(op, state, write, read, token)
             : ConnectThenGetRawAsync(op, state, write, read, token);
 
     public ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.SendAsync(op, payload, true, token)
             : ConnectThenSendAsync(op, payload, true, token);
 
     public ValueTask SendAsync(long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.SendAsync<byte>(op, default, false, token)
             : ConnectThenSendAsync<byte>(op, default, false, token);
 
@@ -100,13 +122,13 @@ public abstract class StreamConnection : IAsyncConnection, IAsyncDisposable
 
     public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, TIn payload, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.EnumerateAsync<TIn, TOut>(op, payload, true, token)
             : ConnectThenEnumerateAsync<TIn, TOut>(op, payload, true, token);
 
     public IAsyncEnumerable<TOut?> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>
         (long op, CancellationToken token = default, [CallerMemberName] string name = "") =>
-        Volatile.Read(ref _channel) is { } channel
+        Volatile.Read(ref _channel) is { IsUsable: true } channel
             ? channel.EnumerateAsync<byte, TOut>(op, default, false, token)
             : ConnectThenEnumerateAsync<byte, TOut>(op, default, false, token);
 

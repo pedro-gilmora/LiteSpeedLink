@@ -34,9 +34,16 @@ internal sealed class MultiplexedChannel
     private readonly Task _readLoop;
     private int _nextId;
     private Exception? _fault;
+    // Trama de cierre del host recibida: lo pendiente no se proceso y las llamadas nuevas van a otra conexion.
+    private volatile bool _retired;
     private readonly bool _coalesce;
     // Limite por operacion fijado en compilacion por el cliente generado; null = Framing.DefaultMaxMessageSize para todas.
     private readonly Func<long, int>? _maxMessageSize;
+    // Conexion de reemplazo (la crea el transporte): solo para peticiones que el host no llego a procesar.
+    private readonly Func<CancellationToken, ValueTask<MultiplexedChannel>>? _reconnect;
+
+    // Tope de reintentos por llamada: cada uno exige una trama de cierre (130 s de ociosidad) o una conexion caida antes de enviar.
+    private const int MaxRetries = 3;
 
     private readonly record struct Response(ResponseStatus Status, byte[] Body, int Length) : IDisposable
     {
@@ -45,45 +52,93 @@ internal sealed class MultiplexedChannel
         public void Dispose() => ArrayPool<byte>.Shared.Return(Body);
     }
 
-    public MultiplexedChannel(PipeReader reader, PipeWriter writer, string remote, bool coalesce = false, Func<long, int>? maxMessageSize = null)
+    public MultiplexedChannel(PipeReader reader, PipeWriter writer, string remote, bool coalesce = false, Func<long, int>? maxMessageSize = null,
+        Func<CancellationToken, ValueTask<MultiplexedChannel>>? reconnect = null)
     {
         _coalesce = coalesce;
         _reader = reader;
         _writer = writer;
         _remote = remote;
         _maxMessageSize = maxMessageSize;
+        _reconnect = reconnect;
         _readLoop = ReadLoopAsync();
     }
+
+    /// <summary>Admite llamadas nuevas: ni cerrada ni retirada por la trama de cierre del host.</summary>
+    internal bool IsUsable => !_retired && Volatile.Read(ref _fault) is null;
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<TOut?> GetAsync<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn,
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(long op, TIn? payload, bool hasPayload, CancellationToken token)
     {
-        using var response = await UnaryAsync(op, payload, hasPayload, token).ConfigureAwait(false);
+        var channel = this;
 
-        EnsureSuccess(response);
+        for (int attempt = 0; ; attempt++)
+        {
+            Response response;
 
-        return Deserialize<TOut>(response.Span);
+            try { response = await channel.UnaryAsync(op, payload, hasPayload, token).ConfigureAwait(false); }
+            catch (UnprocessedRequestException) when (channel._reconnect is not null && attempt < MaxRetries)
+            {
+                channel = await channel._reconnect(token).ConfigureAwait(false);
+                continue;
+            }
+
+            using (response)
+            {
+                channel.EnsureSuccess(response);
+
+                return Deserialize<TOut>(response.Span);
+            }
+        }
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<TOut> GetRawAsync<TState, TOut>(long op, TState state, Action<IBufferWriter<byte>, TState> write, RawReader<TOut> read, CancellationToken token)
     {
-        using var response = await UnaryAsync(op, new RawBody<TState>(state, write), true, token).ConfigureAwait(false);
+        var channel = this;
 
-        EnsureSuccess(response);
+        for (int attempt = 0; ; attempt++)
+        {
+            Response response;
 
-        // Se decodifica sobre el buffer del pool antes de devolverlo: sin copia.
-        return read(response.Span);
+            try { response = await channel.UnaryAsync(op, new RawBody<TState>(state, write), true, token).ConfigureAwait(false); }
+            catch (UnprocessedRequestException) when (channel._reconnect is not null && attempt < MaxRetries)
+            {
+                channel = await channel._reconnect(token).ConfigureAwait(false);
+                continue;
+            }
+
+            using (response)
+            {
+                channel.EnsureSuccess(response);
+
+                // Se decodifica sobre el buffer del pool antes de devolverlo: sin copia.
+                return read(response.Span);
+            }
+        }
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SendAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(long op, TIn? payload, bool hasPayload, CancellationToken token)
     {
-        using var response = await UnaryAsync(op, payload, hasPayload, token).ConfigureAwait(false);
+        var channel = this;
 
-        EnsureSuccess(response);
+        for (int attempt = 0; ; attempt++)
+        {
+            Response response;
+
+            try { response = await channel.UnaryAsync(op, payload, hasPayload, token).ConfigureAwait(false); }
+            catch (UnprocessedRequestException) when (channel._reconnect is not null && attempt < MaxRetries)
+            {
+                channel = await channel._reconnect(token).ConfigureAwait(false);
+                continue;
+            }
+
+            using (response) channel.EnsureSuccess(response);
+            return;
+        }
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
@@ -255,7 +310,7 @@ internal sealed class MultiplexedChannel
         private MultiplexedChannel channel = null!;
         private long op;
         private TIn? payload;
-        private bool hasPayload, _rented, _done, _held, _ended;
+        private bool hasPayload, _rented, _done, _held, _ended, _received;
         private CancellationToken _token;
         private CancellationTokenSource? _linked;
         private StreamSink? _sink;
@@ -272,6 +327,7 @@ internal sealed class MultiplexedChannel
             e._rented = true;
             e._done = false;
             e._ended = false;
+            e._received = false;
 
             // Mismo criterio que [EnumeratorCancellation]: se enlazan solo si ambos pueden cancelar.
             if (enumeratorToken.CanBeCanceled)
@@ -305,28 +361,50 @@ internal sealed class MultiplexedChannel
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
         private async ValueTask<bool> MoveNextSlowAsync(bool armed)
         {
-            try
+            for (int attempt = 0; ; attempt++)
             {
-                if (_sink is null)
+                try
                 {
-                    var sink = channel._streams.TryTake(out var pooled) ? pooled : new();
-                    _id = await channel.SendRequestAsync(op, payload, hasPayload, sink, _token).ConfigureAwait(false);
-                    _sink = sink;
-                    // Se libera en DisposeAsync antes de devolver el sink al pool.
-                    _cancel = _token.UnsafeRegister(static (s, t) => ((StreamSink)s!).Cancel(t), sink);
+                    if (_sink is null)
+                    {
+                        var sink = channel._streams.TryTake(out var pooled) ? pooled : new();
+                        _id = await channel.SendRequestAsync(op, payload, hasPayload, sink, _token).ConfigureAwait(false);
+                        _sink = sink;
+                        // Se libera en DisposeAsync antes de devolver el sink al pool.
+                        _cancel = _token.UnsafeRegister(static (s, t) => ((StreamSink)s!).Cancel(t), sink);
+                    }
+
+                    if (armed) await _sink.WaitAsync().ConfigureAwait(false);
+
+                    while (!TryNext(_sink, out _)) await _sink.WaitAsync().ConfigureAwait(false);
+
+                    return !_done;
                 }
-
-                if (armed) await _sink.WaitAsync().ConfigureAwait(false);
-
-                while (!TryNext(_sink, out _)) await _sink.WaitAsync().ConfigureAwait(false);
-
-                return !_done;
+                // Sin ningun item aun, el host no empezo el stream (cierra solo sin nada en curso): se repite en una conexion nueva.
+                catch (UnprocessedRequestException) when (!_received && channel._reconnect is not null && attempt < MaxRetries)
+                {
+                    DropSink();
+                    armed = false;
+                    channel = await channel._reconnect(_token).ConfigureAwait(false);
+                }
+                catch
+                {
+                    _done = true;
+                    throw;
+                }
             }
-            catch
-            {
-                _done = true;
-                throw;
-            }
+        }
+
+        /// <summary>Suelta el sink de un stream que el host no llego a empezar (sin trama de cancelacion: no hay productor).</summary>
+        private void DropSink()
+        {
+            if (_sink is not { } sink) return;
+
+            _sink = null;
+            _cancel.Dispose();
+            channel.Unregister(_id, sink);
+            sink.Disarm();
+            channel._streams.Add(sink);
         }
 
         /// <summary>true si el resultado ya se conoce (item o fin); false si el sink quedo armado para esperar.</summary>
@@ -349,6 +427,8 @@ internal sealed class MultiplexedChannel
                 }
 
                 if (!sink.TryRead(out var response)) return more = false;
+
+                _received = true;
 
                 if (response.Status is ResponseStatus.Batch)
                 {
@@ -411,10 +491,20 @@ internal sealed class MultiplexedChannel
     private async ValueTask<int> SendRequestAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TIn>(
         long op, TIn? payload, bool hasPayload, object sink, CancellationToken token)
     {
-        if (_fault is { } fault) throw new IOException($"Connection to {_remote} is closed.", fault);
+        // Nada enviado todavia: con la conexion cerrada o retirada se reintenta en otra (UnprocessedRequestException).
+        if (!IsUsable) throw Unprocessed();
         token.ThrowIfCancellationRequested();
 
         int id = Register(sink);
+
+        // Publicado antes de mirar: si la trama de cierre (o el corte) llega a la vez, o la barrida de Retire/Fail ve este sink o aqui se ve
+        // la marca. Aun no se escribio nada en la cola.
+        if (!IsUsable)
+        {
+            Unregister(id, sink);
+            throw Unprocessed();
+        }
+
         Exception? invalid = null;
         int oversize = 0;
         bool flush;
@@ -603,6 +693,14 @@ internal sealed class MultiplexedChannel
 
                 while (Framing.TryReadFrame(ref buffer, out var id, out var content))
                 {
+                    // corrId 0 nunca lo usa el cliente: [len=4][0] es la trama de cierre del host (conexion ociosa).
+                    if (id == 0)
+                    {
+                        Publish(ref group);
+                        if (content.IsEmpty) Retire();
+                        continue;
+                    }
+
                     var status = Framing.ReadStatus(content);
                     int length = (int)content.Length - Framing.StatusSize;
 
@@ -674,7 +772,7 @@ internal sealed class MultiplexedChannel
 
     private void Fail(Exception ex)
     {
-        _fault = ex;
+        Volatile.Write(ref _fault, ex);
 
         for (int i = 0; i < _pending.Length; i++)
         {
@@ -683,6 +781,26 @@ internal sealed class MultiplexedChannel
             else (pending as UnarySink)?.TryFail(ex);
         }
     }
+
+    /// <summary>
+    /// Trama de cierre: el host cierra solo sin nada en curso, asi que lo pendiente aqui no se proceso. Se marca antes de barrer (ver
+    /// SendRequestAsync) y cada llamada pendiente se reintenta en una conexion nueva.
+    /// </summary>
+    private void Retire()
+    {
+        _retired = true;
+
+        var ex = Unprocessed();
+
+        for (int i = 0; i < _pending.Length; i++)
+        {
+            var pending = Volatile.Read(ref _pending[i]);
+            if (pending is StreamSink stream) stream.TryFail(ex);
+            else (pending as UnarySink)?.TryFail(ex);
+        }
+    }
+
+    private UnprocessedRequestException Unprocessed() => new($"Connection to {_remote} was closed before the request was processed.");
 
     private void EnsureSuccess(in Response response)
     {

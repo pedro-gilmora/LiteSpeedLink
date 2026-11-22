@@ -83,7 +83,8 @@ public static class LiteSpeedLinkKestrel
                     var bodySize = limits.MaxRequestBodySize;
                     await host.ServeAsync(connection.Transport.Input, connection.Transport.Output, token.Token, TimeoutMs(limits.RequestHeadersTimeout),
                         rate is null ? 0 : (int)Math.Ceiling(rate.BytesPerSecond), rate is null ? 0 : TimeoutMs(rate.GracePeriod),
-                        bodySize is null ? Framing.MaxMessageSize : (int)Math.Min(bodySize.Value, Framing.MaxMessageSize));
+                        bodySize is null ? Framing.MaxMessageSize : (int)Math.Min(bodySize.Value, Framing.MaxMessageSize),
+                        TimeoutMs(limits.KeepAliveTimeout));
                 });
             }));
 

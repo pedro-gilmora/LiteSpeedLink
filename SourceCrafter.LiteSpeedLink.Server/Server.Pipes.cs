@@ -40,10 +40,11 @@ public interface IHostedLiteSpeedLink
 
     /// <summary>
     /// Plazos y limites de una conexion: el servidor que aloja el host los toma de su configuracion
-    /// (Kestrel: <c>RequestHeadersTimeout</c>, <c>MinRequestBodyDataRate</c>, <c>MaxRequestBodySize</c>).
+    /// (Kestrel: <c>RequestHeadersTimeout</c>, <c>MinRequestBodyDataRate</c>, <c>MaxRequestBodySize</c>, <c>KeepAliveTimeout</c>).
     /// </summary>
     Task ServeAsync(PipeReader reader, PipeWriter writer, CancellationToken token = default, int partialFrameTimeoutMs = Server.PartialFrameTimeoutMs,
-        int minDataRate = Server.MinDataRateBytesPerSecond, int dataRateGraceMs = Server.DataRateGraceMs, int maxMessageSize = Framing.MaxMessageSize);
+        int minDataRate = Server.MinDataRateBytesPerSecond, int dataRateGraceMs = Server.DataRateGraceMs, int maxMessageSize = Framing.MaxMessageSize,
+        int idleTimeoutMs = Server.IdleTimeoutMs);
 }
 
 public static partial class Server
@@ -74,15 +75,24 @@ public static partial class Server
     /// </summary>
     public const int MaxBufferedBytesPerConnection = 4 * 1024 * 1024;
 
+    /// <summary>
+    /// Conexion ociosa (sin peticiones en curso, stream abierto ni trama a medias) que se cierra, con la trama de cierre <c>[len=4][corrId=0]</c>
+    /// antes (el cliente reintenta en una conexion nueva lo que ya enviara: el host no lo proceso). 130 s, como <c>KeepAliveTimeout</c> de
+    /// Kestrel: por debajo de los cortes silenciosos de balanceadores y NAT (4-6 min), para que cierre el host y no un intermediario mudo.
+    /// <see cref="Timeout.Infinite"/> = nunca.
+    /// </summary>
+    public const int IdleTimeoutMs = 130_000;
+
     public static async Task ServePipeAsync<THandler>(PipeReader reader, PipeWriter writer, THandler handlers, CancellationToken token, int maxInFlight = MaxInFlightPerConnection,
         int partialFrameTimeoutMs = PartialFrameTimeoutMs, int minDataRate = MinDataRateBytesPerSecond, int dataRateGraceMs = DataRateGraceMs,
-        int maxBufferedBytes = MaxBufferedBytesPerConnection, int maxMessageSize = Framing.MaxMessageSize)
+        int maxBufferedBytes = MaxBufferedBytesPerConnection, int maxMessageSize = Framing.MaxMessageSize, int idleTimeoutMs = IdleTimeoutMs)
         where THandler : struct, IRequestHandler
     {
         var responses = new ResponseChannel(writer);
         var inflight = new Inflight();
         using var slots = new SemaphoreSlim(maxInFlight);
         var budget = new ByteBudget(maxBufferedBytes);
+        using var idle = idleTimeoutMs > 0 ? new IdleWatch(reader, inflight, idleTimeoutMs) : null;
         // Uno por conexion y solo si llega una trama a medias: rearmar el temporizador no asigna.
         CancellationTokenSource? partial = null;
         bool pending = false;
@@ -113,6 +123,22 @@ public static partial class Server
                     else partial.CancelAfter(Timeout.Infinite);
 
                     pending = false;
+                }
+
+                // Vencio el plazo de ociosidad: se confirma aqui (pudo llegar una peticion a la vez; solo el lector despacha, asi que nada
+                // nuevo entra en curso) y se cierra con la trama de cierre. Lo que el cliente enviase despues no se lee: lo reintenta.
+                bool idleChecked = false;
+                if (result.IsCanceled && idle is { Expired: true })
+                {
+                    if (buffer.IsEmpty && filling is null && inflight.IsIdle && !result.IsCompleted)
+                    {
+                        reader.AdvanceTo(buffer.Start, buffer.End);
+                        await responses.CloseAsync().ConfigureAwait(false);
+                        break;
+                    }
+
+                    idle.Resume();
+                    idleChecked = true;
                 }
 
                 bool consumed = false;
@@ -183,8 +209,9 @@ public static partial class Server
                 int rateLength = filling is not null ? fillLength : partialFrame >= Framing.LengthPrefixSize ? Framing.ReadLength(buffer) : 0;
 
                 reader.AdvanceTo(buffer.Start, buffer.End);
+                idle?.Touch(partialFrame != 0);
 
-                if (result.IsCompleted || result.IsCanceled) break;
+                if (result.IsCompleted || (result.IsCanceled && !idleChecked)) break;
 
                 if (partialFrame == 0)
                 {
@@ -557,6 +584,29 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
             ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
     }
 
+    /// <summary>
+    /// Trama de cierre <c>[len=4][corrId=0]</c> (el cliente nunca usa el id 0): la conexion se cierra por ociosidad, sin nada en curso, asi que
+    /// lo que el cliente tenga pendiente no se proceso y puede reintentarlo en otra conexion. Va detras de las respuestas ya escritas.
+    /// </summary>
+    internal async ValueTask CloseAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Framing.WriteFrameHeader(writer.GetSpan(Framing.FrameHeaderSize), 0, 0);
+            writer.Advance(Framing.FrameHeaderSize);
+            await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Conexion ya caida: el cliente lo vera como cierre sin trama.
+        }
+        finally
+        {
+            Release();
+        }
+    }
+
     private async Task ReleaseAfterAsync(ValueTask<FlushResult> flush)
     {
         try { await flush.ConfigureAwait(false); }
@@ -656,6 +706,9 @@ internal sealed class Inflight
 {
     private int _count = 1;
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Sin handlers en curso (solo cuenta la lectura); un stream abierto cuenta mientras su handler corre.</summary>
+    public bool IsIdle => Volatile.Read(ref _count) == 1;
 
     public void Enter() => Interlocked.Increment(ref _count);
 

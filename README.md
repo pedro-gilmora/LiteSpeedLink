@@ -124,14 +124,16 @@ Hosts bound what one peer can hold:
 - **Tcp and Uds:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog.
 - **Tcp and Kestrel:** at most 64 connections per remote address (`maxConnectionsPerAddress`, 1/16 of the global cap). IPv6 counts per /64 prefix. Extra connections from that address are closed as soon as they're accepted (before any TLS handshake on Kestrel), so filling the server takes at least 16 addresses.
 - **Tcp TLS:** the handshake must finish within 10 s.
-- **Tcp and Uds:** a half-received message is closed after 30 s without new bytes, or once it falls below a minimum data rate (240 B/s after a 5 s grace period, like Kestrel's `MinRequestBodyDataRate`). An idle connection is never closed.
-- **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, `MinRequestBodyDataRate`, the HTTPS handshake timeout).
+- **Tcp and Uds:** a half-received message is closed after 30 s without new bytes, or once it falls below a minimum data rate (240 B/s after a 5 s grace period, like Kestrel's `MinRequestBodyDataRate`).
+- **Tcp and Uds:** a connection with nothing in flight (no pending request, no open stream, no partial message) for 130 s (`idleTimeoutMs`, like Kestrel's `KeepAliveTimeout`, and below the 4–6 min after which load balancers and NATs drop idle flows silently) is closed. Before closing, the host sends an 8-byte close frame (`[len=4][id=0]`, like HTTP/2's GOAWAY). That frame is sent once per closed connection and costs nothing per call.
+- **Clients:** the close frame means "nothing you still have pending was processed", so the generated client opens a new connection and retries those calls transparently (up to 3 times), streams included as long as they haven't received an item yet. A connection that was already closed is replaced on the next call. The Quic client does the same when its connection is lost.
+- **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, `MinRequestBodyDataRate`, `KeepAliveTimeout`, the HTTPS handshake timeout).
 - **Quic:** at most 256 streams per connection. Every stream has the same read deadline (30 s without new bytes, 240 B/s minimum rate after a 5 s grace period), including the wait for its first bytes, so a stream that's opened and left idle doesn't hold one of the 256.
 
 Message size and memory per connection:
 - **Request bodies:** up to 4 MB by default (like gRPC). A contract operation that needs more declares it at compile time:
   ```csharp
-  [MaxMessageSize(64 * 1024 * 1024)]   // only this operation (protocol ceiling: 16 MB)
+  [MaxMessageSize(8 * 1024 * 1024)]   // only this operation (protocol ceiling: 16 MB)
   int Upload(byte[] data);
   ```
   The generated client rejects an oversized request before sending it (only that call fails). The host checks the limit as soon as it has read the operation id, before holding the body, and closes the connection. On Kestrel, `Limits.MaxRequestBodySize` also caps it.
@@ -139,6 +141,8 @@ Message size and memory per connection:
 - Bodies are copied into their final buffer as they arrive, so the transport never holds a whole message.
 
 A request id that repeats while its stream is still running is rejected.
+
+These limits bound what one peer holds, but a peer that keeps sending valid requests is never idle: without authentication it can still keep up to 64 connections per address open. Only mutual TLS stops unknown peers from connecting at all, so a Tcp host left on `Tls = TlsMode.Default` gets warning SCLSL024. Set `Mutual` (or `Server`) to require TLS, or `None` to state that plaintext is intended.
 
 `Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `<tmp>/lsl-<user>` with mode 0700 for anyone else. Startup fails if that directory is a link or belongs to another user.
 
@@ -265,6 +269,7 @@ public interface IStreams : IServiceUnit
 | SCLSL021 | Warning | Middleware ignored on streams |
 | SCLSL022 | Error | QUIC with `Tls = TlsMode.None` (QUIC always encrypts) |
 | SCLSL023 | Error | `[MaxMessageSize]` outside 1 byte – 16 MB (the protocol limit) |
+| SCLSL024 | Warning | Tcp host with `Tls = TlsMode.Default`: plaintext and unauthenticated when started without a certificate |
 
 ## Benchmarks
 

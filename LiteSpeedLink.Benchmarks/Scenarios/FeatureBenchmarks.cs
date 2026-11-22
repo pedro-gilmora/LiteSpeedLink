@@ -48,7 +48,7 @@ public class FeatureBenchmarks
     [GlobalSetup]
     public async Task Setup()
     {
-        _host = FeatureService.Start(0, null);
+        _host = FeatureService.Start(0);
         _lsl = new FeatureServiceClient("127.0.0.1", ((IPEndPoint)_host.LocalEndpoint).Port).Features;
 
         int p = ComparisonBenchmarks.FreePort();
@@ -359,7 +359,7 @@ public sealed class FeaturesImpl : IFeatures
     }
 }
 
-[ServiceHost(ServiceConnectionType.Tcp),
+[ServiceHost(ServiceConnectionType.Tcp, Tls = TlsMode.None),
  ServiceProvider,
  Singleton<FeatureTokens>,
  Singleton<FeatureAuth>,

@@ -43,7 +43,7 @@ public sealed class ChatHandler(ChatRooms rooms, ILogger<ChatHandler> logger) : 
     }
 }
 
-[ServiceHost(ServiceConnectionType.Tcp)]
+[ServiceHost(ServiceConnectionType.Tcp, Tls = TlsMode.None)]
 [ServiceProvider]
 [Singleton<ChatRooms>]
 [Hosted<ILogger<ChatHandler>>]

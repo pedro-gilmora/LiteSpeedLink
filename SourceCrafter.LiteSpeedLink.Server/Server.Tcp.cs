@@ -31,8 +31,9 @@ public static partial class Server
         int maxConnections = MaxConnections,
         TlsMode tls = TlsMode.Default,
         CertificateCheck check = CertificateCheck.ChainOrPinned,
-        int maxConnectionsPerAddress = MaxConnectionsPerAddress)
-        => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, maxConnections, tls, check, maxConnectionsPerAddress);
+        int maxConnectionsPerAddress = MaxConnectionsPerAddress,
+        int idleTimeoutMs = IdleTimeoutMs)
+        => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, maxConnections, tls, check, maxConnectionsPerAddress, idleTimeoutMs);
 
     public static TcpListener StartTcpServer<THandler>(
         int port,
@@ -44,7 +45,8 @@ public static partial class Server
         int maxConnections = MaxConnections,
         TlsMode tls = TlsMode.Default,
         CertificateCheck check = CertificateCheck.ChainOrPinned,
-        int maxConnectionsPerAddress = MaxConnectionsPerAddress)
+        int maxConnectionsPerAddress = MaxConnectionsPerAddress,
+        int idleTimeoutMs = IdleTimeoutMs)
         where THandler : struct, IRequestHandler
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlightPerConnection, 1);
@@ -59,7 +61,7 @@ public static partial class Server
 
         tcpServer.Start();
 
-        ListenClientsAsync(tcpServer, handlers, onFinalize, options, maxInFlightPerConnection, new SemaphoreSlim(maxConnections), new AddressLimiter(maxConnectionsPerAddress), token);
+        ListenClientsAsync(tcpServer, handlers, onFinalize, options, maxInFlightPerConnection, idleTimeoutMs, new SemaphoreSlim(maxConnections), new AddressLimiter(maxConnectionsPerAddress), token);
 
         return tcpServer;
 
@@ -69,6 +71,7 @@ public static partial class Server
             Action onFinalize,
             SslServerAuthenticationOptions? options,
             int limit,
+            int idle,
             SemaphoreSlim connections,
             AddressLimiter addresses,
             CancellationToken token)
@@ -103,7 +106,7 @@ public static partial class Server
                         continue;
                     }
 
-                    _ = HandleConnectionAsync(client, handlers, options, limit, connections, addresses, address, token);
+                    _ = HandleConnectionAsync(client, handlers, options, limit, idle, connections, addresses, address, token);
                 }
             }
             catch (Exception ex)
@@ -122,6 +125,7 @@ public static partial class Server
             THandler handlers,
             SslServerAuthenticationOptions? options,
             int limit,
+            int idle,
             SemaphoreSlim connections,
             AddressLimiter addresses,
             IPAddress? address,
@@ -148,7 +152,7 @@ public static partial class Server
 
                 await using (stream.ConfigureAwait(false))
                 {
-                    await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit).ConfigureAwait(false);
+                    await ServePipeAsync(PipeReader.Create(stream), PipeWriter.Create(stream), handlers, token, limit, idleTimeoutMs: idle).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is OperationCanceledException or IOException or AuthenticationException or TimeoutException or SocketException)
