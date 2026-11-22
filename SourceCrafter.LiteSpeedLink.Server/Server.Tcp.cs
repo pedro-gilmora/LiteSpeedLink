@@ -30,7 +30,7 @@ public static partial class Server
         int maxInFlightPerConnection = MaxInFlightPerConnection,
         int maxConnections = MaxConnections,
         TlsMode tls = TlsMode.Default,
-        CertificateCheck check = CertificateCheck.ChainOrPinned,
+        CertificateCheck check = CertificateCheck.Pinned,
         int maxConnectionsPerAddress = MaxConnectionsPerAddress,
         int idleTimeoutMs = IdleTimeoutMs)
         => StartTcpServer(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, maxInFlightPerConnection, maxConnections, tls, check, maxConnectionsPerAddress, idleTimeoutMs);
@@ -44,7 +44,7 @@ public static partial class Server
         int maxInFlightPerConnection = MaxInFlightPerConnection,
         int maxConnections = MaxConnections,
         TlsMode tls = TlsMode.Default,
-        CertificateCheck check = CertificateCheck.ChainOrPinned,
+        CertificateCheck check = CertificateCheck.Pinned,
         int maxConnectionsPerAddress = MaxConnectionsPerAddress,
         int idleTimeoutMs = IdleTimeoutMs)
         where THandler : struct, IRequestHandler

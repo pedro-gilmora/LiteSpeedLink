@@ -236,7 +236,7 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
     // Espejo de SourceCrafter.LiteSpeedLink.TlsMode/CertificateCheck (Abstractions): el generador no la referencia.
     private const int TlsDefault = 0, TlsNone = 1, TlsServer = 2, CheckChain = 1;
     private static readonly string[] TlsModeNames = ["Default", "None", "Server", "Mutual"];
-    private static readonly string[] CheckNames = ["ChainOrPinned", "Chain", "Pinned"];
+    private static readonly string[] CheckNames = ["Pinned", "Chain", "ChainOrPinned"];
 
     /// <summary>
     /// Firma del certificado fijada en compilacion: <c>null</c> = sin parametro; <c>"?"</c> = opcional (Tcp por defecto: sin el, texto plano);

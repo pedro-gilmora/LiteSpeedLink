@@ -114,11 +114,13 @@ TLS is fixed at compile time on `[ServiceHost]`/`[ServiceClient]`. The generator
 
 | `Check` | Remote certificate accepted when |
 |---|---|
-| `ChainOrPinned` (default) | it has a valid chain, or it is exactly the configured certificate (SHA-256) |
-| `Chain` | it has a valid chain (trusted CA) |
-| `Pinned` | it is exactly the configured certificate (SHA-256), whatever its chain |
+| `Pinned` (default) | it is exactly the configured certificate (SHA-256), whatever its chain |
+| `Chain` | it has a valid chain (trusted CA) and, on the client, matches the host name |
+| `ChainOrPinned` | it has a valid chain, or it is exactly the configured certificate (SHA-256) |
 
 On the client, `cert` is the pin and, with `Mutual`, also the client certificate. With `Server` + `Chain`, the client takes no certificate.
+
+`Pinned` is the default because, on a `Mutual` host, `Chain` accepts a client certificate issued by any CA the machine trusts, public CAs included, so it only authenticates peers if the machine trusts nothing but your own CA.
 
 Hosts bound what one peer can hold:
 - **Tcp and Uds:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog.

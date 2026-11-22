@@ -25,7 +25,7 @@ public static partial class Server
         X509Certificate2 cert,
         CancellationToken token = default,
         TlsMode tls = TlsMode.Default,
-        CertificateCheck check = CertificateCheck.ChainOrPinned,
+        CertificateCheck check = CertificateCheck.Pinned,
         int partialFrameTimeoutMs = PartialFrameTimeoutMs,
         int minDataRate = MinDataRateBytesPerSecond,
         int dataRateGraceMs = DataRateGraceMs)
@@ -51,7 +51,7 @@ public static partial class Server
         X509Certificate2 cert,
         CancellationToken token = default,
         TlsMode tls = TlsMode.Default,
-        CertificateCheck check = CertificateCheck.ChainOrPinned,
+        CertificateCheck check = CertificateCheck.Pinned,
         int partialFrameTimeoutMs = PartialFrameTimeoutMs,
         int minDataRate = MinDataRateBytesPerSecond,
         int dataRateGraceMs = DataRateGraceMs)

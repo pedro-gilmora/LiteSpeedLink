@@ -20,12 +20,12 @@ public enum TlsMode
 /// <summary>Como se valida el certificado remoto; fijado en compilacion.</summary>
 public enum CertificateCheck
 {
-    /// <summary>Cadena valida o exactamente el certificado configurado (SHA-256).</summary>
-    ChainOrPinned,
+    /// <summary>Solo el certificado configurado (SHA-256); ignora la cadena. Por defecto: una cadena valida de cualquier CA de la maquina no autentica al par.</summary>
+    Pinned,
     /// <summary>Solo cadena valida (CA de confianza).</summary>
     Chain,
-    /// <summary>Solo el certificado configurado (SHA-256); ignora la cadena.</summary>
-    Pinned
+    /// <summary>Cadena valida o exactamente el certificado configurado (SHA-256).</summary>
+    ChainOrPinned
 }
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]

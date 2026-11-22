@@ -48,6 +48,19 @@ public class SecurityHardeningTest
         TlsPolicy.Validator(null, CertificateCheck.Chain)(this, pinned, null, SslPolicyErrors.RemoteCertificateChainErrors).Should().BeFalse();
     }
 
+    /// <summary>Por defecto solo autentica el certificado configurado: una cadena valida de cualquier CA de la maquina (p. ej. publica) no basta.</summary>
+    [Fact]
+    public void TheDefaultCheckIsPinned()
+    {
+        using var cert = Constants.GetDevCert();
+        using var other = OtherCert();
+
+        default(CertificateCheck).Should().Be(CertificateCheck.Pinned);
+        TlsPolicy.ForServer(cert, TlsMode.Mutual, default, System.Security.Authentication.SslProtocols.None)!
+            .RemoteCertificateValidationCallback!(this, other, null, SslPolicyErrors.None).Should().BeFalse();
+        HostOf(Generate("Tcp", ", Tls = TlsMode.Mutual")).Should().Contain("check: global::SourceCrafter.LiteSpeedLink.CertificateCheck.Pinned");
+    }
+
     /// <summary>Hallazgo 1: el cliente QUIC aceptaba cualquier certificado; ahora valida el host y el host exige el del cliente.</summary>
     [Fact]
     [System.Runtime.Versioning.RequiresPreviewFeatures]

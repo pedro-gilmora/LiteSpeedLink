@@ -12,7 +12,7 @@ public static partial class ClientExtensions
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QuicConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default, int unaryStreams = QuicConnection.DefaultUnaryStreams, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned,
+    public static QuicConnection AsQuicConnection(this EndPoint ip, X509Certificate2? cert = default, int unaryStreams = QuicConnection.DefaultUnaryStreams, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.Pinned,
         Func<long, int>? maxMessageSize = null)
     {
         // QUIC siempre cifra: Default es TLS mutuo; el servidor se valida siempre (antes se aceptaba cualquier certificado).
@@ -36,7 +36,7 @@ public static partial class ClientExtensions
     public static MemoryConnection AsMemoryConnection(this string ctxName, int timeout = 5000, System.Text.Encoding? encoding = null) => new(ctxName, timeout, encoding);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TcpConnection AsTcpConnection(this EndPoint ip, X509Certificate2? cert = null, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.ChainOrPinned,
+    public static TcpConnection AsTcpConnection(this EndPoint ip, X509Certificate2? cert = null, TlsMode tls = TlsMode.Default, CertificateCheck check = CertificateCheck.Pinned,
         Func<long, int>? maxMessageSize = null)
         => new(ip, cert, tls: tls, check: check, maxMessageSize: maxMessageSize);
 
