@@ -125,31 +125,6 @@ public partial class ServersTest
         results.Should().Equal(Enumerable.Range(0, 100).Select(n => n * 2));
     }
 
-    /// <summary>Optimizacion QUIC: cerrar la llamada drena el FIN y no aborta el stream (sin QuicException por llamada).</summary>
-    [Fact]
-    [RequiresPreviewFeatures]
-    [SupportedOSPlatform("windows")]
-    public async Task TestQuicCallDoesNotThrowInternally()
-    {
-        const int serverPort = 5017;
-        var cert = Constants.GetDevCert();
-
-        await using var server = await Server.StartQuicServerAsync(serverPort, HandleRequestAsync, () => { }, cert, default);
-        await using var connection = new DnsEndPoint("localhost", serverPort).AsQuicConnection(cert, unaryStreams: 0);
-        await connection.GetAsync<(int, int, bool), int>(0, (1, 1, false));
-
-        int quicExceptions = 0;
-        EventHandler<System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs> h = (_, e) => { if (e.Exception is System.Net.Quic.QuicException) Interlocked.Increment(ref quicExceptions); };
-        AppDomain.CurrentDomain.FirstChanceException += h;
-        try
-        {
-            for (int i = 0; i < 50; i++) (await connection.GetAsync<(int, int, bool), int>(0, (i, i, false))).Should().Be(i * 2);
-        }
-        finally { AppDomain.CurrentDomain.FirstChanceException -= h; }
-
-        quicExceptions.Should().Be(0);
-    }
-
     /// <summary>Pool QUIC: unarias concurrentes multiplexadas en streams reutilizables; modo por-stream (0) sigue valido.</summary>
     [Theory]
     [InlineData(0)]

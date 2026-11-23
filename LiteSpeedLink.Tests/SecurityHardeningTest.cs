@@ -290,6 +290,34 @@ public class SecurityHardeningTest
         (await third.GetAsync<int, int>(0, 3, Within())).Should().Be(3);
     }
 
+    /// <summary>QUIC con los mismos topes que TCP: con Tls = Server los clientes no se autentican y sin tope podian abrir conexiones sin limite.</summary>
+    [Fact]
+    [System.Runtime.Versioning.RequiresPreviewFeatures]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task QuicHasThePerAddressLimitToo()
+    {
+        if (!QuicListener.IsSupported) return;
+
+        var cert = Constants.GetDevCert();
+        await using var server = await Server.StartQuicServerAsync(0, (op, ctx, _) => ctx.ReturnAsync(ctx.Get<int>()), () => { }, cert, maxConnectionsPerAddress: 1);
+        var endpoint = new DnsEndPoint("localhost", server.LocalEndPoint.Port);
+
+        var first = endpoint.AsQuicConnection(cert);
+        (await first.GetAsync<int, int>(0, 1, Within())).Should().Be(1);
+
+        await using (var second = endpoint.AsQuicConnection(cert))
+        {
+            var call = async () => await second.GetAsync<int, int>(0, 2, Within());
+            await call.Should().ThrowAsync<Exception>();
+        }
+
+        await first.DisposeAsync();
+        await Task.Delay(300);
+
+        await using var third = endpoint.AsQuicConnection(cert);
+        (await third.GetAsync<int, int>(0, 3, Within())).Should().Be(3);
+    }
+
     /// <summary>Revision del diff: goteando bytes por debajo del plazo sin bytes, la trama a medias se corta por ritmo minimo (plazo total).</summary>
     [Fact]
     public async Task ATrickledFrameIsClosedByTheMinimumDataRate()

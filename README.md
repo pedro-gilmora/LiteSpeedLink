@@ -123,8 +123,8 @@ On the client, `cert` is the pin and, with `Mutual`, also the client certificate
 `Pinned` is the default because, on a `Mutual` host, `Chain` accepts a client certificate issued by any CA the machine trusts, public CAs included, so it only authenticates peers if the machine trusts nothing but your own CA.
 
 Hosts bound what one peer can hold:
-- **Tcp and Uds:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog.
-- **Tcp and Kestrel:** at most 64 connections per remote address (`maxConnectionsPerAddress`, 1/16 of the global cap). IPv6 counts per /64 prefix. Extra connections from that address are closed as soon as they're accepted (before any TLS handshake on Kestrel), so filling the server takes at least 16 addresses.
+- **Tcp, Uds and Quic:** at most 1024 simultaneous connections (`maxConnections`); further connections wait in the OS backlog (Quic: MsQuic's accept queue, then refused).
+- **Tcp, Quic and Kestrel:** at most 64 connections per remote address (`maxConnectionsPerAddress`, 1/16 of the global cap). IPv6 counts per /64 prefix. Extra connections from that address are closed as soon as they're accepted (before any TLS handshake on Kestrel; on Quic, once accepted and before any stream), so filling the server takes at least 16 addresses.
 - **Tcp TLS:** the handshake must finish within 10 s.
 - **Tcp and Uds:** a half-received message is closed after 30 s without new bytes, or once it falls below a minimum data rate (240 B/s after a 5 s grace period, like Kestrel's `MinRequestBodyDataRate`).
 - **Tcp and Uds:** a connection with nothing in flight (no pending request, no open stream, no partial message) for 130 s (`idleTimeoutMs`, like Kestrel's `KeepAliveTimeout`, and below the 4–6 min after which load balancers and NATs drop idle flows silently) is closed. Before closing, the host sends an 8-byte close frame (`[len=4][id=0]`, like HTTP/2's GOAWAY). That frame is sent once per closed connection and costs nothing per call.

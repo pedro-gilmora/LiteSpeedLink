@@ -28,8 +28,10 @@ public static partial class Server
         CertificateCheck check = CertificateCheck.Pinned,
         int partialFrameTimeoutMs = PartialFrameTimeoutMs,
         int minDataRate = MinDataRateBytesPerSecond,
-        int dataRateGraceMs = DataRateGraceMs)
-        => StartQuicServerAsync(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, tls, check, partialFrameTimeoutMs, minDataRate, dataRateGraceMs);
+        int dataRateGraceMs = DataRateGraceMs,
+        int maxConnections = MaxConnections,
+        int maxConnectionsPerAddress = MaxConnectionsPerAddress)
+        => StartQuicServerAsync(port, new DelegateRequestHandler(handlers), onFinalize, cert, token, tls, check, partialFrameTimeoutMs, minDataRate, dataRateGraceMs, maxConnections, maxConnectionsPerAddress);
 
     /// <summary>Streams bidireccionales por conexion; al llegar, QUIC hace esperar al cliente (control de flujo, sin error).</summary>
     public const int MaxQuicStreamsPerConnection = 256;
@@ -54,11 +56,15 @@ public static partial class Server
         CertificateCheck check = CertificateCheck.Pinned,
         int partialFrameTimeoutMs = PartialFrameTimeoutMs,
         int minDataRate = MinDataRateBytesPerSecond,
-        int dataRateGraceMs = DataRateGraceMs)
+        int dataRateGraceMs = DataRateGraceMs,
+        int maxConnections = MaxConnections,
+        int maxConnectionsPerAddress = MaxConnectionsPerAddress)
         where THandler : struct, IRequestHandler
     {
         // QUIC siempre cifra: Default es TLS mutuo, como TCP con certificado.
         if (tls is TlsMode.None) throw new ArgumentException("QUIC always uses TLS.", nameof(tls));
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConnections, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConnectionsPerAddress, 1);
 
         var deadline = new StreamDeadline(partialFrameTimeoutMs, minDataRate, dataRateGraceMs);
 
@@ -84,21 +90,40 @@ public static partial class Server
             .ConfigureAwait(false);
 
 
-        ListenConnections(listener, handlers, onFinalize, deadline, token);
+        ListenConnections(listener, handlers, onFinalize, deadline, new SemaphoreSlim(maxConnections), new AddressLimiter(maxConnectionsPerAddress), token);
 
         return listener;
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // Mismos topes que TCP. Lleno: no se acepta, y MsQuic rechaza las nuevas al llenarse su cola (ListenBacklog).
         static async void ListenConnections(
             QuicListener listener,
             THandler handlers,
             Action onFinalize,
             StreamDeadline deadline,
+            SemaphoreSlim connections,
+            AddressLimiter addresses,
             CancellationToken token)
         {
             try
             {
-            DO: HandleConnectionAsync(await listener.AcceptConnectionAsync(token).ConfigureAwait(false), handlers, deadline, token); goto DO;
+                while (true)
+                {
+                    await connections.WaitAsync(token).ConfigureAwait(false);
+
+                    QuicConnection connection;
+                    try { connection = await listener.AcceptConnectionAsync(token).ConfigureAwait(false); }
+                    catch { connections.Release(); throw; }
+
+                    // Direccion por encima de su limite: se cierra ya, antes de que abra streams.
+                    if (!addresses.TryEnter(connection.RemoteEndPoint, out var address))
+                    {
+                        connections.Release();
+                        _ = connection.DisposeAsync().AsTask();
+                        continue;
+                    }
+
+                    HandleConnectionAsync(connection, handlers, deadline, connections, addresses, address, token);
+                }
             }
             catch
             {
@@ -110,23 +135,37 @@ public static partial class Server
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static async void HandleConnectionAsync(
             QuicConnection connection,
             THandler handlers,
             StreamDeadline deadline,
+            SemaphoreSlim connections,
+            AddressLimiter addresses,
+            System.Net.IPAddress? address,
             CancellationToken token)
         {
-            await using (connection)
+            try
             {
-                try
+                await using (connection)
                 {
-                DO: _ = HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, deadline, token); goto DO;
+                    try
+                    {
+                    DO: _ = HandleStreamAsync(await connection.AcceptInboundStreamAsync(token).ConfigureAwait(false), handlers, deadline, token); goto DO;
+                    }
+                    catch
+                    {
+                        return;
+                    }
                 }
-                catch
-                {
-                    return;
-                }
+            }
+            catch
+            {
+                // DisposeAsync de una conexion ya caida: nada que hacer.
+            }
+            finally
+            {
+                addresses.Exit(address);
+                connections.Release();
             }
         }
 
