@@ -148,6 +148,8 @@ These limits bound what one peer holds, but a peer that keeps sending valid requ
 
 `Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `<tmp>/lsl-<user>` with mode 0700 for anyone else. Startup fails if that directory is a link or belongs to another user.
 
+`Memory` (and `Local` on Windows) uses named shared memory in the session with default security, so only processes of the same user can open it. Even so, nothing a peer writes into the rings is trusted: their layout and node offsets are checked against the local mapping, message lengths are capped at 16 MB (64 MB of partial messages per endpoint), and a malformed message is dropped without stopping the reader.
+
 **Udp has no authentication, and replies go to the source address of the request, which can be spoofed**, so a host could be used to reflect traffic at someone else. Like QUIC before it validates an address (RFC 9000 §8.1, also recommended for CoAP in RFC 9175), a host never sends more than 3× the bytes it received for a request, counted on the wire (IP and UDP headers included):
 ```csharp
 [ServiceHost(ServiceConnectionType.Udp)]                        // 3× (default)
