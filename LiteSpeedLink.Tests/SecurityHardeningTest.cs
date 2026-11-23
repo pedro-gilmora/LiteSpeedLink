@@ -397,14 +397,46 @@ public class SecurityHardeningTest
     public void QuicWithoutTlsIsRejected()
         => Generate("Quic", ", Tls = TlsMode.None").HasDiagnostic("SCLSL022").Should().BeTrue();
 
-    /// <summary>Hallazgo 4: quien arranca el host UDP puede fijar el limite de amplificacion.</summary>
-    [Fact]
-    public void UdpHostExposesMaxAmplification()
+    /// <summary>Hallazgo 4: limite de amplificacion UDP fijado en compilacion; 3 por defecto (RFC 9000 8.1), 0 explicito = sin limite.</summary>
+    [Theory]
+    [InlineData("", "maxAmplification: 3", null)]
+    [InlineData(", MaxAmplification = 0", "maxAmplification: 0", null)]
+    [InlineData(", MaxAmplification = 10", "maxAmplification: 10", null)]
+    [InlineData(", MaxAmplification = -1", null, "SCLSL025")]
+    public void UdpMaxAmplificationIsFixedAtCompileTime(string amplification, string? emitted, string? error)
     {
-        var r = Generate("Udp");
+        var r = GeneratorHarness.Run(Source.Replace("[ServiceHost(ServiceConnectionType.TRANSPORT TLS)]", "[ServiceHost(ServiceConnectionType.Udp" + amplification + ")]")
+            .Replace("TRANSPORT", "Udp").Replace("TLS", ""), new Dictionary<string, string> { ["build_property.TargetFramework"] = "net10.0-windows" });
+
+        if (error is not null)
+        {
+            r.HasDiagnostic(error).Should().BeTrue();
+            return;
+        }
 
         r.Errors.Should().BeEmpty();
-        HostOf(r).Should().Contain("int maxAmplification = 0").And.Contain("maxAmplification: maxAmplification");
+        HostOf(r).Should().Contain(emitted).And.NotContain("int maxAmplification");
+    }
+
+    /// <summary>
+    /// Por defecto (3x en el cable) una respuesta grande a una peticion pequena no sale: el cliente recibe un fallo corto al momento
+    /// (no espera a su timeout) y la conexion sigue sirviendo respuestas que caben.
+    /// </summary>
+    [Fact]
+    public async Task UdpReplyOverTheAmplificationLimitFailsFast()
+    {
+        using var udp = Server.StartUdpServer(0, (id, ctx, token) => id == 1
+            ? ctx.EnumerateAsync(() => Enumerable.Repeat(new byte[9], 100))
+            : ctx.ReturnAsync(new string('x', ctx.Get<int>())), () => { });
+        using var connection = new DnsEndPoint("localhost", ((IPEndPoint)udp.Client.LocalEndPoint!).Port).AsUdpConnection();
+
+        var tooLarge = async () => await connection.GetAsync<int, string>(0, 1000, Within(2000));
+        (await tooLarge.Should().ThrowAsync<InvalidOperationException>()).WithMessage("*MaxAmplification*");
+        (await connection.GetAsync<int, string>(0, 10, Within(2000))).Should().HaveLength(10);
+
+        // Un stream que se pasa a mitad termina con el error claro (el aviso), no por el timeout del cliente.
+        var stream = async () => { await foreach (var _ in connection.EnumerateAsync<byte[]>(1, Within(2000))) { } };
+        (await stream.Should().ThrowAsync<InvalidOperationException>()).WithMessage("*MaxAmplification*");
     }
 
     /// <summary>Hallazgo 5: Local fuera de Windows deriva la ruta del directorio privado.</summary>

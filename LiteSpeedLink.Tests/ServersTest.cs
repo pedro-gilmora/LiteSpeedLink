@@ -180,7 +180,7 @@ public partial class ServersTest(ITestOutputHelper output)
     {
         const int serverPort = 5003;
 
-        using UdpClient server = Server.StartUdpServer(serverPort, HandleUdpRequestAsync, () => { }, default);
+        using UdpClient server = Server.StartUdpServer(serverPort, HandleUdpRequestAsync, () => { }, default, maxAmplification: 0);
         using var connection = new DnsEndPoint("localhost", serverPort).AsUdpConnection();
 
         var results = await Task.WhenAll(Enumerable.Range(0, 200).Select(i =>
@@ -197,7 +197,7 @@ public partial class ServersTest(ITestOutputHelper output)
         const string serverIp = "localhost";
         const int serverPort = 5000;
 
-        using UdpClient server = Server.StartUdpServer(serverPort, HandleUdpRequestAsync, () => { }, default);
+        using UdpClient server = Server.StartUdpServer(serverPort, HandleUdpRequestAsync, () => { }, default, maxAmplification: 0);
 
         var timeStamp = Stopwatch.GetTimestamp();
 

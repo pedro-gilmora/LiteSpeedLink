@@ -265,27 +265,48 @@ public partial class ServersTest
         (await connection.GetAsync<int, int>(0, 21)).Should().Be(42);
     }
 
-    /// <summary>Anti-amplificacion UDP: con factor 1, una respuesta mayor que la peticion no se envia.</summary>
+    /// <summary>
+    /// Anti-amplificacion UDP: lo enviado por peticion (en total, aviso incluido) no pasa de N x lo recibido en el cable (cabeceras IP/UDP
+    /// incluidas). La respuesta que no cabe no sale; en su lugar va el aviso TooLarge sin cuerpo, cuyo coste se reserva al recibir la peticion.
+    /// </summary>
     [Fact]
     public async Task TestUdpAmplificationBudget()
     {
-        using var udp = Server.StartUdpServer(5013, (id, ctx, token) =>
-            ctx.ReturnAsync(new string('x', ctx.Get<int>())), () => { }, default, maxAmplification: 1);
+        const int factor = 3, ipv4Udp = 28;
+        using var udp = Server.StartUdpServer(5013, (id, ctx, token) => id == 1
+            ? ctx.EnumerateAsync(() => Enumerable.Repeat(new byte[9], 100))
+            : ctx.ReturnAsync(new string('x', ctx.Get<int>())), () => { }, default, maxAmplification: factor);
 
         using var client = new System.Net.Sockets.UdpClient();
         client.Connect("127.0.0.1", 5013);
 
-        async Task<bool> Answered(int size)
+        // Envia la peticion y suma lo recibido en el cable hasta el ultimo datagrama (exito, fin de stream o aviso).
+        async Task<ResponseStatus> Reply(byte[] datagram)
         {
-            var datagram = new byte[Framing.CorrelationIdSize + Framing.OpIdSize].Concat(MemoryPack.MemoryPackSerializer.Serialize(size)).ToArray();
             await client.SendAsync(datagram);
-            using var cts = new CancellationTokenSource(500);
-            try { await client.ReceiveAsync(cts.Token); return true; }
-            catch (OperationCanceledException) { return false; }
+            int sent = 0;
+
+            while (true)
+            {
+                using var cts = new CancellationTokenSource(2000);
+                var reply = (await client.ReceiveAsync(cts.Token)).Buffer;
+                sent += reply.Length + ipv4Udp;
+                sent.Should().BeLessThanOrEqualTo(factor * (datagram.Length + ipv4Udp));
+
+                if ((ResponseStatus)reply[Framing.CorrelationIdSize] is var status && (status is not ResponseStatus.Success || datagram[Framing.CorrelationIdSize] != 1))
+                    return status;
+            }
         }
 
-        (await Answered(1)).Should().BeTrue();      // respuesta pequena: cabe en el presupuesto
-        (await Answered(1000)).Should().BeFalse();  // 1000 bytes por ~12 recibidos: descartada
+        byte[] Unary(int size) => new byte[Framing.CorrelationIdSize + Framing.OpIdSize].Concat(MemoryPack.MemoryPackSerializer.Serialize(size)).ToArray();
+
+        (await Reply(Unary(1))).Should().Be(ResponseStatus.Success);      // respuesta pequena: cabe en el presupuesto
+        (await Reply(Unary(1000))).Should().Be(ResponseStatus.TooLarge);  // 1000 caracteres por 16 bytes recibidos: solo el aviso
+
+        // Stream de items de 50 B en el cable sobre 3 x 40: sin reserva saldrian 2 items + el aviso (133 > 120).
+        var stream = new byte[Framing.CorrelationIdSize + Framing.OpIdSize];
+        stream[Framing.CorrelationIdSize] = 1;
+        (await Reply(stream)).Should().Be(ResponseStatus.TooLarge);
     }
 
     private sealed class Segment : ReadOnlySequenceSegment<byte>

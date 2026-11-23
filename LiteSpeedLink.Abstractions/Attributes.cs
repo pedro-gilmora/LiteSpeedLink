@@ -33,6 +33,11 @@ public sealed class ServiceHostAttribute(ServiceConnectionType connectionType = 
 {
     public TlsMode Tls { get; set; }
     public CertificateCheck Check { get; set; }
+    /// <summary>
+    /// Udp: bytes enviados por peticion &lt;= N x bytes recibidos, contando cabeceras IP/UDP (anti-reflexion, RFC 9000 8.1 / RFC 9175 2.4).
+    /// 3 por defecto; 0 = sin limite (solo redes de confianza).
+    /// </summary>
+    public int MaxAmplification { get; set; } = 3;
 }
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]

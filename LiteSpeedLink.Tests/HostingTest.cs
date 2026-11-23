@@ -64,7 +64,7 @@ public class HostingTest
     [InlineData("Quic", "services.AddLiteSpeedLink(new Host.Endpoint { Port = 5000 });", "CS9035")]
     [InlineData("Local", "services.AddLiteSpeedLink(new Host.Endpoint { Name = \"probe\" });", null)]
     [InlineData("Memory", "services.AddLiteSpeedLink(new Host.Endpoint());", "CS9035")]
-    [InlineData("Udp", "services.AddLiteSpeedLink(new Host.Endpoint { Port = 5000, MaxAmplification = 3 });", null)]
+    [InlineData("Udp", "services.AddLiteSpeedLink(new Host.Endpoint { Port = 5000 });", null)]
     public void RequiredMembersAreCheckedAtCompileTime(string transport, string use, string? error)
     {
         var r = Generate(transport, use);

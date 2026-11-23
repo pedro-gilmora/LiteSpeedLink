@@ -22,7 +22,7 @@ public static partial class Server
         Action onFinalize,
         CancellationToken token = default,
         int maxInFlightPerEndpoint = MaxInFlightPerEndpoint,
-        int maxAmplification = 0)
+        int maxAmplification = DefaultMaxAmplification)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlightPerEndpoint, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(maxAmplification);
@@ -52,8 +52,10 @@ public static partial class Server
 
                     int correlationId = BinaryPrimitives.ReadInt32LittleEndian(buffer);
                     long op = Framing.ReadOpId(buffer.AsSpan(Framing.CorrelationIdSize));
+                    // El presupuesto cuenta bytes en el cable (cabeceras IP + UDP incluidas), como RFC 9175 2.4, y reserva el aviso TooLarge.
+                    int headers = answerTo.AddressFamily is AddressFamily.InterNetworkV6 ? Ipv6UdpHeaders : Ipv4UdpHeaders;
                     var ctx = new UdpRequestContext(udpServer, answerTo, correlationId, buffer.AsMemory(Framing.CorrelationIdSize + Framing.OpIdSize), token,
-                                            amplification == 0 ? long.MaxValue : (long)buffer.Length * amplification);
+                                            amplification == 0 ? long.MaxValue : (long)(buffer.Length + headers) * amplification - UdpRequestContext.NoticeCost(headers), headers);
 
                     _ = DispatchUdpAsync(requestHandlers, op, ctx, inflight, answerTo, token);
                 }
@@ -98,8 +100,13 @@ public static partial class Server
     /// <summary>Limite por defecto de peticiones UDP concurrentes por endpoint de origen; el exceso se descarta.</summary>
     public const int MaxInFlightPerEndpoint = 256;
 
-    // maxAmplification (0 = sin limite, red de confianza): bytes enviados por peticion <= N x bytes recibidos.
-    // Con IP de origen falsificada el atacante no puede usar el servidor como amplificador; lo que excede se descarta.
+    /// <summary>
+    /// Bytes enviados por peticion &lt;= N x bytes recibidos (en el cable): con la IP de origen falsificada el host no amplifica mas de N veces.
+    /// 3 = el limite de QUIC antes de validar la direccion (RFC 9000 8.1, RFC 9175 2.4); 0 = sin limite (red de confianza).
+    /// </summary>
+    public const int DefaultMaxAmplification = 3;
+
+    private const int Ipv4UdpHeaders = 20 + 8, Ipv6UdpHeaders = 40 + 8;
 }
 
 public sealed class UdpRequestContext
@@ -111,13 +118,16 @@ public sealed class UdpRequestContext
     private readonly int _correlationId;
     private readonly ReadOnlyMemory<byte> _body;
     private readonly CancellationToken _token;
+    private readonly int _headers;
     private int _completed;
     private int _seq;
+    private int _exceeded;
     private long _budget;
 
-    internal UdpRequestContext(UdpClient client, IPEndPoint endpoint, int correlationId, ReadOnlyMemory<byte> body, CancellationToken token, long budget = long.MaxValue)
+    internal UdpRequestContext(UdpClient client, IPEndPoint endpoint, int correlationId, ReadOnlyMemory<byte> body, CancellationToken token, long budget = long.MaxValue, int headers = 0)
     {
         _budget = budget;
+        _headers = headers;
         _client = client;
         _endpoint = endpoint;
         _correlationId = correlationId;
@@ -173,7 +183,7 @@ public sealed class UdpRequestContext
     public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IAsyncEnumerable<TData>> value)
     {
         await foreach (var item in value().WithCancellation(_token).ConfigureAwait(false))
-            await YieldAsync(item).ConfigureAwait(false);
+            if (await YieldAsync(item).ConfigureAwait(false) is ResponseStatus.TooLarge) return ResponseStatus.TooLarge;
 
         return await EndStreamingAsync().ConfigureAwait(false);
     }
@@ -181,7 +191,7 @@ public sealed class UdpRequestContext
     public async ValueTask<ResponseStatus> EnumerateAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TData>(Func<IEnumerable<TData>> value)
     {
         foreach (var item in value())
-            await YieldAsync(item).ConfigureAwait(false);
+            if (await YieldAsync(item).ConfigureAwait(false) is ResponseStatus.TooLarge) return ResponseStatus.TooLarge;
 
         return await EndStreamingAsync().ConfigureAwait(false);
     }
@@ -213,11 +223,33 @@ public sealed class UdpRequestContext
 
     private async ValueTask<ResponseStatus> FlushAsync(ArrayBufferWriter<byte> writer, ResponseStatus status)
     {
-        if (Interlocked.Add(ref _budget, -writer.WrittenCount) < 0) return status;
+        if (Volatile.Read(ref _exceeded) == 0 && Spend(writer.WrittenCount))
+        {
+            await _client.SendAsync(writer.WrittenMemory, _endpoint, _token).ConfigureAwait(false);
+            return status;
+        }
 
-        await _client.SendAsync(writer.WrittenMemory, _endpoint, _token).ConfigureAwait(false);
+        // Por encima del limite de amplificacion: el aviso (sin cuerpo, reservado al crear el contexto) hace que el cliente falle ya y
+        // no por su timeout; despues no sale nada mas.
+        if (Interlocked.Exchange(ref _exceeded, 1) == 0)
+        {
+            Complete();
+            await _client.SendAsync(Header(ResponseStatus.TooLarge, -1).WrittenMemory, _endpoint, _token).ConfigureAwait(false);
+        }
 
-        return status;
+        return ResponseStatus.TooLarge;
+    }
+
+    /// <summary>Lo que cuesta en el cable el aviso <see cref="ResponseStatus.TooLarge"/>: cabe en 1x la peticion minima (corrId + opId).</summary>
+    internal static int NoticeCost(int headers) => HeaderSize + headers;
+
+    private bool Spend(int bytes)
+    {
+        long cost = bytes + _headers;
+        if (Interlocked.Add(ref _budget, -cost) >= 0) return true;
+
+        Interlocked.Add(ref _budget, cost);
+        return false;
     }
 
     private void Complete() => Volatile.Write(ref _completed, 1);

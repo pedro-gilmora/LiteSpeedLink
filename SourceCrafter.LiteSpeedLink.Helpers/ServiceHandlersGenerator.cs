@@ -77,7 +77,7 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
 
 #if CLIENT_PARTIAL
 
-            if (TryGetConnectionType(container.ContainerType, ServiceClientAttr, out var clientConnection, out var tls, out var check))
+            if (TryGetConnectionType(container.ContainerType, ServiceClientAttr, out var clientConnection, out var tls, out var check, out _))
             {
                 var isLocal = ResolveLocal(container, ref clientConnection);
                 if (clientConnection == 3 && tls == TlsNone)
@@ -86,17 +86,19 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
                     GenerateServiceClient(container, contribution, clientConnection, isLocal, tls, check, cancelToken);
             }
 #else
-            if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection, out var tls, out var check))
+            if (TryGetConnectionType(container.ContainerType, ServiceHostAttr, out var hostConnection, out var tls, out var check, out var maxAmplification))
             {
                 var isLocal = ResolveLocal(container, ref hostConnection);
                 if (hostConnection == 3 && tls == TlsNone)
                     contribution.ReportDiagnostic(Diagnostic.Create(QuicWithoutTls, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name));
+                else if (hostConnection == 1 && maxAmplification < 0)
+                    contribution.ReportDiagnostic(Diagnostic.Create(InvalidMaxAmplification, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name, maxAmplification));
                 else
                 {
                     if (hostConnection == 2 && tls == TlsDefault)
                         contribution.ReportDiagnostic(Diagnostic.Create(PlaintextTcpHost, container.ContainerType.Locations.FirstOrDefault(), container.ContainerType.Name));
 
-                    GenerateServiceHost(container, contribution, hostConnection, isLocal, tls, check, cancelToken);
+                    GenerateServiceHost(container, contribution, hostConnection, isLocal, tls, check, maxAmplification, cancelToken);
                 }
             }
 #endif
@@ -211,27 +213,40 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
         string attributeMetadataName,
         out int connectionType,
         out int tls,
-        out int check)
+        out int check,
+        out int maxAmplification)
     {
         foreach (var attr in containerType.GetAttributes())
         {
             if (attr.AttributeClass?.ToDisplayString() != attributeMetadataName) continue;
 
             connectionType = (int?)attr.ConstructorArguments.FirstOrDefault().Value ?? 0;
-            (tls, check) = (0, 0);
+            (tls, check, maxAmplification) = (0, 0, DefaultMaxAmplification);
 
             foreach (var arg in attr.NamedArguments)
             {
                 if (arg.Key == "Tls" && arg.Value.Value is int t) tls = t;
                 else if (arg.Key == "Check" && arg.Value.Value is int c) check = c;
+                else if (arg.Key == "MaxAmplification" && arg.Value.Value is int a) maxAmplification = a;
             }
 
             return true;
         }
 
-        (connectionType, tls, check) = (0, 0, 0);
+        (connectionType, tls, check, maxAmplification) = (0, 0, 0, 0);
         return false;
     }
+
+    // Espejo de ServiceHostAttribute.MaxAmplification (Abstractions): el de QUIC antes de validar la direccion (RFC 9000 8.1, RFC 9175 2.4).
+    private const int DefaultMaxAmplification = 3;
+
+    private static readonly DiagnosticDescriptor InvalidMaxAmplification = new(
+        "SCLSL025",
+        "Invalid MaxAmplification",
+        "'{0}' has MaxAmplification = {1}: it must be 0 (no limit, trusted networks only) or a positive factor",
+        "SourceCrafter.LiteSpeedLink",
+        DiagnosticSeverity.Error,
+        true);
 
     // Espejo de SourceCrafter.LiteSpeedLink.TlsMode/CertificateCheck (Abstractions): el generador no la referencia.
     private const int TlsDefault = 0, TlsNone = 1, TlsServer = 2, CheckChain = 1;

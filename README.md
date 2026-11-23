@@ -70,7 +70,7 @@ Each transport exposes its own entry points:
 | Transport | Host | Client |
 |---|---|---|
 | Memory | `X.Start(name)` | `new XClient(name)` |
-| Udp | `X.Start(port, maxAmplification: 0)` | `new XClient(host, port)` |
+| Udp | `X.Start(port)` | `new XClient(host, port)` |
 | Tcp | `X.Start(port, cert)` | `new XClient(host, port, cert)` |
 | Quic | `await X.StartAsync(port, cert)` | `new XClient(host, port, cert)` |
 | Local | `X.Start(name)` | `new XClient(name)` |
@@ -88,7 +88,7 @@ builder.Services.AddLiteSpeedLink(new ChatServer.Endpoint { Port = 5310 });
 
 - The host is a singleton of the app with `HostServices` set to the app's services, so its `[Hosted<T>]` registrations resolve from them.
 - It starts listening with the app, stops on `ApplicationStopping`, and stops listening when the app stops.
-- `Endpoint` is generated per host. Whatever the transport and TLS mode need is `required` (`Port` or `Name`, plus `Certificate` when TLS requires one), so a missing value is a compile error. UDP also has `MaxAmplification`.
+- `Endpoint` is generated per host. Whatever the transport and TLS mode need is `required` (`Port` or `Name`, plus `Certificate` when TLS requires one), so a missing value is a compile error.
 - With `[JsonSetting<RemoteOptions|LocalOptions>("Section")]`, `Port`/`Name` become optional. At startup they're read from the app's configuration (`Section:Port`/`Section:Name`) if loaded, otherwise from the container's own settings. An invalid value fails the app's start.
 
 On Kestrel, `builder.WebHost.UseLiteSpeedLink<THost>(port, cert)` (`SourceCrafter.LiteSpeedLink.Kestrel`) serves Kestrel's own connections without HTTP. It takes Kestrel's configuration instead of its own:
@@ -148,7 +148,12 @@ These limits bound what one peer holds, but a peer that keeps sending valid requ
 
 `Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `<tmp>/lsl-<user>` with mode 0700 for anyone else. Startup fails if that directory is a link or belongs to another user.
 
-**Udp has no authentication, and replies go to the source address of the request, which can be spoofed.** Use it only on trusted networks. To limit reflection, start the host with `maxAmplification: N`, so a reply is never larger than N × the request.
+**Udp has no authentication, and replies go to the source address of the request, which can be spoofed**, so a host could be used to reflect traffic at someone else. Like QUIC before it validates an address (RFC 9000 §8.1, also recommended for CoAP in RFC 9175), a host never sends more than 3× the bytes it received for a request, counted on the wire (IP and UDP headers included):
+```csharp
+[ServiceHost(ServiceConnectionType.Udp)]                        // 3× (default)
+[ServiceHost(ServiceConnectionType.Udp, MaxAmplification = 0)]  // no limit: trusted networks only
+```
+A reply that doesn't fit isn't sent. The host sends a 5-byte `TooLarge` notice instead (its cost is reserved up front, so it always fits), and the call fails at once with an `InvalidOperationException` instead of waiting for a timeout. A stream that runs over stops at that point. A negative value is **SCLSL025**. Use Tcp or Quic for large replies to untrusted peers.
 
 ## Processors
 
@@ -272,6 +277,7 @@ public interface IStreams : IServiceUnit
 | SCLSL022 | Error | QUIC with `Tls = TlsMode.None` (QUIC always encrypts) |
 | SCLSL023 | Error | `[MaxMessageSize]` outside 1 byte – 16 MB (the protocol limit) |
 | SCLSL024 | Warning | Tcp host with `Tls = TlsMode.Default`: plaintext and unauthenticated when started without a certificate |
+| SCLSL025 | Error | Udp host with a negative `MaxAmplification` |
 
 ## Benchmarks
 

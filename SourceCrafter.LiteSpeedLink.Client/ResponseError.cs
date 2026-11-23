@@ -9,6 +9,7 @@ internal static class ResponseError
     {
         ResponseStatus.NotFound => new NotImplementedException($"Implementation is missing from {remote}"),
         ResponseStatus.Failed => new InvalidOperationException($"Execution failed on {remote}:\nREASON:\n\n{Deserialize<string>(body)}"),
+        ResponseStatus.TooLarge => TooLarge(remote),
         _ => new InvalidDataException($"Unexpected response status {status} from {remote}.")
     };
 
@@ -16,6 +17,10 @@ internal static class ResponseError
     {
         ResponseStatus.NotFound => new NotImplementedException($"Implementation is missing from {remote}"),
         ResponseStatus.Failed => new InvalidOperationException($"Execution failed on {remote}:\nREASON:\n\n{Deserialize<string>(body)}"),
+        ResponseStatus.TooLarge => TooLarge(remote),
         _ => new InvalidDataException($"Unexpected response status {status} from {remote}.")
     };
+
+    private static InvalidOperationException TooLarge(string remote) => new(
+        $"The response from {remote} exceeds the host's UDP MaxAmplification: raise it on [ServiceHost] (trusted networks only) or use Tcp/Quic.");
 }

@@ -25,6 +25,7 @@ public partial class ServiceHandlersGenerator
         bool isLocal,
         int tls,
         int check,
+        int maxAmplification,
         CancellationToken cancelToken)
     {
         var compilation = container.Compilation;
@@ -52,8 +53,8 @@ public partial class ServiceHandlersGenerator
         string? certParam = certNullability is null
             ? null
             : ",\nglobal::System.Security.Cryptography.X509Certificates.X509Certificate2" + certNullability + " certificate";
-        // Udp: limite de amplificacion (0 = sin limite, red de confianza) a eleccion de quien arranca el host.
-        string? udpParam = connectionType is 1 ? ",\nint maxAmplification = 0" : null;
+        // Udp: limite de amplificacion fijado en compilacion ([ServiceHost(Udp, MaxAmplification = N)], 3 por defecto; 0 = sin limite).
+        string? udpArg = connectionType is 1 ? ", maxAmplification: " + maxAmplification : null;
 
         var (context, startMethod, returnType, disposableInterface, asyncKeyword, awaitKeyword, asyncSuffix) = connectionType switch
         {
@@ -124,11 +125,9 @@ public partial class ServiceHandlersGenerator
 
         var (endpointParam, endpointArg) = isLocal ? ("string name", "name") : connectionType is 0 ? ("string memoryRpcName", "memoryRpcName") : ("int port", "port");
 
-        string? udpArg = udpParam is null ? null : ", maxAmplification";
-
         hostCode.Blank().Line("public static ").Append(returnType).Append(" Start").Append(asyncSuffix).Append('(')
             .Indent().Line(endpointParam).Append(certParam).Append(',')
-            .Line("global::System.Threading.CancellationToken cancelToken = default").Append(udpParam).Append(") => __Start").Append(asyncSuffix).Append("(new ").Append(typeName).Append("(), ").Append(endpointArg).Append(certParam is null ? null : ", certificate").Append(", cancelToken").Append(udpArg).Append(");")
+            .Line("global::System.Threading.CancellationToken cancelToken = default) => __Start").Append(asyncSuffix).Append("(new ").Append(typeName).Append("(), ").Append(endpointArg).Append(certParam is null ? null : ", certificate").Append(", cancelToken);")
             .Unindent();
 
         // Endpoint omitido: el de [JsonSetting<RemoteOptions|LocalOptions>] del contenedor (MsConfiguration).
@@ -138,16 +137,16 @@ public partial class ServiceHandlersGenerator
                     null => null,
                     "?" => "global::System.Security.Cryptography.X509Certificates.X509Certificate2? certificate = default, ",
                     _ => "global::System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, "
-                }).Append("global::System.Threading.CancellationToken cancelToken = default").Append(udpParam is null ? null : ", int maxAmplification = 0").Append(')')
+                }).Append("global::System.Threading.CancellationToken cancelToken = default)")
                 .Open()
                 .Line("var provider = new ").Append(typeName).Append("();")
-                .Line("return __Start").Append(asyncSuffix).Append("(provider, provider.").Append(settings).Append(connectionType is 1 or 2 or 3 ? ".Port" : ".Name").Append(certParam is null ? null : ", certificate").Append(", cancelToken").Append(udpArg).Append(");")
+                .Line("return __Start").Append(asyncSuffix).Append("(provider, provider.").Append(settings).Append(connectionType is 1 or 2 or 3 ? ".Port" : ".Name").Append(certParam is null ? null : ", certificate").Append(", cancelToken);")
                 .Close();
 
         hostCode.Blank().Line("private static ").Append(asyncKeyword).Append(returnType).Append(" __Start").Append(asyncSuffix).Append('(')
             .Indent().Line(typeName).Append(" provider,")
             .Line(endpointParam).Append(certParam).Append(',')
-            .Line("global::System.Threading.CancellationToken cancelToken").Append(udpParam is null ? null : ",\nint maxAmplification").Append(')').Unindent()
+            .Line("global::System.Threading.CancellationToken cancelToken)").Unindent()
             .Open()
             .Line("return ").Append(awaitKeyword).Append(isLocal ? "new global::SourceCrafter.LiteSpeedLink.LocalHost(" : null).Append("global::SourceCrafter.LiteSpeedLink.Server.").Append(startMethod).Append('(')
             .Indent().Line(isLocal ? (connectionType is 0 ? "name" : LocalUdsPath) : endpointArg).Append(',')
@@ -168,7 +167,7 @@ public partial class ServiceHandlersGenerator
             hostCode.Append(", tls: global::SourceCrafter.LiteSpeedLink.TlsMode.").Append(TlsModeNames[tls])
                 .Append(", check: global::SourceCrafter.LiteSpeedLink.CertificateCheck.").Append(CheckNames[check]);
 
-        if (udpParam is not null) hostCode.Append(", maxAmplification: maxAmplification");
+        hostCode.Append(udpArg);
 
         hostCode.Append(')').Append(isLocal ? ")" : null).Append(awaitKeyword != null ? ".ConfigureAwait(false)" : null).Append(';')
             .Unindent().Close();
@@ -725,8 +724,6 @@ public partial class ServiceHandlersGenerator
         if (certNullability is not null)
             code.Line("public ").Append(certNullability is "" ? "required " : null).Append("global::System.Security.Cryptography.X509Certificates.X509Certificate2").Append(certNullability).Append(" Certificate { get; init; }");
 
-        if (connectionType is 1) code.Line("public int MaxAmplification { get; init; }");
-
         code.Blank().Line("public ").Append(typeName).Append(" Create(global::System.IServiceProvider services) => new() { HostServices = services };")
             .Blank().Line("public ").Append(isAsync ? "async " : null).Append("global::System.Threading.Tasks.ValueTask<global::System.IAsyncDisposable> StartAsync(").Append(typeName).Append(" host, global::System.Threading.CancellationToken token)")
             .Line("=> ", 1).Append(isAsync ? "await " : "new(").Append(isLocal || isAsync ? null : "new global::SourceCrafter.LiteSpeedLink.LocalHost(").Append("__Start").Append(isAsync ? "Async" : null).Append("(host, ");
@@ -740,7 +737,7 @@ public partial class ServiceHandlersGenerator
                 ? ", Certificate ?? throw new global::System.InvalidOperationException(\"" + typeName + ".Endpoint.Certificate is required by its TLS mode.\")"
                 : ", Certificate");
 
-        code.Append(", token").Append(connectionType is 1 ? ", MaxAmplification" : null).Append(')')
+        code.Append(", token)")
             .Append(isAsync ? ".ConfigureAwait(false)" : isLocal ? ")" : "))").Append(';')
             .Close();
     }

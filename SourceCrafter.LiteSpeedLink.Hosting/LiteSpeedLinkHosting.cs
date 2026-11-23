@@ -7,7 +7,7 @@ namespace SourceCrafter.LiteSpeedLink;
 
 /// <summary>
 /// Endpoint de un host generado: el generador emite <c>THost.Endpoint</c> con miembros <c>required</c> segun el transporte y el TLS
-/// fijados en compilacion (puerto o nombre, certificado, <c>MaxAmplification</c>), asi que lo que falta no compila.
+/// fijados en compilacion (puerto o nombre, certificado), asi que lo que falta no compila.
 /// </summary>
 public interface IHostedEndpoint<THost> where THost : class
 {
