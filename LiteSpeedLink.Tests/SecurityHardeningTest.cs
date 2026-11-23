@@ -256,6 +256,10 @@ public class SecurityHardeningTest
                 viaLink.Should().Throw<TargetInvocationException>().WithInnerException<UnauthorizedAccessException>();
             }
             finally { File.Delete(link); }
+
+            // Sin XDG_RUNTIME_DIR, nunca en el /tmp compartido (alli otro usuario podria crear o cambiar la ruta): el home del usuario.
+            if (!Environment.IsPrivilegedProcess && Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is not { Length: > 0 })
+                LocalSocket.GetPath("probe").Should().Be(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".lsl", "probe.lsl"));
         }
         finally
         {

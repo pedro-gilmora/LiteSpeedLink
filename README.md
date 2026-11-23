@@ -146,7 +146,7 @@ A request id that repeats while its stream is still running is rejected.
 
 These limits bound what one peer holds, but a peer that keeps sending valid requests is never idle: without authentication it can still keep up to 64 connections per address open. Only mutual TLS stops unknown peers from connecting at all, so a Tcp host left on `Tls = TlsMode.Default` gets warning SCLSL024. Set `Mutual` (or `Server`) to require TLS, or `None` to state that plaintext is intended.
 
-`Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `<tmp>/lsl-<user>` with mode 0700 for anyone else. Startup fails if that directory is a link or belongs to another user.
+`Local` outside Windows puts its socket in a directory only its user can use: `$XDG_RUNTIME_DIR`; otherwise `/var/run/lsl` for root, or `~/.lsl` with mode 0700 for anyone else (never the shared `/tmp`, where another user could create or swap the path). Startup fails if that directory is a link or belongs to another user.
 
 `Memory` (and `Local` on Windows) uses named shared memory in the session with default security, so only processes of the same user can open it. Even so, nothing a peer writes into the rings is trusted: their layout and node offsets are checked against the local mapping, message lengths are capped at 16 MB (64 MB of partial messages per endpoint), and a malformed message is dropped without stopping the reader.
 

@@ -7,8 +7,8 @@ public static class LocalSocket
 
     /// <summary>
     /// Fuera de Windows, en un directorio solo del usuario: <c>$XDG_RUNTIME_DIR</c>; si no, root usa <c>/var/run/lsl</c> (solo root crea en el)
-    /// y el resto <c>&lt;tmp&gt;/lsl-&lt;usuario&gt;</c> (0700, propio). Un <c>/tmp</c> compartido permitiria a otro usuario crear la ruta antes,
-    /// dejar al host sin arrancar o, si el host es root, suplantarlo. En Windows <c>%TEMP%</c> ya es del usuario.
+    /// y el resto <c>~/.lsl</c> (0700, propio). Nunca bajo un <c>/tmp</c> compartido: otro usuario podria crear la ruta antes, o cambiarla
+    /// entre la comprobacion y el uso, y dejar al host sin arrancar o suplantarlo. En Windows <c>%TEMP%</c> ya es del usuario.
     /// </summary>
     public static string GetPath(string name)
     {
@@ -16,10 +16,14 @@ public static class LocalSocket
 
         string directory = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") is { Length: > 0 } runtime
             ? runtime
-            // root puede hacer chmod de cualquier cosa: la prueba de propiedad no le sirve, asi que no usa /tmp.
-            : EnsurePrivate(Environment.IsPrivilegedProcess ? "/var/run/lsl" : Path.Combine(Path.GetTempPath(), "lsl-" + Environment.UserName));
+            // root puede hacer chmod de cualquier cosa: la prueba de propiedad no le sirve, asi que no usa el home.
+            : EnsurePrivate(Environment.IsPrivilegedProcess ? "/var/run/lsl" : Path.Combine(Home(), ".lsl"));
 
         return Path.Combine(directory, name + ".lsl");
+
+        static string Home() => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) is { Length: > 0 } home
+            ? home
+            : throw new InvalidOperationException("LiteSpeedLink Local sockets need XDG_RUNTIME_DIR or HOME to place a private directory.");
     }
 
     /// <summary>
