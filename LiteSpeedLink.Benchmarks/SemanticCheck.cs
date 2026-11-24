@@ -41,7 +41,7 @@ public static class SemanticCheck
     {
         Span<byte> buffer = stackalloc byte[Framing.OpIdSize];
 
-        foreach (var op in new[] { 0L, 1L, -1L, long.MaxValue, long.MinValue, Payloads.OpId })
+        foreach (var op in new[] { 0L, 1L, -1L, int.MaxValue, int.MinValue, Payloads.OpId })
         {
             Framing.WriteOpId(buffer, op);
             Expect($"opId ida y vuelta {op}", Framing.ReadOpId(buffer) == op);
@@ -51,28 +51,30 @@ public static class SemanticCheck
     private static void CheckFramingEndianness()
     {
         Span<byte> buffer = stackalloc byte[Framing.OpIdSize];
-        Framing.WriteOpId(buffer, 0x0102030405060708);
+        Framing.WriteOpId(buffer, 0x01020304);
 
-        Expect("opId little-endian explicito", buffer[0] == 0x08 && buffer[7] == 0x01);
+        Expect("opId little-endian explicito (4 bytes)", buffer.Length == 4 && buffer[0] == 0x04 && buffer[3] == 0x01);
     }
 
     private static void CheckTryReadFrame()
     {
-        byte[] stream = [4, 0, 0, 0, 1, 2, 3, 4, 2, 0, 0, 0, 9, 9, 7];
+        // Longitud LEB128: 1 byte (4 y 2) y forma rellenada de 4 bytes (3); la ultima trama esta a medias.
+        byte[] stream = [4, 1, 2, 3, 4, 2, 9, 9, 0x83, 0x80, 0x80, 0x00, 5, 5, 5, 7];
         var seq = new System.Buffers.ReadOnlySequence<byte>(stream);
 
         Expect("trama 1 completa", Framing.TryReadFrame(ref seq, out var f1) && f1.Length == 4);
         Expect("trama 2 completa (coalescida)", Framing.TryReadFrame(ref seq, out var f2) && f2.Length == 2);
-        Expect("trama 3 incompleta no se consume", !Framing.TryReadFrame(ref seq, out _) && seq.Length == 1);
+        Expect("trama 3 con longitud de 4 bytes", Framing.TryReadFrame(ref seq, out var f3) && f3.Length == 3);
+        Expect("trama 4 incompleta no se consume", !Framing.TryReadFrame(ref seq, out _) && seq.Length == 1);
     }
 
     private static void CheckRequestLayoutsAgree()
     {
         var body = MemoryPackSerializer.Serialize("pedro");
 
-        var legacy = new byte[8 + body.Length];
-        BitConverter.GetBytes(Payloads.OpId).CopyTo(legacy, 0);
-        body.CopyTo(legacy, 8);
+        var legacy = new byte[sizeof(int) + body.Length];
+        BitConverter.GetBytes((int)Payloads.OpId).CopyTo(legacy, 0);
+        body.CopyTo(legacy, sizeof(int));
 
         var current = new byte[Framing.OpIdSize + body.Length];
         Framing.WriteOpId(current, Payloads.OpId);

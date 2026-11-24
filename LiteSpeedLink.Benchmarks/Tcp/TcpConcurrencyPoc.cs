@@ -22,7 +22,8 @@ internal static class Frame
     public static void Write(PipeWriter writer, int corrId, ReadOnlySpan<byte> payload)
     {
         var span = writer.GetSpan(Header + payload.Length);
-        BinaryPrimitives.WriteInt32LittleEndian(span, sizeof(int) + payload.Length);
+        // Longitud en la forma de 4 bytes (LEB128 rellenada): la cabecera del PoC es fija.
+        Framing.WriteLength(span, sizeof(int) + payload.Length);
         BinaryPrimitives.WriteInt32LittleEndian(span[Framing.LengthPrefixSize..], corrId);
         payload.CopyTo(span[Header..]);
         writer.Advance(Header + payload.Length);
@@ -116,7 +117,7 @@ internal sealed class EchoServer : IAsyncDisposable
             try
             {
                 var span = writer.GetSpan(Frame.Header + 1 + body.Length);
-                BinaryPrimitives.WriteInt32LittleEndian(span, sizeof(int) + 1 + body.Length);
+                Framing.WriteLength(span, sizeof(int) + 1 + body.Length);
                 BinaryPrimitives.WriteInt32LittleEndian(span[Framing.LengthPrefixSize..], corrId);
                 span[Frame.Header] = (byte)ResponseStatus.Success;
                 body.CopyTo(span[(Frame.Header + 1)..]);

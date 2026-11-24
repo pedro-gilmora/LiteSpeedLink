@@ -7,7 +7,8 @@ public partial record struct Credentials(string User, string Password);
 
 public static class Payloads
 {
-    public const long OpId = -2153953080512997722;
+    /// <summary>opId de 32 bits (lo que viaja en <see cref="SourceCrafter.LiteSpeedLink.Framing.OpIdSize"/> = 4 bytes).</summary>
+    public const long OpId = -1946214490;
 
     public static readonly Credentials Small = new("pedro", "s3cr3t");
 
