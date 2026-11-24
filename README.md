@@ -127,7 +127,7 @@ Hosts bound what one peer can hold:
 - **Tcp, Quic and Kestrel:** at most 64 connections per remote address (`maxConnectionsPerAddress`, 1/16 of the global cap). IPv6 counts per /64 prefix. Extra connections from that address are closed as soon as they're accepted (before any TLS handshake on Kestrel; on Quic, once accepted and before any stream), so filling the server takes at least 16 addresses.
 - **Tcp TLS:** the handshake must finish within 10 s.
 - **Tcp and Uds:** a half-received message is closed after 30 s without new bytes, or once it falls below a minimum data rate (240 B/s after a 5 s grace period, like Kestrel's `MinRequestBodyDataRate`).
-- **Tcp and Uds:** a connection with nothing in flight (no pending request, no open stream, no partial message) for 130 s (`idleTimeoutMs`, like Kestrel's `KeepAliveTimeout`, and below the 4–6 min after which load balancers and NATs drop idle flows silently) is closed. Before closing, the host sends an 8-byte close frame (`[len=4][id=0]`, like HTTP/2's GOAWAY). That frame is sent once per closed connection and costs nothing per call.
+- **Tcp and Uds:** a connection with nothing in flight (no pending request, no open stream, no partial message) for 130 s (`idleTimeoutMs`, like Kestrel's `KeepAliveTimeout`, and below the 4–6 min after which load balancers and NATs drop idle flows silently) is closed. Before closing, the host sends a 5-byte close frame (`[len=4][id=0]`, like HTTP/2's GOAWAY). That frame is sent once per closed connection and costs nothing per call.
 - **Clients:** the close frame means "nothing you still have pending was processed", so the generated client opens a new connection and retries those calls transparently (up to 3 times), streams included as long as they haven't received an item yet. A connection that was already closed is replaced on the next call. The Quic client does the same when its connection is lost.
 - **Kestrel:** the same limits come from Kestrel's configuration (`MaxConcurrentConnections`, `RequestHeadersTimeout`, `MinRequestBodyDataRate`, `KeepAliveTimeout`, the HTTPS handshake timeout).
 - **Quic:** at most 256 streams per connection. Every stream has the same read deadline (30 s without new bytes, 240 B/s minimum rate after a 5 s grace period), including the wait for its first bytes, so a stream that's opened and left idle doesn't hold one of the 256.
@@ -255,9 +255,23 @@ public interface IStreams : IServiceUnit
 - Sync contracts get an extra `*Async` overload on the client that returns `IAsyncEnumerable<T>`.
 - Streams are batched by default: a frame is sent at 32 KB or when the producer is about to wait, so fast producers send few frames and slow ones are never held back. The host has no batching option.
 - `[Stream]` overrides that per operation as compile-time constants: `Batch` items per frame (`0` = one per frame), `MaxDelayMs` to flush an incomplete batch. Rationale and measurements: `docs/PerformanceMemoryEnhancements.md` (point 7).
-- Leaving an enumeration early (`break`, cancellation) stops the host producer on every transport. TCP/UDS send an 8-byte `[len=4][corrId]` frame only when a stream is abandoned; no cost on streams that finish.
+- Leaving an enumeration early (`break`, cancellation) stops the host producer on every transport. TCP/UDS send a 5-byte `[len=4][corrId]` frame only when a stream is abandoned; no cost on streams that finish.
 - **Retry is not applied to streams** (SCLSL016): a failure happens mid-enumeration and replaying would resend items the consumer already received. Resuming would need a checkpoint in the contract.
 - **Return processors are not applied to streams** (SCLSL012): processing would mean unpacking and repacking every item. Process items inside the handler or on the consumer instead. Parameter processors are still fine.
+
+## Wire format
+
+Only what the transport needs, decided at compile time:
+
+| Transport | Request | Response |
+|---|---|---|
+| Tcp, Uds, Kestrel, pooled Quic stream | `[len][corrId:4][opId:4][body]` | `[len][corrId:4][status:1][body]` |
+| Dedicated Quic stream (`[DedicatedStream]`, `unaryStreams: 0`) | `[opId:4][body]` + end of stream | unary success: `[status:1][body]` + end of stream; stream items and errors: `[len][status:1][body]` |
+| Udp (one datagram per message) | `[corrId:4][opId:4][body]` | `[corrId:4][status:1][body]` |
+
+- `len` takes 1 byte below 128, 2 below 16 KB and 4 above (LEB128). The writer shortens it in place: the frame is written into memory it has not committed yet and the body (at most 16 KB) moves back to the shorter length. A body that doesn't fit in that memory keeps the 4-byte form.
+- `opId` is a 32-bit FNV-1a hash of the operation's signature, the same on client and host; two operations of a host that collide don't compile (**SCLSL026**).
+- `body` is MemoryPack.
 
 ## Diagnostics
 
@@ -280,6 +294,7 @@ public interface IStreams : IServiceUnit
 | SCLSL023 | Error | `[MaxMessageSize]` outside 1 byte – 16 MB (the protocol limit) |
 | SCLSL024 | Warning | Tcp host with `Tls = TlsMode.Default`: plaintext and unauthenticated when started without a certificate |
 | SCLSL025 | Error | Udp host with a negative `MaxAmplification` |
+| SCLSL026 | Error | Two operations of a host hash to the same 32-bit operation id: rename one |
 
 ## Benchmarks
 

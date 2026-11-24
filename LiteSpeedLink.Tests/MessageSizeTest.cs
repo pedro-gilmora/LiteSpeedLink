@@ -13,12 +13,14 @@ public class MessageSizeTest
 {
     static byte[] Frame(int corrId, long op, int bodyLength, bool headerOnly = false)
     {
-        var frame = new byte[Framing.FrameHeaderSize + Framing.OpIdSize + (headerOnly ? 0 : bodyLength)];
-        Framing.WriteFrameHeader(frame, corrId, Framing.OpIdSize + bodyLength);
-        Framing.WriteOpId(frame.AsSpan(Framing.FrameHeaderSize), op);
-        for (int i = Framing.FrameHeaderSize + Framing.OpIdSize; i < frame.Length; i++) frame[i] = (byte)i;
-        return frame;
+        var body = new byte[bodyLength];
+        for (int i = 0; i < body.Length; i++) body[i] = (byte)i;
+        var frame = TestFrames.Request(corrId, op, body);
+        return headerOnly ? frame[..(frame.Length - bodyLength)] : frame;
     }
+
+    /// <summary>Bytes de <c>[len][corrId][opId]</c> de una peticion con <paramref name="bodyLength"/> bytes de cuerpo.</summary>
+    static int RequestHeaderSize(int bodyLength) => TestFrames.HeaderSize(Framing.OpIdSize + bodyLength) + Framing.OpIdSize;
 
     /// <summary>Por encima del limite de la operacion la conexion se corta sin llamar al handler, completa o a medias (solo cabecera).</summary>
     [Theory]
@@ -56,7 +58,7 @@ public class MessageSizeTest
         await input.Writer.WriteAsync(frame).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         var body = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        body.Should().Equal(frame.AsSpan(Framing.FrameHeaderSize + Framing.OpIdSize).ToArray());
+        body.Should().Equal(frame.AsSpan(RequestHeaderSize(100_000)).ToArray());
 
         await input.Writer.CompleteAsync();
         await serving.WaitAsync(TimeSpan.FromSeconds(5));

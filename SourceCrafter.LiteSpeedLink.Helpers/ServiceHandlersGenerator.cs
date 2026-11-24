@@ -40,21 +40,33 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
     /// <summary>
     /// Identificador estable de una operación. Debe producir el mismo valor en cliente y host,
     /// independientemente de la máquina, la cultura o el codepage ANSI por defecto.
+    /// FNV-1a de 32 bits: viaja en 4 bytes (<c>Framing.OpIdSize</c>); el host comprueba colisiones en compilacion (SCLSL026).
     /// </summary>
     public static long GetServiceId(string input)
     {
-        const ulong offsetBasis = 14695981039346656037;
-        const ulong prime = 1099511628211;
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
 
         var hash = offsetBasis;
 
         foreach (var b in System.Text.Encoding.UTF8.GetBytes(input))
         {
-            hash = (hash ^ b) * prime;
+            hash = unchecked((hash ^ b) * prime);
         }
 
-        return unchecked((long)hash);
+        return unchecked((int)hash);
     }
+
+    // Espejo de Server.MuxMarker (Server/Client): primeros 4 bytes de un stream QUIC multiplexado; ninguna operacion puede usarlo.
+    private const long MuxMarker = int.MinValue;
+
+    private static readonly DiagnosticDescriptor OperationIdCollision = new(
+        "SCLSL026",
+        "Operation id collision",
+        "'{0}' and '{1}' hash to the same operation id ({2}): rename one of them",
+        "SourceCrafter.LiteSpeedLink",
+        DiagnosticSeverity.Error,
+        true);
 
     static bool Exchange(ref bool value)
     {
@@ -286,7 +298,7 @@ public abstract partial class ServiceHandlersGenerator : ServiceProviderPartial
         true);
 
     // Espejo de Framing.MaxMessageSize (Core): tope del protocolo menos corrId y opId.
-    private const int MaxMessageSizeLimit = 16 * 1024 * 1024 - 4 - 8;
+    private const int MaxMessageSizeLimit = 16 * 1024 * 1024 - 4 - 4;
 
     private static readonly DiagnosticDescriptor InvalidMaxMessageSize = new(
         "SCLSL023",

@@ -667,6 +667,14 @@ public partial class ServiceHandlersGenerator
         bool syncMemory = connectionType == 0 && operations.All(o => o.Sync);
         string? wrapOpen = syncMemory ? null : "new(", wrapClose = syncMemory ? null : ")";
 
+        // opId de 4 bytes: dos operaciones (o una y la marca de stream multiplexado) con el mismo hash se rechazan aqui, no en ejecucion.
+        Dictionary<long, string> seenIds = new() { [MuxMarker] = "(QUIC multiplexed stream marker)" };
+        foreach (var (id, signature, _, _) in operations)
+            if (seenIds.TryGetValue(id, out var other) && other != signature)
+                contribution.ReportDiagnostic(Diagnostic.Create(OperationIdCollision, serviceHost.Locations.FirstOrDefault(), other, signature, id));
+            else
+                seenIds[id] = signature;
+
         hostCode.Blank().Line("private ").Append(syncMemory ? handlerReturnType : "global::System.Threading.Tasks.ValueTask<" + handlerReturnType + ">")
             .Append(" HandleRequestsAsync(long id, ").Append(context).Append(" __context, global::System.Threading.CancellationToken __token) => id switch")
             .Open();

@@ -541,11 +541,18 @@ internal sealed class MultiplexedChannel
                 kept.Write(queued.WrittenSpan[..start]);
                 _queued = queued = kept;
             }
-            // Por posicion: el buffer pudo realojarse al serializar.
+            // Por posicion: el buffer pudo realojarse al serializar. La longitud se acorta y el contenido se desplaza hacia ella.
             else if (invalid is null)
             {
                 var frame = MemoryMarshal.AsMemory(queued.WrittenMemory).Span[start..];
-                Framing.WriteFrameHeader(frame, id, frame.Length - Framing.FrameHeaderSize);
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(frame[Framing.LengthPrefixSize..], id);
+
+                if (Framing.CompleteFrame(frame) is > 0 and var trimmed)
+                {
+                    int total = queued.WrittenCount - trimmed;
+                    queued.ResetWrittenCount();
+                    queued.Advance(total);
+                }
             }
 
             flush = oversize == 0 && !_flushing;
@@ -663,8 +670,7 @@ internal sealed class MultiplexedChannel
         lock (_send)
         {
             if (_broken is not null) return;
-            Framing.WriteFrameHeader(_queued.GetSpan(Framing.FrameHeaderSize), id, 0);
-            _queued.Advance(Framing.FrameHeaderSize);
+            _queued.Advance(Framing.WriteFrameHeader(_queued.GetSpan(Framing.FrameHeaderSize), id, 0));
             flush = !_flushing;
             _flushing = true;
         }
@@ -809,16 +815,16 @@ internal sealed class MultiplexedChannel
 
     public async ValueTask DisposeAsync()
     {
-        // El transporte puede estar ya cerrado (el remoto corto a mitad de un envio): completar intentaria volcar lo pendiente en un stream
-        // liberado. Liberar no debe lanzar; lo pendiente ya fallo a sus llamadas.
+        // El transporte puede estar ya cerrado (el remoto corto a mitad de un envio, o el TLS de QUIC fallo con escrituras pendientes): completar
+        // intentaria volcar lo pendiente. Liberar no debe lanzar; lo pendiente ya fallo a sus llamadas.
         try { await _writer.CompleteAsync().ConfigureAwait(false); }
-        catch (Exception ex) when (ex is ObjectDisposedException or IOException or InvalidOperationException) { }
+        catch (Exception ex) when (ex is ObjectDisposedException or IOException or InvalidOperationException or System.Security.Authentication.AuthenticationException) { }
 
         // Desbloquea el ReadAsync pendiente aunque el socket siga abierto; el lector se completa cuando el bucle ha salido.
         _reader.CancelPendingRead();
         try { await _readLoop.ConfigureAwait(false); } catch { }
 
         try { await _reader.CompleteAsync().ConfigureAwait(false); }
-        catch (Exception ex) when (ex is ObjectDisposedException or IOException or InvalidOperationException) { }
+        catch (Exception ex) when (ex is ObjectDisposedException or IOException or InvalidOperationException or System.Security.Authentication.AuthenticationException) { }
     }
 }

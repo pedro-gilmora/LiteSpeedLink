@@ -114,14 +114,14 @@ public class SecurityHardeningTest
         serving.IsCompleted.Should().BeFalse();
 
         var header = new byte[6];
-        BinaryPrimitives.WriteInt32LittleEndian(header, 100);
+        Framing.WriteLength(header, 100, Framing.LengthSize(100));
         await input.Writer.WriteAsync(header);
 
         await serving.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     /// <summary>
-    /// Plazo de lectura de un stream QUIC: un stream que se queda sin los 8 bytes del opId, o con ellos pero sin FIN, se corta
+    /// Plazo de lectura de un stream QUIC: un stream que se queda sin los 4 bytes del opId, o con ellos y parte del cuerpo pero sin FIN, se corta
     /// (antes retenia uno de los 256 huecos de la conexion hasta que el IdleTimeout de 5 min cerraba la conexion).
     /// </summary>
     [Theory]
@@ -185,8 +185,8 @@ public class SecurityHardeningTest
         var output = new Pipe();
         var serving = Server.ServePipeAsync(input.Reader, output.Writer, new DelegateRequestHandler((op, ctx, _) => ctx.EnumerateAsync(Forever())), default);
 
-        await input.Writer.WriteAsync(Frame(7, Framing.OpIdSize));
-        await input.Writer.WriteAsync(Frame(7, Framing.OpIdSize));
+        await input.Writer.WriteAsync(TestFrames.Request(7, 1, []));
+        await input.Writer.WriteAsync(TestFrames.Request(7, 1, []));
 
         var statuses = new List<ResponseStatus>();
         while (!statuses.Contains(ResponseStatus.Failed))
@@ -204,17 +204,9 @@ public class SecurityHardeningTest
         }
 
         // Cancelacion del cliente: si el CTS del primero se hubiera pisado, su productor no pararia y el drenaje colgaria.
-        await input.Writer.WriteAsync(Frame(7, 0));
+        await input.Writer.WriteAsync(TestFrames.Frame(7, []));
         await input.Writer.CompleteAsync();
         await serving.WaitAsync(TimeSpan.FromSeconds(5));
-
-        static byte[] Frame(int corrId, int contentLength)
-        {
-            var frame = new byte[Framing.FrameHeaderSize + contentLength];
-            Framing.WriteFrameHeader(frame, corrId, contentLength);
-            if (contentLength > 0) Framing.WriteOpId(frame.AsSpan(Framing.FrameHeaderSize), 1);
-            return frame;
-        }
 
         static async IAsyncEnumerable<int> Forever([EnumeratorCancellation] CancellationToken token = default)
         {
@@ -337,8 +329,8 @@ public class SecurityHardeningTest
             var serving = Server.ServePipeAsync(input.Reader, output.Writer, new DelegateRequestHandler((op, ctx, _) => ctx.ReturnAsync(0)), default,
                 partialFrameTimeoutMs: 1000, minDataRate: minDataRate, dataRateGraceMs: 100);
 
-            var header = new byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(header, 300);
+            var header = new byte[Framing.LengthSize(300)];
+            Framing.WriteLength(header, 300, header.Length);
             await input.Writer.WriteAsync(header);
 
             var sw = System.Diagnostics.Stopwatch.StartNew();

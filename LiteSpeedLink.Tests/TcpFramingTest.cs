@@ -35,7 +35,9 @@ public partial class ServersTest
 
         for (int i = 0; i < 2; i++)
         {
-            var len = BinaryPrimitives.ReadInt32LittleEndian(await ReadExactly(stream, Framing.LengthPrefixSize));
+            // Longitud LEB128 (1 byte para respuestas tan cortas).
+            var len = (await ReadExactly(stream, 1))[0];
+            len.Should().BeLessThan(0x80);
             var frame = await ReadExactly(stream, len);
 
             frame[Framing.CorrelationIdSize].Should().Be((byte)ResponseStatus.Success);
@@ -45,15 +47,7 @@ public partial class ServersTest
         responses.Should().Equal(new Dictionary<int, int> { [1] = 7, [2] = 30 });
 
         // Peticion: [len][corrId][opId=0 (suma)][(a, b, false) MemoryPack].
-        static byte[] Request(int corrId, int a, int b)
-        {
-            var body = MemoryPackSerializer.Serialize((a, b, false));
-            var frame = new byte[Framing.FrameHeaderSize + Framing.OpIdSize + body.Length];
-            Framing.WriteFrameHeader(frame, corrId, Framing.OpIdSize + body.Length);
-            Framing.WriteOpId(frame.AsSpan(Framing.FrameHeaderSize), 0);
-            body.CopyTo(frame, Framing.FrameHeaderSize + Framing.OpIdSize);
-            return frame;
-        }
+        static byte[] Request(int corrId, int a, int b) => TestFrames.Request(corrId, 0, MemoryPackSerializer.Serialize((a, b, false)));
 
         static async Task<byte[]> ReadExactly(Stream s, int count)
         {

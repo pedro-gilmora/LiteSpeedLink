@@ -12,21 +12,22 @@ namespace LiteSpeedLink.Tests;
 /// <summary>Tests de items del plan que no tenian cobertura propia.</summary>
 public partial class ServersTest
 {
-    /// <summary>2.4: opId en little-endian, identico por span y por secuencia (tambien partida).</summary>
+    /// <summary>2.4: opId de 4 bytes en little-endian (la API lo trata como long), identico por span y por secuencia (tambien partida).</summary>
     [Fact]
     public void TestFramingOpIdRoundtrip()
     {
         Span<byte> buffer = stackalloc byte[Framing.OpIdSize];
-        Framing.WriteOpId(buffer, 0x0102030405060708);
+        Framing.WriteOpId(buffer, -0x01020304);
 
-        buffer[0].Should().Be(0x08);
-        Framing.ReadOpId(buffer).Should().Be(0x0102030405060708);
+        buffer.Length.Should().Be(4);
+        buffer[0].Should().Be(0xFC);
+        Framing.ReadOpId(buffer).Should().Be(-0x01020304);
 
         var bytes = buffer.ToArray();
         var first = new Segment(bytes.AsMemory(0, 3));
         var last = first.Append(bytes.AsMemory(3));
 
-        Framing.ReadOpId(new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length)).Should().Be(0x0102030405060708);
+        Framing.ReadOpId(new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length)).Should().Be(-0x01020304);
     }
 
     /// <summary>3.3: una trama incompleta no se consume.</summary>

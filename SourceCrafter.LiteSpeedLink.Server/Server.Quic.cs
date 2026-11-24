@@ -12,7 +12,7 @@ namespace SourceCrafter.LiteSpeedLink;
 public static partial class Server
 {
     /// <summary>Espejo de <c>Client.QuicConnection.MuxMarker</c>: stream reutilizable multiplexado.</summary>
-    internal const long MuxMarker = long.MinValue;
+    internal const long MuxMarker = int.MinValue;
 
     [RequiresPreviewFeatures]
     [SupportedOSPlatform("windows")]

@@ -188,25 +188,26 @@ public static partial class Server
                 }
 
                 // Trama a medias con cabecera y opId: se valida su tamano antes de retener nada y su cuerpo pasa a llenarse segun llega.
-                if (filling is null && buffer.Length >= Framing.FrameHeaderSize + Framing.OpIdSize)
+                if (filling is null && Framing.TryReadLength(buffer, out int announced, out int prefix)
+                    && buffer.Length >= prefix + Framing.CorrelationIdSize + Framing.OpIdSize)
                 {
-                    // TryReadFrame ya valido la longitud; a medias con 16 bytes implica longitud > corrId + opId.
-                    fillLength = Framing.ReadLength(buffer) - Framing.CorrelationIdSize - Framing.OpIdSize;
-                    (fillCorrelation, fillOp) = ReadIds(buffer);
+                    // TryReadFrame ya valido la longitud; a medias con corrId y opId implica longitud > corrId + opId.
+                    fillLength = announced - Framing.CorrelationIdSize - Framing.OpIdSize;
+                    (fillCorrelation, fillOp) = ReadIds(buffer, prefix);
                     CheckSize(handlers, fillOp, fillLength, maxMessageSize);
 
                     await slots.WaitAsync(token).ConfigureAwait(false);
                     await budget.EnterAsync(fillLength, token).ConfigureAwait(false);
 
                     filling = ArrayPool<byte>.Shared.Rent(fillLength);
-                    var available = buffer.Slice(Framing.FrameHeaderSize + Framing.OpIdSize);
+                    var available = buffer.Slice(prefix + Framing.CorrelationIdSize + Framing.OpIdSize);
                     available.CopyTo(filling);
                     filled = (int)available.Length;
                     buffer = buffer.Slice(buffer.End);
                 }
 
                 long partialFrame = filling is not null ? fillLength - filled : buffer.Length;
-                int rateLength = filling is not null ? fillLength : partialFrame >= Framing.LengthPrefixSize ? Framing.ReadLength(buffer) : 0;
+                int rateLength = filling is not null ? fillLength : Framing.TryReadLength(buffer, out int nextLength, out _) ? nextLength : 0;
 
                 reader.AdvanceTo(buffer.Start, buffer.End);
                 idle?.Touch(partialFrame != 0);
@@ -270,11 +271,11 @@ public static partial class Server
         if (length > Math.Min(handlers.MaxMessageSize(op), cap)) throw new InvalidDataException($"Request of {length} bytes exceeds the limit of operation {op}.");
     }
 
-    /// <summary>corrId y opId de una trama a medias (al menos cabecera + opId en <paramref name="buffer"/>).</summary>
-    private static (int CorrelationId, long Op) ReadIds(in ReadOnlySequence<byte> buffer)
+    /// <summary>corrId y opId de una trama a medias (al menos longitud + corrId + opId en <paramref name="buffer"/>).</summary>
+    private static (int CorrelationId, long Op) ReadIds(in ReadOnlySequence<byte> buffer, int prefix)
     {
         Span<byte> ids = stackalloc byte[Framing.CorrelationIdSize + Framing.OpIdSize];
-        buffer.Slice(Framing.LengthPrefixSize, ids.Length).CopyTo(ids);
+        buffer.Slice(prefix, ids.Length).CopyTo(ids);
 
         return (System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(ids), Framing.ReadOpId(ids[Framing.CorrelationIdSize..]));
     }
@@ -442,7 +443,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
             bool release = true;
             try
             {
-                WriteFrame(correlationId, status, body);
+                WriteFrame(correlationId, status, body, Unframed(status, deferFlush));
 
                 if (writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
                 {
@@ -493,13 +494,31 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         return status;
     }
 
-    private void WriteFrame<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(int correlationId, ResponseStatus status, T? body)
+    /// <summary>
+    /// QUIC dedicado (sin correlacion): la respuesta unaria de exito (<c>ReturnAsync</c>/<c>ReturnRawAsync</c>, las unicas que escriben
+    /// Success sin diferir el flush; los items de stream siempre lo difieren) va sin longitud, <c>[Success][cuerpo]</c>, y la delimita el FIN
+    /// del stream. Una trama nunca empieza por 0 (su longitud es >= 1), asi que el cliente distingue ambas por el primer byte.
+    /// </summary>
+    private bool Unframed(ResponseStatus status, bool deferFlush) => !correlated && status is ResponseStatus.Success && !deferFlush;
+
+    private void WriteFrame<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(int correlationId, ResponseStatus status, T? body, bool unframed)
     {
-        _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
+        IBufferWriter<byte> target = writer;
+
+        if (unframed)
+        {
+            writer.GetSpan(Framing.StatusSize)[0] = (byte)status;
+            writer.Advance(Framing.StatusSize);
+        }
+        else
+        {
+            _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
+            target = _frames;
+        }
 
         try
         {
-            Serialize(_frames, body);
+            Serialize(target, body);
         }
         catch (Exception ex)
         {
@@ -509,7 +528,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
             throw;
         }
 
-        _frames.EndFrame();
+        if (!unframed) _frames.EndFrame();
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
@@ -519,7 +538,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            WriteFrame(correlationId, status, body);
+            WriteFrame(correlationId, status, body, Unframed(status, deferFlush));
 
             if (deferFlush && writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
             {
@@ -593,8 +612,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            Framing.WriteFrameHeader(writer.GetSpan(Framing.FrameHeaderSize), 0, 0);
-            writer.Advance(Framing.FrameHeaderSize);
+            writer.Advance(Framing.WriteFrameHeader(writer.GetSpan(Framing.FrameHeaderSize), 0, 0));
             await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch
@@ -623,7 +641,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         bool release = true;
         try
         {
-            WriteRawFrame(correlationId, status, body.Span);
+            WriteRawFrame(correlationId, status, body.Span, Unframed(status, deferFlush));
 
             if (deferFlush && writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
             {
@@ -640,8 +658,17 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         }
     }
 
-    private void WriteRawFrame(int correlationId, ResponseStatus status, ReadOnlySpan<byte> body)
+    private void WriteRawFrame(int correlationId, ResponseStatus status, ReadOnlySpan<byte> body, bool unframed)
     {
+        if (unframed)
+        {
+            var span = writer.GetSpan(Framing.StatusSize + body.Length);
+            span[0] = (byte)status;
+            body.CopyTo(span[Framing.StatusSize..]);
+            writer.Advance(Framing.StatusSize + body.Length);
+            return;
+        }
+
         _frames.BeginFrame(correlationId, Framing.StatusSize)[0] = (byte)status;
         body.CopyTo(_frames.GetSpan(body.Length));
         _frames.Advance(body.Length);
@@ -654,7 +681,7 @@ internal sealed class ResponseChannel(PipeWriter writer, bool correlated = true)
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            WriteRawFrame(correlationId, status, body.Span);
+            WriteRawFrame(correlationId, status, body.Span, Unframed(status, deferFlush));
 
             if (deferFlush && writer.CanGetUnflushedBytes && writer.UnflushedBytes < EagerFlushBytes)
             {

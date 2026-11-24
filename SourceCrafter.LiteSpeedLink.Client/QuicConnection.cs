@@ -21,7 +21,7 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
     public const int DefaultUnaryStreams = 4;
 
     /// <summary>Primer opId de un stream reutilizable: el servidor lo atiende como canal multiplexado (8 bytes una vez por stream).</summary>
-    internal const long MuxMarker = long.MinValue;
+    internal const long MuxMarker = int.MinValue;
 
     internal System.Net.Quic.QuicConnection? connection;
     private readonly SemaphoreSlim _init = new(1, 1);
@@ -245,12 +245,38 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
     {
         private readonly PipeReader _reader = PipeReader.Create(stream);
 
+        /// <summary>
+        /// Respuesta unaria de exito sin longitud (<c>[Success][cuerpo]</c> hasta el FIN; una trama nunca empieza por 0, su longitud es >= 1).
+        /// <c>true</c> si ya llego entera; si no, avanza el lector para seguir leyendo.
+        /// </summary>
+        private bool TryUnframed(in ReadResult result, out ReadOnlySequence<byte> body)
+        {
+            body = default;
+
+            if (!result.IsCompleted)
+            {
+                _reader.AdvanceTo(result.Buffer.Start, result.Buffer.End);
+                return false;
+            }
+
+            body = result.Buffer.Slice(Framing.StatusSize);
+            return true;
+        }
+
         public async ValueTask<TOut?> ReadValueAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TOut>(CancellationToken token, bool expectBody = true)
         {
             while (true)
             {
                 var result = await _reader.ReadAsync(token).ConfigureAwait(false);
                 var buffer = result.Buffer;
+
+                if (!buffer.IsEmpty && Framing.ReadStatus(buffer) is ResponseStatus.Success)
+                {
+                    if (!TryUnframed(result, out var body)) continue;
+
+                    try { return expectBody ? Deserialize<TOut>(body) : default; }
+                    finally { _reader.AdvanceTo(buffer.End); }
+                }
 
                 if (Framing.TryReadFrame(ref buffer, out var frame))
                 {
@@ -278,23 +304,20 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
                 var result = await _reader.ReadAsync(token).ConfigureAwait(false);
                 var buffer = result.Buffer;
 
+                if (!buffer.IsEmpty && Framing.ReadStatus(buffer) is ResponseStatus.Success)
+                {
+                    if (!TryUnframed(result, out var unframed)) continue;
+
+                    try { return ReadBody(unframed, read); }
+                    finally { _reader.AdvanceTo(buffer.End); }
+                }
+
                 if (Framing.TryReadFrame(ref buffer, out var frame))
                 {
                     try
                     {
                         EnsureSuccess(frame);
-                        var body = frame.Slice(Framing.StatusSize);
-
-                        // Contiguo: se lee sobre el buffer del pipe; partido entre segmentos: buffer del pool.
-                        if (body.IsSingleSegment) return read(body.FirstSpan);
-
-                        var rented = ArrayPool<byte>.Shared.Rent((int)body.Length);
-                        try
-                        {
-                            body.CopyTo(rented);
-                            return read(rented.AsSpan(0, (int)body.Length));
-                        }
-                        finally { ArrayPool<byte>.Shared.Return(rented); }
+                        return ReadBody(frame.Slice(Framing.StatusSize), read);
                     }
                     finally
                     {
@@ -305,6 +328,20 @@ public sealed class QuicConnection(QuicClientConnectionOptions options, int unar
                 if (result.IsCompleted) throw new IOException($"Stream to {remote} closed without response.");
 
                 _reader.AdvanceTo(buffer.Start, buffer.End);
+            }
+
+            // Contiguo: se lee sobre el buffer del pipe; partido entre segmentos: buffer del pool.
+            static TOut ReadBody(in ReadOnlySequence<byte> body, RawReader<TOut> read)
+            {
+                if (body.IsSingleSegment) return read(body.FirstSpan);
+
+                var rented = ArrayPool<byte>.Shared.Rent((int)body.Length);
+                try
+                {
+                    body.CopyTo(rented);
+                    return read(rented.AsSpan(0, (int)body.Length));
+                }
+                finally { ArrayPool<byte>.Shared.Return(rented); }
             }
         }
 

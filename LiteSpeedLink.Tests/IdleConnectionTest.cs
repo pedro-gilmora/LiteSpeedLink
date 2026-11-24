@@ -59,8 +59,7 @@ public class IdleConnectionTest
         var output = new Pipe();
         var serving = Server.ServePipeAsync(input.Reader, output.Writer, new DelegateRequestHandler((op, ctx, _) => ctx.EnumerateAsync(Forever())), default, idleTimeoutMs: 200);
 
-        var request = new byte[Framing.FrameHeaderSize + Framing.OpIdSize];
-        Framing.WriteFrameHeader(request, 1, Framing.OpIdSize);
+        var request = TestFrames.Request(1, 0, []);
         await input.Writer.WriteAsync(request);
 
         await Task.Delay(800);
@@ -112,12 +111,8 @@ public class IdleConnectionTest
             {
                 Interlocked.Increment(ref accepted);
                 var s = first.GetStream();
-                var header = new byte[4];
-                await s.ReadExactlyAsync(header);
-                await s.ReadExactlyAsync(new byte[BinaryPrimitives.ReadInt32LittleEndian(header)]);
-                var close = new byte[Framing.FrameHeaderSize];
-                Framing.WriteFrameHeader(close, 0, 0);
-                await s.WriteAsync(close);
+                await ReadFrameAsync(PipeReader.Create(s, new(leaveOpen: true)));
+                await s.WriteAsync(TestFrames.Frame(0, []));
             }
 
             using var second = await listener.AcceptTcpClientAsync();
@@ -162,11 +157,7 @@ public class IdleConnectionTest
                 Framing.TryReadFrame(ref buffer, out var id, out var content).Should().BeTrue();
                 var value = MemoryPack.MemoryPackSerializer.Deserialize<int>(content.Slice(Framing.OpIdSize).ToArray());
                 var body = MemoryPack.MemoryPackSerializer.Serialize(value + 100);
-                var response = new byte[Framing.FrameHeaderSize + Framing.StatusSize + body.Length];
-                Framing.WriteFrameHeader(response, id, Framing.StatusSize + body.Length);
-                response[Framing.FrameHeaderSize] = (byte)ResponseStatus.Success;
-                body.CopyTo(response, Framing.FrameHeaderSize + Framing.StatusSize);
-                await ns.WriteAsync(response);
+                await ns.WriteAsync(TestFrames.Response(id, ResponseStatus.Success, body));
                 await ns.FlushAsync();
                 await Task.Delay(100);
             }
