@@ -1081,6 +1081,22 @@ Que capas inferiores pueden sustituir campos de LSL: QUIC no conserva limites de
   - CSV y logs de BDN: carpeta de la sesion `files/bdn-compact` (no versionada).
   - Encontrado al medir: la verificacion semantica del banco (`SemanticCheck`, `Payloads.OpId`, PoC TCP) asumia opId de 8 bytes y longitud de 4 y abortaba; actualizada (opId de 32 bits, tramas con longitud LEB128 de 1 y 4 bytes).
 
+## Skills para agentes (agentskills.io), en los repos y dentro de los paquetes
+
+- [x] Por tarea, no por paquete: DI `sourcecrafter-dependency-injection` y `sourcecrafter-di-configuration` (submodulo, `.github/skills`, en los 4 paquetes DI); LSL `litespeedlink-services`, `litespeedlink-hosting`, `litespeedlink-security` (`.github/skills`, en los 8 paquetes via `Package.props`). En el paquete: `skills/<nombre>/SKILL.md` (convencion de dotnet-inspect / dotnet-package-skills).
+- [x] Metodo (TDD de skills): tres escenarios de negocio con agentes nuevos que solo tienen los paquetes publicados (sin fuente). Linea base sin skills, luego con skills (copiadas en `.agents/skills`):
+  - DI (contenedor, claves en ejecucion, ambitos, appsettings): ~45 llamadas, ~12 compilaciones, 4 clases de error (CS0012, sin generacion, CS0103 `Settings`, SCDIE00/SCDI03/SCDI08 con claves) y apaño de directorio actual -> ~8 llamadas, 2 compilaciones, 0 errores, configuracion leida desde otra carpeta.
+  - LSL (contrato, validacion en host, TCP mTLS anclado): ~25 llamadas, 3 compilaciones, CS0542 (cliente `InventoryClient`) y suposicion falsa sobre la excepcion de rechazo -> ~12 llamadas, 2 compilaciones, 0 errores.
+  - Hosting (Kestrel + HTTP + servicios de la app, scoped por peticion): ~30 llamadas, 4 compilaciones, CS0616/CS0246/CS0103 (namespaces), CS0542, listeners HTTP sustituidos -> ~10 llamadas, 2 compilaciones, 0 errores.
+  - Refactor con lo que los agentes echaron en falta (todo ya ejecutado por ellos): ejemplo de processor, mensaje exacto del rechazo, llamadas del cliente, cliente con el mismo `Tls`, namespace de `UseLiteSpeedLink`, miembros en los ambitos, el contenedor no libera ambitos abiertos, `[assembly:]` con top-level statements.
+- [x] Defectos de los paquetes encontrados por la linea base, corregidos en DI 2.26.329.330 antes de las skills:
+  - `MsConfiguration.Metadata` no declaraba su dependencia de `Metadata` (`PrivateAssets=all`): CS0012 en el consumidor.
+  - `MsConfiguration` no instalaba nada mas: sin el generador principal no se generaba nada (sin aviso), y el codigo emitido usaba `Microsoft.Extensions.Configuration.Json`/`.Binder` sin declararlos. Ahora depende de ellos (referencias de proyecto con alias para que sus tipos no entren en ambito; `ReferenceOutputAssembly=false` no llega al grafo de restore y pack la omite) y el principal depende de `Metadata`: instalar un solo paquete basta. README: ya no dice "en lugar del principal".
+  - Interfaz registrada sin implementacion ni fabrica (`[Singleton<IPaymentGateway>("card")]`): el generador emitia `new IFoo()` (CS0144 en codigo generado) o nada; ahora SCDI06 con un mensaje que dice que hacer. Test `ConsumerMistakeTests` (4 casos, fallan sin el arreglo).
+  - `appsettings` se resolvia contra el directorio actual (`Path.GetFullPath`): lanzada desde otra carpeta o como servicio, configuracion vacia sin error (el fichero es opcional). Ahora `AppContext.BaseDirectory`. Test `TheSettingsFileIsResolvedNextToTheApplication`.
+  - Comprobado con un consumidor que solo referencia `SourceCrafter.DependencyInjection.MsConfiguration`: compila sin avisos y lee la configuracion ejecutado desde `%TEMP%`.
+- LSL: generadores con `SourceCrafter.DependencyInjection.Metadata` `ExcludeAssets=compile;runtime` (compilan las fuentes de los atributos como internas; sin ello CS0436 al depender el generador DI de `Metadata`). DI 212/212, LSL 221/221, `KestrelPoc` y demo OK.
+
 ## Resultados vigentes (BDN `--fast`, mascara 6369, .NET 10.0.12, i9-14900HX)
 
 Control estable (campos ~0,55-0,60 ns, alloc 3,0-3,2 ns). Tiempos orientativos; asignaciones deterministas. Las secciones anteriores conservan las cifras de su momento.

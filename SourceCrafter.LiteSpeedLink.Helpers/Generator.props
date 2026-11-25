@@ -28,7 +28,9 @@
 			<PrivateAssets>all</PrivateAssets>
 		</PackageReference>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" PrivateAssets="all" />
-		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.328.306" PrivateAssets="none" />
+		<PackageReference Include="SourceCrafter.DependencyInjection" Version="2.26.329.330" PrivateAssets="none" />
+		<!-- El generador DI depende de los atributos publicos (Metadata); aqui se compilan sus fuentes como internas, asi que su ensamblado no entra (CS0436). -->
+		<PackageReference Include="SourceCrafter.DependencyInjection.Metadata" Version="2.26.329.330" ExcludeAssets="compile;runtime" PrivateAssets="all" />
 		<Compile Include="$(DISolutionDir)Interop\PartialGenerationContracts.cs">
 			<Link>Interop\%(Filename)%(Extension)</Link>
 		</Compile>

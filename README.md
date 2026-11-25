@@ -19,6 +19,7 @@ Client and host are meant to be generated from the **same contract**. They are n
 | Streams | `[Stream(Batch, MaxDelayMs)]` batching policy baked into the host as constants |
 | QUIC | pooled multiplexed streams for unary and stream calls; `[DedicatedStream]` for large responses, long streams or subscriptions |
 | Diagnostics | `SCLSL0xx` compile-time errors/warnings for misuse (see below) |
+| Agent skills | Every package ships [agent skills](https://agentskills.io) under `skills/` (also in [`.github/skills`](.github/skills)): `litespeedlink-services`, `litespeedlink-hosting`, `litespeedlink-security`, so coding agents use the library without reverse-engineering it |
 
 ## Quick start
 

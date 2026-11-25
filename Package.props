@@ -21,6 +21,8 @@
 
 	<ItemGroup>
 		<None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+		<!-- Agent skills (agentskills.io) shipped in every package: skills/<name>/SKILL.md. -->
+		<None Include="$(MSBuildThisFileDirectory).github\skills\**\SKILL.md" Pack="true" PackagePath="skills" Visible="false" />
 	</ItemGroup>
 
 </Project>
